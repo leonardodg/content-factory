@@ -2,7 +2,7 @@
 
 Revision ID: 0001
 Revises: 
-Create Date: 2026-10-08 07:18:42.086556
+Create Date: 2026-10-08 07:39:20.629109
 
 """
 from typing import Sequence, Union
@@ -33,6 +33,7 @@ def upgrade() -> None:
     sa.PrimaryKeyConstraint('id'),
     sa.UniqueConstraint('platform', 'platform_creator_id')
     )
+    op.create_index('ix_creators_raw_gin', 'creators', ['raw'], unique=False, postgresql_using='gin')
     op.create_table('segments',
     sa.Column('id', sa.Integer(), nullable=False),
     sa.Column('slug', sa.String(length=64), nullable=False),
@@ -43,6 +44,7 @@ def upgrade() -> None:
     sa.PrimaryKeyConstraint('id'),
     sa.UniqueConstraint('slug')
     )
+    op.create_index('ix_segments_config_gin', 'segments', ['config'], unique=False, postgresql_using='gin')
     op.create_table('collect_runs',
     sa.Column('id', sa.Integer(), nullable=False),
     sa.Column('collector', sa.String(length=32), nullable=False),
@@ -66,6 +68,7 @@ def upgrade() -> None:
     sa.Column('platform', sa.String(length=32), nullable=False),
     sa.Column('platform_video_id', sa.String(length=64), nullable=False),
     sa.Column('creator_id', sa.Integer(), nullable=True),
+    sa.Column('transcript_id', sa.Integer(), nullable=True),
     sa.Column('url', sa.Text(), nullable=False),
     sa.Column('title', sa.Text(), nullable=False),
     sa.Column('description', sa.Text(), nullable=False),
@@ -81,6 +84,8 @@ def upgrade() -> None:
     sa.UniqueConstraint('platform', 'platform_video_id')
     )
     op.create_index(op.f('ix_videos_platform'), 'videos', ['platform'], unique=False)
+    op.create_index('ix_videos_platform_published_at', 'videos', ['platform', 'published_at'], unique=False)
+    op.create_index('ix_videos_raw_gin', 'videos', ['raw'], unique=False, postgresql_using='gin')
     op.create_table('creative_patterns',
     sa.Column('id', sa.Integer(), nullable=False),
     sa.Column('name', sa.String(length=200), nullable=False),
@@ -121,6 +126,7 @@ def upgrade() -> None:
     sa.PrimaryKeyConstraint('id')
     )
     op.create_index(op.f('ix_video_metrics_video_id'), 'video_metrics', ['video_id'], unique=False)
+    op.create_index('ix_video_metrics_video_id_captured_at', 'video_metrics', ['video_id', 'captured_at'], unique=False)
     op.create_table('video_scores',
     sa.Column('id', sa.Integer(), nullable=False),
     sa.Column('video_id', sa.Integer(), nullable=False),
@@ -214,6 +220,9 @@ def upgrade() -> None:
     sa.PrimaryKeyConstraint('id')
     )
     op.create_index(op.f('ix_performance_metrics_published_video_id'), 'performance_metrics', ['published_video_id'], unique=False)
+    # FK de ciclo videos↔transcripts: fora do CREATE TABLE (use_alter não é
+    # emitido por op.create_table) — ALTER TABLE após as duas tabelas existirem
+    op.create_foreign_key(None, 'videos', 'transcripts', ['transcript_id'], ['id'])
     # ### end Alembic commands ###
 
 
@@ -230,14 +239,22 @@ def downgrade() -> None:
     op.drop_index(op.f('ix_video_scores_viral_score'), table_name='video_scores')
     op.drop_index(op.f('ix_video_scores_video_id'), table_name='video_scores')
     op.drop_table('video_scores')
+    op.drop_index('ix_video_metrics_video_id_captured_at', table_name='video_metrics')
     op.drop_index(op.f('ix_video_metrics_video_id'), table_name='video_metrics')
     op.drop_table('video_metrics')
+    # quebra o ciclo videos↔transcripts antes dos DROP TABLE (senão cada DROP
+    # é bloqueado pela FK da outra tabela)
+    op.drop_constraint('videos_transcript_id_fkey', 'videos', type_='foreignkey')
     op.drop_table('transcripts')
     op.drop_table('creative_patterns')
+    op.drop_index('ix_videos_raw_gin', table_name='videos', postgresql_using='gin')
+    op.drop_index('ix_videos_platform_published_at', table_name='videos')
     op.drop_index(op.f('ix_videos_platform'), table_name='videos')
     op.drop_table('videos')
     op.drop_index(op.f('ix_collect_runs_collector'), table_name='collect_runs')
     op.drop_table('collect_runs')
+    op.drop_index('ix_segments_config_gin', table_name='segments', postgresql_using='gin')
     op.drop_table('segments')
+    op.drop_index('ix_creators_raw_gin', table_name='creators', postgresql_using='gin')
     op.drop_table('creators')
     # ### end Alembic commands ###

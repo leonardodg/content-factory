@@ -6,6 +6,7 @@ from sqlalchemy import (
     DateTime,
     Float,
     ForeignKey,
+    Index,
     Integer,
     String,
     Text,
@@ -22,6 +23,7 @@ class Base(DeclarativeBase):
 
 class SegmentRow(Base):
     __tablename__ = "segments"
+    __table_args__ = (Index("ix_segments_config_gin", "config", postgresql_using="gin"),)
     id: Mapped[int] = mapped_column(primary_key=True)
     slug: Mapped[str] = mapped_column(String(64), unique=True)
     name: Mapped[str] = mapped_column(String(200))
@@ -32,7 +34,10 @@ class SegmentRow(Base):
 
 class CreatorRow(Base):
     __tablename__ = "creators"
-    __table_args__ = (UniqueConstraint("platform", "platform_creator_id"),)
+    __table_args__ = (
+        UniqueConstraint("platform", "platform_creator_id"),
+        Index("ix_creators_raw_gin", "raw", postgresql_using="gin"),
+    )
     id: Mapped[int] = mapped_column(primary_key=True)
     platform: Mapped[str] = mapped_column(String(32))
     platform_creator_id: Mapped[str] = mapped_column(String(64))
@@ -43,11 +48,17 @@ class CreatorRow(Base):
 
 class VideoRow(Base):
     __tablename__ = "videos"
-    __table_args__ = (UniqueConstraint("platform", "platform_video_id"),)
+    __table_args__ = (
+        UniqueConstraint("platform", "platform_video_id"),
+        Index("ix_videos_raw_gin", "raw", postgresql_using="gin"),
+        Index("ix_videos_platform_published_at", "platform", "published_at"),
+    )
     id: Mapped[int] = mapped_column(primary_key=True)
     platform: Mapped[str] = mapped_column(String(32), index=True)
     platform_video_id: Mapped[str] = mapped_column(String(64))
     creator_id: Mapped[int | None] = mapped_column(ForeignKey("creators.id"))
+    # ciclo videos↔transcripts: FK diferida p/ o DDL (SQLAlchemy exige use_alter)
+    transcript_id: Mapped[int | None] = mapped_column(ForeignKey("transcripts.id", use_alter=True))
     url: Mapped[str] = mapped_column(Text)
     title: Mapped[str] = mapped_column(Text, default="")
     description: Mapped[str] = mapped_column(Text, default="")
@@ -72,6 +83,7 @@ class VideoSegmentRow(Base):
 
 class VideoMetricsRow(Base):
     __tablename__ = "video_metrics"
+    __table_args__ = (Index("ix_video_metrics_video_id_captured_at", "video_id", "captured_at"),)
     id: Mapped[int] = mapped_column(primary_key=True)
     video_id: Mapped[int] = mapped_column(ForeignKey("videos.id"), index=True)
     captured_at: Mapped[datetime] = mapped_column(
