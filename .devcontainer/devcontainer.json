@@ -1,0 +1,9 @@
+{
+  "name": "content-factory",
+  "dockerComposeFile": "./docker-compose.yml",
+  "service": "python",
+  "workspaceFolder": "/app",
+  "remoteUser": "appuser",
+  "postCreateCommand": "uv sync --all-groups && uv run pre-commit install",
+  "customizations": { "vscode": { "extensions": ["ms-python.python", "charliermarsh.ruff"] } }
+}

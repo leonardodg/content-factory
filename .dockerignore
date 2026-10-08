@@ -1,0 +1,36 @@
+# Build context enxuto — a imagem copia só pyproject.toml + uv.lock;
+# o código chega por bind-mount do compose (..:/app).
+
+# VCS e caches
+.git
+.gitignore
+.ruff_cache
+.pytest_cache
+.mypy_cache
+.hypothesis
+**/__pycache__
+**/*.py[cod]
+.venv
+venv
+ENV
+
+# Segredos e env locais — nunca no build context
+**/.env
+.devcontainer/env/app.env
+.devcontainer/secrets/secrets.env
+*.pem
+*.key
+
+# Artefatos e pesos que não participam do build
+dist
+build
+*.egg-info
+site
+htmlcov
+.coverage*
+coverage.xml
+database.db*
+node_modules
+legacy
+.superpowers
+*.log
