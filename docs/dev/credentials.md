@@ -17,7 +17,7 @@
 - Em `.devcontainer/secrets/`, só `*.env` é gitignored
   (`!.devcontainer/secrets/` + `.devcontainer/secrets/*.env`); os
   exemplos versionados (`secrets.env.example`, `app.env.example`)
-  nascem **vazios**. Backstop: o gate `check_privacy` (CI + pre-commit)
+  nascem **vazios**. Backstop: o gate `check_privacy` (CI + `make privacy`)
   falha se um segredo real aparecer em arquivo versionado.
 - Segredos nunca entram em `ARG`/`ENV` de Dockerfile nem em logs
   (redação de `sessionid`, `ms_token`, `access_token`, cookies — spec §7).
