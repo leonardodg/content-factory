@@ -5,12 +5,12 @@
 
 ## 🔄 EM ANDAMENTO
 
-- **Próximo passo: executar** o plano task-by-task
-  `docs/ai-plans/2026-10-07-fundacao-coletores-banco.md` (18 tasks, TDD,
-  auto-revisado e commitado em `2276254`). Modo de execução a confirmar:
-  `superpowers:subagent-driven-development` (recomendado) ou
-  `superpowers:executing-plans` — começar pela **Task 1** (toolchain uv,
-  `legacy/`, pyproject ruff/pyright strict).
+- **Execução do plano** task-by-task via `superpowers:subagent-driven-development`
+  `docs/ai-plans/2026-10-07-fundacao-coletores-banco.md` (18 tasks, TDD;
+  commitado `2276254`). Isolamento: branch `update/fundacao-2026-10-07`
+  (in place, p/ manter legado untracked visível à Task 1); workspace SDD
+  `.superpowers/sdd/2026-10-07-fundacao-coletores-banco/` (ledger `progress.md`).
+  Iniciada em 2026-10-07 — começar pela **Task 1**.
 
 ## ✅ CONCLUÍDO (sessão 2026-10-07)
 
@@ -39,12 +39,14 @@
 2. **Execução fase B (coletores + score)**: ports/DTO → use-case collect →
    YouTube → TikTok → Instagram → Web → score → worker arq → E2E (Tasks 10–18)
 3. Gates de aceitação do PRD (§critérios) + `SOLID_AUDIT.md` + `REVISAO_*.md`
-4. Push repo privado `content-factory` no GitHub (ci.yml + docs.yml verdes)
+4. Push final da branch + PR em `leonardodg/content-factory` (repo privado
+   **já criado e com `main` + branch da execução pushados**; `ci.yml` +
+   `docs.yml` verdes ao fim da Task 18)
 
 ## Pendências / cuidados
 
-- Repositório **local ainda sem remote**; legado não commitado e tratado na
-  Task 1 (mover p/ `legacy/`): `src/` flat, `README.md` antigo, `pyproject.toml`
+- Remote `origin` = `github.com/leonardodg/content-factory` (privado, criado
+  2026-10-07); legado não commitado e tratado na Task 1 (mover p/ `legacy/`): `src/` flat, `README.md` antigo, `pyproject.toml`
   (poetry), `.devcontainer/` (2025), `.env-copy`, `.dockerignore` —
   referência de domínio: `viral_analyzer.py`, `instagram_graph_api.py`,
   `content_analyzer.py`
