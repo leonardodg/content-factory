@@ -1,0 +1,96 @@
+// See https://containers.dev/implementors/json_reference/ for configuration reference
+{
+	"name": "Python 3 - Instagram Viral Reels Analyzer -  By LeoDG",
+	"dockerComposeFile": "docker-compose.yml",
+	"service": "app",
+	"runServices": [
+		"app"
+	],
+	"workspaceFolder": "/app",
+	"remoteUser": "appuser",
+
+	// Features to add to the dev container. More info: https://containers.dev/features.
+	"features": {
+		"ghcr.io/devcontainers/features/git:1": {},
+		"ghcr.io/devcontainers/features/common-utils:2": {},
+		"ghcr.io/stuartleeks/dev-container-features/shell-history:0": {},
+		"ghcr.io/devcontainers-extra/features/zsh-plugins:0": {}
+	},
+
+	// Mounts are used to share configuration files and SSH keys between the host and the container.
+	"mounts": [
+				{
+					"source": "${localEnv:HOME}/.gitconfig",
+					"target": "/root/.gitconfig",
+					"type": "bind"
+				},
+				{
+					"source": "${localEnv:HOME}/.ssh",
+					"target": "/root/.ssh",
+					"type": "bind"
+				},
+				{
+					"source": "${localEnv:HOME}/.ssh/known_hosts",
+					"target": "/root/.ssh/known_hosts",
+					"type": "bind"
+				},
+				{
+					"source": "/home/leodg/.bash_history",
+					"target": "/commandhistory",
+					"type": "bind"
+				},
+				{
+					"source": "${localEnv:HOME}/.zsh_history",
+					"target": "/root/.zsh_history",
+					"type": "bind"
+				}
+			],
+
+	// Use 'postCreateCommand' to run commands after the container is created.
+	"postCreateCommand": {
+		"Fix Volume Permissions": "sudo chown -R $(whoami): /commandhistory",
+		"Permissions Poetry": "sudo chown -R appuser:appuser /app"
+	},
+
+	// Configure tool-specific properties.
+	"customizations": {
+
+		"vscode": {
+			// Add the IDs of extensions you want to install.
+			 "extensions": [
+					"gruntfuggly.todo-tree",
+					"ms-azuretools.vscode-docker",
+					"samuelcolvin.jinjahtml",
+					"mhutchie.git-graph",
+					"ms-python.python",
+					"ms-python.vscode-pylance",
+					"ryanluker.vscode-coverage-gutters",
+					"meezilla.json",
+					"eamodio.gitlens",
+					"emmanuelbeziat.vscode-great-icons",
+					"dongido.sync-env",
+					"yzhang.markdown-all-in-one",
+					"postman.postman-for-vscode",
+					"github.vscode-github-actions",
+					"foxundermoon.shell-format",
+					"shardulm94.trailing-spaces",
+					"github.vscode-pull-request-github",
+					"github.copilot",
+					"github.copilot-chat"
+				],
+			// Add custom VS Code settings.
+			"settings": {
+				"terminal.integrated.shell.linux": "/bin/bash",
+				"terminal.integrated.defaultProfile.linux": "bash"
+			}
+		}
+	},
+
+	"containerEnv": {
+		"MY_CONTAINER_VAR": "some-value-here",
+		"MY_CONTAINER_VAR2": "${localEnv:SOME_LOCAL_VAR}"
+	},
+	"remoteEnv": {
+		"PATH": "${containerEnv:PATH}:/some/other/path"
+	}
+}
