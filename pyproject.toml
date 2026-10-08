@@ -20,6 +20,7 @@ dependencies = [
   "TikTokApi>=6.4",
   "playwright>=1.49",
   "python-dateutil>=2.9",
+  "pgvector>=0.5.0",
 ]
 
 [dependency-groups]
