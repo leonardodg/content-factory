@@ -1,5 +1,9 @@
 # PRD — content-factory
 
+> Fonte primária da ideia (verbatim da primeira mensagem da sessão):
+> [ideia-inicial.md](ideia-inicial.md) — divergências técnicas foram
+> resolvidas aqui e nos ADRs 0001–0004.
+
 ## Visão e protagonista
 
 **Quem usa:** operador de conteúdo (Leo) e agentes de AI de automação.

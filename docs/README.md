@@ -2,6 +2,7 @@
 
 | Se você quer… | Vá para |
 |---|---|
+| Ler a ideia original do produto (verbatim da 1ª mensagem) | [produto/ideia-inicial.md](produto/ideia-inicial.md) |
 | Entender o QUE é o produto, frentes e não-objetivos | [produto/prd.md](produto/prd.md) |
 | Ver o design completo aprovado (arquitetura, schema, segurança) | [specs/2026-10-07-content-factory-design.md](specs/2026-10-07-content-factory-design.md) |
 | Saber POR QUE Postgres/Redis/CLI/coletores foram escolhidos | [adr/](adr/) (0001…0004) |
