@@ -1510,7 +1510,7 @@ services:
     env_file:
       - ./env/app.env
     environment:
-      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-contentfactory}@postgres:5432/${POSTGRES_DB:-contentfactory}
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-contentfactory}:${POSTGRES_PASSWORD:-localdev}@postgres:5432/${POSTGRES_DB:-contentfactory}
       REDIS_URL: redis://redis:6379/0
     depends_on: [postgres, redis]
     networks: [content-factory-net]
@@ -1523,7 +1523,7 @@ services:
       target: worker
     env_file: [./env/app.env]
     environment:
-      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-contentfactory}@postgres:5432/${POSTGRES_DB:-contentfactory}
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-contentfactory}:${POSTGRES_PASSWORD:-localdev}@postgres:5432/${POSTGRES_DB:-contentfactory}
       REDIS_URL: redis://redis:6379/0
     depends_on: [postgres, redis]
     networks: [content-factory-net]
@@ -3214,6 +3214,8 @@ git add src tests && git commit -m "feat: use-case score persiste video_scores t
 ---
 
 ### Task 17: Worker arq + cron 2×/dia + `cf status`
+
+> NOTE (Task 7): `PLAYWRIGHT_BROWSERS_PATH=/ms-playwright` já vem na imagem `worker` (legível por `appuser`) — não reinstalar o chromium.
 
 **Files:**
 - Create: `src/content_factory/infra/queue/__init__.py`,
