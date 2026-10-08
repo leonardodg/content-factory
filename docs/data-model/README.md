@@ -62,7 +62,7 @@ Convenções: **FK → alvo** = constraint declarada no banco; `nullable` = acei
 | `summary` | `TEXT` | obrigatório |
 | `status` | `VARCHAR(24)` | obrigatório |
 | `embedding` | `VECTOR(1536)` | nullable |
-| `created_at` | `DATETIME` | obrigatório · default: `DefaultClause(<sqlalchemy.sql.functions.now at 0x7ed1a27b1c50; now>, for_update=False)` |
+| `created_at` | `DATETIME` | obrigatório · default: `DefaultClause(<sqlalchemy.sql.functions.now at 0x7fbf4e2c1c50; now>, for_update=False)` |
 
 ### performance_metrics
 
@@ -70,7 +70,7 @@ Convenções: **FK → alvo** = constraint declarada no banco; `nullable` = acei
 |---|---|---|
 | `id` | `INTEGER` | PK |
 | `published_video_id` | `INTEGER` | **FK → published_videos.id** · obrigatório · indexado |
-| `captured_at` | `DATETIME` | obrigatório · default: `DefaultClause(<sqlalchemy.sql.functions.now at 0x7ed1a27a6990; now>, for_update=False)` |
+| `captured_at` | `DATETIME` | obrigatório · default: `DefaultClause(<sqlalchemy.sql.functions.now at 0x7fbf4e2b6990; now>, for_update=False)` |
 | `views` | `INTEGER` | nullable |
 | `likes` | `INTEGER` | nullable |
 | `comments` | `INTEGER` | nullable |
@@ -90,7 +90,7 @@ Convenções: **FK → alvo** = constraint declarada no banco; `nullable` = acei
 | `status` | `VARCHAR(24)` | obrigatório |
 | `scheduled_for` | `VARCHAR(16)` | nullable |
 | `assets` | `JSONB` | obrigatório |
-| `created_at` | `DATETIME` | obrigatório · default: `DefaultClause(<sqlalchemy.sql.functions.now at 0x7ed1a27a5400; now>, for_update=False)` |
+| `created_at` | `DATETIME` | obrigatório · default: `DefaultClause(<sqlalchemy.sql.functions.now at 0x7fbf4e2b5400; now>, for_update=False)` |
 
 ### published_videos
 
@@ -115,7 +115,7 @@ Convenções: **FK → alvo** = constraint declarada no banco; `nullable` = acei
 | `cta` | `TEXT` | obrigatório |
 | `production_difficulty` | `INTEGER` | nullable |
 | `status` | `VARCHAR(24)` | obrigatório |
-| `created_at` | `DATETIME` | obrigatório · default: `DefaultClause(<sqlalchemy.sql.functions.now at 0x7ed1a27b2c50; now>, for_update=False)` |
+| `created_at` | `DATETIME` | obrigatório · default: `DefaultClause(<sqlalchemy.sql.functions.now at 0x7fbf4e2c2c50; now>, for_update=False)` |
 
 ### segments
 
@@ -125,8 +125,8 @@ Convenções: **FK → alvo** = constraint declarada no banco; `nullable` = acei
 | `slug` | `VARCHAR(64)` | UNIQUE · obrigatório |
 | `name` | `VARCHAR(200)` | obrigatório |
 | `config` | `JSONB` | obrigatório |
-| `created_at` | `DATETIME` | obrigatório · default: `DefaultClause(<sqlalchemy.sql.functions.now at 0x7ed1a2b77cb0; now>, for_update=False)` |
-| `updated_at` | `DATETIME` | obrigatório · default: `DefaultClause(<sqlalchemy.sql.functions.now at 0x7ed1a293ca50; now>, for_update=False)` |
+| `created_at` | `DATETIME` | obrigatório · default: `DefaultClause(<sqlalchemy.sql.functions.now at 0x7fbf4e487cb0; now>, for_update=False)` |
+| `updated_at` | `DATETIME` | obrigatório · default: `DefaultClause(<sqlalchemy.sql.functions.now at 0x7fbf4e450a50; now>, for_update=False)` |
 
 ### transcripts
 
@@ -138,7 +138,7 @@ Convenções: **FK → alvo** = constraint declarada no banco; `nullable` = acei
 | `language` | `VARCHAR(16)` | nullable |
 | `text` | `TEXT` | obrigatório |
 | `segments` | `JSONB` | obrigatório |
-| `created_at` | `DATETIME` | obrigatório · default: `DefaultClause(<sqlalchemy.sql.functions.now at 0x7ed1a2907240; now>, for_update=False)` |
+| `created_at` | `DATETIME` | obrigatório · default: `DefaultClause(<sqlalchemy.sql.functions.now at 0x7fbf4e417240; now>, for_update=False)` |
 
 ### video_metrics
 
@@ -146,7 +146,7 @@ Convenções: **FK → alvo** = constraint declarada no banco; `nullable` = acei
 |---|---|---|
 | `id` | `INTEGER` | PK |
 | `video_id` | `INTEGER` | **FK → videos.id** · obrigatório · indexado |
-| `captured_at` | `DATETIME` | obrigatório · default: `DefaultClause(<sqlalchemy.sql.functions.now at 0x7ed1a2f68170; now>, for_update=False)` |
+| `captured_at` | `DATETIME` | obrigatório · default: `DefaultClause(<sqlalchemy.sql.functions.now at 0x7fbf4ea78170; now>, for_update=False)` |
 | `views` | `INTEGER` | nullable |
 | `likes` | `INTEGER` | nullable |
 | `comments` | `INTEGER` | nullable |
@@ -161,7 +161,7 @@ Convenções: **FK → alvo** = constraint declarada no banco; `nullable` = acei
 | `id` | `INTEGER` | PK |
 | `video_id` | `INTEGER` | **FK → videos.id** · obrigatório · indexado |
 | `segment_id` | `INTEGER` | **FK → segments.id** · obrigatório |
-| `computed_at` | `DATETIME` | obrigatório · default: `DefaultClause(<sqlalchemy.sql.functions.now at 0x7ed1a2906690; now>, for_update=False)` |
+| `computed_at` | `DATETIME` | obrigatório · default: `DefaultClause(<sqlalchemy.sql.functions.now at 0x7fbf4e416690; now>, for_update=False)` |
 | `viral_score` | `FLOAT` | obrigatório · indexado |
 | `performance` | `FLOAT` | obrigatório |
 | `velocity` | `FLOAT` | obrigatório |
@@ -180,7 +180,7 @@ Convenções: **FK → alvo** = constraint declarada no banco; `nullable` = acei
 | `segment_id` | `INTEGER` | **FK → segments.id** · PK |
 | `discovery_source` | `VARCHAR(64)` | obrigatório |
 | `relevance_score` | `FLOAT` | nullable |
-| `discovered_at` | `DATETIME` | obrigatório · default: `DefaultClause(<sqlalchemy.sql.functions.now at 0x7ed1a2895480; now>, for_update=False)` |
+| `discovered_at` | `DATETIME` | obrigatório · default: `DefaultClause(<sqlalchemy.sql.functions.now at 0x7fbf4e3a5480; now>, for_update=False)` |
 
 ### videos
 
@@ -199,8 +199,8 @@ Convenções: **FK → alvo** = constraint declarada no banco; `nullable` = acei
 | `language` | `VARCHAR(16)` | nullable |
 | `thumbnail_url` | `TEXT` | nullable |
 | `raw` | `JSONB` | obrigatório |
-| `first_collected_at` | `DATETIME` | obrigatório · default: `DefaultClause(<sqlalchemy.sql.functions.now at 0x7ed1a293f750; now>, for_update=False)` |
-| `last_collected_at` | `DATETIME` | obrigatório · default: `DefaultClause(<sqlalchemy.sql.functions.now at 0x7ed1a2894d60; now>, for_update=False)` |
+| `first_collected_at` | `DATETIME` | obrigatório · default: `DefaultClause(<sqlalchemy.sql.functions.now at 0x7fbf4e453750; now>, for_update=False)` |
+| `last_collected_at` | `DATETIME` | obrigatório · default: `DefaultClause(<sqlalchemy.sql.functions.now at 0x7fbf4e3a4d60; now>, for_update=False)` |
 
 ## Vínculos
 

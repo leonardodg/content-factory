@@ -14,8 +14,11 @@
 | Config do app | `.devcontainer/env/app.env` | **não** (`*.example` sim) | serviço `python` (devcontainer) |
 | Override local | `.env` (raiz) | **não** | `Settings` (pydantic-settings, 2 camadas) |
 
-- `.devcontainer/secrets/` é gitignored por inteiro; exemplos versionados
-  (`secrets.env.example`, `app.env.example`) nascem **vazios**.
+- Em `.devcontainer/secrets/`, só `*.env` é gitignored
+  (`!.devcontainer/secrets/` + `.devcontainer/secrets/*.env`); os
+  exemplos versionados (`secrets.env.example`, `app.env.example`)
+  nascem **vazios**. Backstop: o gate `check_privacy` (CI + pre-commit)
+  falha se um segredo real aparecer em arquivo versionado.
 - Segredos nunca entram em `ARG`/`ENV` de Dockerfile nem em logs
   (redação de `sessionid`, `ms_token`, `access_token`, cookies — spec §7).
 

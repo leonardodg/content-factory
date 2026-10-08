@@ -28,6 +28,7 @@ _TYPE_MAP = {
     "FLOAT": "FLOAT",
     "DATETIME": "TIMESTAMP",
     "BOOLEAN": "BOOL",
+    "DOUBLE": "DOUBLE",
     "JSONB": "JSONB",
     "VECTOR": "VECTOR",
     "ARRAY": "ARRAY",
@@ -35,7 +36,14 @@ _TYPE_MAP = {
 
 
 def _type(col: Column[object]) -> str:
-    return _TYPE_MAP.get(type(col.type).__name__.upper(), "TEXT")
+    type_name = type(col.type).__name__.upper()
+    mapped = _TYPE_MAP.get(type_name)
+    if mapped is None:
+        sys.exit(
+            f"gen_diagram: tipo não mapeado {type_name} ({col.type!r}) na coluna "
+            f"{col.name} — adicione a entrada em _TYPE_MAP em scripts/gen_diagram.py"
+        )
+    return mapped
 
 
 def _attr_keys(col: Column[object]) -> str:
