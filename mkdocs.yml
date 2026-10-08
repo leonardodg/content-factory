@@ -1,0 +1,4 @@
+site_name: content-factory
+site_description: Motor de inteligência de conteúdo parametrizado por segmento
+theme:
+  name: material

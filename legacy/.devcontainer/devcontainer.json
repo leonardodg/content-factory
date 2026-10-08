@@ -35,7 +35,7 @@
 					"type": "bind"
 				},
 				{
-					"source": "/home/leodg/.bash_history",
+					"source": "${localEnv:HOME}/.bash_history",
 					"target": "/commandhistory",
 					"type": "bind"
 				},
