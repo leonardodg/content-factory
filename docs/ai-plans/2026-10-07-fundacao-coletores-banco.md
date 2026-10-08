@@ -533,7 +533,8 @@ por aqui sem tocar em app/ nem domain/."
 - Produz (usado pela Task 16):
   - `viral_score(m: VideoMetrics, relevance: float, now: datetime, published_at: datetime | None) -> ScoreResult`
   - `ScoreResult(total: float, performance: float, velocity: float, engagement: float, relevance: float, recency: float, trend_decay: str)` (`trend_decay` ∈ `none|low|medium|high`)
-  - `engagement_rate(m: VideoMetrics) -> float` (0–100)
+  - `engagement_rate(m: VideoMetrics) -> float` (não-negativo; sem clamp
+    superior — `viral_score` limita `min(eng * 10, 100.0)` antes de pesar)
 
 - [ ] **Step 1: Testes falhando**
 
