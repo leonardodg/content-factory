@@ -12,6 +12,7 @@ class SegmentConfig(BaseModel):
     content_types: list[str] = Field(default_factory=list)
     keywords: list[str]
     subnichos: dict[str, list[str]] = Field(default_factory=dict)
+    audience: list[str] = Field(default_factory=list)  # vai p/ segments.config JSONB
 
 
 class Segment(SegmentConfig):
