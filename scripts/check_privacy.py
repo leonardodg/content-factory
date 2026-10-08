@@ -8,11 +8,14 @@ from pathlib import Path
 PATTERNS = [
     (r"-----BEGIN [A-Z ]*PRIVATE KEY-----", "chave privada"),
     (
-        r"(?i)(api[_-]?key|secret|password|token)\s*[=:]\s*['\"][A-Za-z0-9_\-]{16,}",
+        r"(?i)(?:api[_-]?key|secret|password|token)['\"]?\s*[=:]\s*['\"]?"
+        r"([A-Za-z0-9_\-]{16,})",
         "credencial literal",
     ),
     (r"/home/[a-z]+/", "path pessoal"),
 ]
+# valor placeholder (YOUR_..., ..._HERE) não é segredo
+PLACEHOLDER = re.compile(r"(?i)^(?:your[_-]|.*[_-]here$)")
 ALLOWLIST = {
     ".env.example",
     "check_privacy.py",
@@ -24,6 +27,14 @@ ALLOWLIST = {
     # paths /home/<user> de container, não de pessoa
     "docker-compose.yml",
 }
+
+
+def _hit(pattern: str, text: str) -> bool:
+    for match in re.finditer(pattern, text):
+        if match.lastindex and PLACEHOLDER.search(match.group(match.lastindex)):
+            continue
+        return True
+    return False
 
 
 def main() -> int:
@@ -39,7 +50,7 @@ def main() -> int:
         except OSError:
             continue
         for pattern, label in PATTERNS:
-            if re.search(pattern, text):
+            if _hit(pattern, text):
                 bad.append(f"{name}: {label}")
     if bad:
         print("PRIVACIDADE FALHOU:\n" + "\n".join(bad))
