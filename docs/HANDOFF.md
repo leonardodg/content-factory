@@ -23,7 +23,7 @@
 - [x] Spec de design: `docs/specs/2026-10-07-content-factory-design.md` (auto-revisão feita)
 - [x] ADRs: `0001-postgres-pgvector`, `0002-redis-arq-fila`, `0003-coletores-fontes`, `0004-cli-first`
 - [x] PRD: `docs/produto/prd.md`
-- [x] Índice de roteamento: `docs/README.md`
+- [x] Índice de roteamento: `docs/roteamento.md`
 - [x] Ideia inicial preservada verbatim: `docs/produto/ideia-inicial.md` (`4b81c65`)
 - [x] **Plano 18 tasks escrito + auto-revisão concluída** e commitado
   (`2276254`): protocolos fechados, snippets concretos sem placeholder,

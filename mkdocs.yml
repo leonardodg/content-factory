@@ -1,4 +1,37 @@
 site_name: content-factory
 site_description: Motor de inteligência de conteúdo parametrizado por segmento
-theme:
-  name: material
+theme: { name: material }
+plugins: [search, mermaid2]
+markdown_extensions:
+  - admonition
+  - tables
+  - pymdownx.superfences:
+      custom_fences: [{ name: mermaid, class: mermaid, format: !!python/name:pymdownx.superfences.fence_code_format }]
+nav:
+  - Início: index.md
+  - Roteamento: roteamento.md
+  - Produto:
+      - Ideia inicial (verbatim): produto/ideia-inicial.md
+      - PRD: produto/prd.md
+  - Specs:
+      - Design: specs/2026-10-07-content-factory-design.md
+      - TRD coletores: specs/trd-collectors.md
+      - TRD scoring: specs/trd-scoring.md
+      - TRD CLI: specs/trd-cli.md
+  - ADRs:
+      - 0001 Postgres+pgvector: adr/0001-postgres-pgvector.md
+      - 0002 Redis+arq: adr/0002-redis-arq-fila.md
+      - 0003 Coletores: adr/0003-coletores-fontes.md
+      - 0004 CLI-first: adr/0004-cli-first.md
+  - Arquitetura:
+      - Visão geral: architecture/README.md
+      - Estado e fases: architecture/estado-e-proximas-fases.md
+  - Data model: data-model/README.md
+  - Diagramas: diagram/README.md
+  - Dev:
+      - Índice: dev/index.md
+      - Ambiente: dev/dev-environment.md
+      - Estender: dev/extending.md
+      - Credenciais: dev/credentials.md
+  - Planos: ai-plans/2026-10-07-fundacao-coletores-banco.md
+  - HANDOFF: HANDOFF.md

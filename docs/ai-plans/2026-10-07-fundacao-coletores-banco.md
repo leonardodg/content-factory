@@ -1816,7 +1816,7 @@ markdown_extensions:
       custom_fences: [{ name: mermaid, class: mermaid, format: !!python/name:pymdownx.superfences.fence_code_format }]
 nav:
   - Início: index.md
-  - Roteamento: README.md
+  - Roteamento: roteamento.md
   - Produto:
       - Ideia inicial (verbatim): produto/ideia-inicial.md
       - PRD: produto/prd.md
