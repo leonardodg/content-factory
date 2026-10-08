@@ -39,6 +39,24 @@ class CandidateVideo(BaseModel):
     raw: dict[str, Any] = Field(default_factory=dict)
 
 
+class VideoMetrics(BaseModel):
+    views: int = 0
+    likes: int = 0
+    comments: int = 0
+    shares: int = 0
+    saves: int = 0
+
+
+class ScoreResult(BaseModel):
+    total: float
+    performance: float
+    velocity: float
+    engagement: float
+    relevance: float
+    recency: float
+    trend_decay: str
+
+
 class UpsertStats(BaseModel):
     inserted: int = 0
     updated: int = 0
