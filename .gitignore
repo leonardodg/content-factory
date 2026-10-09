@@ -216,3 +216,9 @@ __marimo__/
 .streamlit/secrets.toml
 # SQLite local (prototype legado)
 database.db*
+
+# content-factory — devcontainer: env em 2 camadas + secrets (só defaults/exemplos versionados)
+!.devcontainer/env/
+.devcontainer/env/app.env
+!.devcontainer/secrets/
+.devcontainer/secrets/*.env

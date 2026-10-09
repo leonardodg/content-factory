@@ -1,0 +1,23 @@
+[tool.poetry]
+name = "Instagram-Reels-Analyzer"
+version = "0.1.0"
+description = ""
+authors = [
+    "LeoDG <callme@leodg.dev>"
+]
+license = "MIT"
+readme = "README.md"
+
+[tool.poetry.dependencies]
+python = "^3.14"
+requests = "^2.31.0"
+pandas = "^2.2.3"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
+
+
+[tool.poetry.group.dev.dependencies]
+pytest = "^6.0.0"
+pytest-mock = "*"

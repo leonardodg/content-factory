@@ -1,0 +1,184 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<title>ER — content-factory</title>
+<script type="module">
+import mermaid from "https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs";
+mermaid.initialize({ startOnLoad: true, theme: "neutral" });
+</script>
+</head>
+<body>
+<pre class="mermaid">
+erDiagram
+  collect_runs {
+    INTEGER id PK
+    VARCHAR collector
+    INTEGER segment_id FK
+    VARCHAR status
+    TIMESTAMP started_at
+    TIMESTAMP finished_at
+    INTEGER found
+    INTEGER inserted
+    INTEGER updated
+    INTEGER failed
+    INTEGER quota_used
+    INTEGER retries
+    VARCHAR error_code
+  }
+  creative_patterns {
+    INTEGER id PK
+    VARCHAR name
+    TEXT description
+    TEXT hook
+    JSONB psychology
+    JSONB visual_structure
+    JSONB best_for
+    INTEGER origin_video_id FK
+    VECTOR embedding
+  }
+  creators {
+    INTEGER id PK
+    VARCHAR platform
+    VARCHAR platform_creator_id
+    VARCHAR username
+    INTEGER followers_count
+    JSONB raw
+  }
+  ideas {
+    INTEGER id PK
+    INTEGER segment_id FK
+    INTEGER pattern_id FK
+    TEXT title
+    TEXT summary
+    VARCHAR status
+    VECTOR embedding
+    TIMESTAMP created_at
+  }
+  performance_metrics {
+    INTEGER id PK
+    INTEGER published_video_id FK
+    TIMESTAMP captured_at
+    INTEGER views
+    INTEGER likes
+    INTEGER comments
+    INTEGER shares
+    INTEGER saves
+    INTEGER watch_time_s
+    DOUBLE retention_pct
+    DOUBLE completion_rate
+    INTEGER followers_gained
+  }
+  production_jobs {
+    INTEGER id PK
+    INTEGER script_id FK
+    VARCHAR status
+    VARCHAR scheduled_for
+    JSONB assets
+    TIMESTAMP created_at
+  }
+  published_videos {
+    INTEGER id PK
+    INTEGER script_id FK
+    VARCHAR platform
+    TEXT url
+    TIMESTAMP published_at
+  }
+  scripts {
+    INTEGER id PK
+    INTEGER idea_id FK
+    TEXT title
+    INTEGER duration_s
+    TEXT hook
+    JSONB scenes
+    TEXT cta
+    INTEGER production_difficulty
+    VARCHAR status
+    TIMESTAMP created_at
+  }
+  segments {
+    INTEGER id PK
+    VARCHAR slug
+    VARCHAR name
+    JSONB config
+    TIMESTAMP created_at
+    TIMESTAMP updated_at
+  }
+  transcripts {
+    INTEGER id PK
+    INTEGER video_id FK
+    VARCHAR source
+    VARCHAR language
+    TEXT text
+    JSONB segments
+    TIMESTAMP created_at
+  }
+  video_metrics {
+    INTEGER id PK
+    INTEGER video_id FK
+    TIMESTAMP captured_at
+    INTEGER views
+    INTEGER likes
+    INTEGER comments
+    INTEGER shares
+    INTEGER saves
+    INTEGER followers_at_capture
+  }
+  video_scores {
+    INTEGER id PK
+    INTEGER video_id FK
+    INTEGER segment_id FK
+    TIMESTAMP computed_at
+    FLOAT viral_score
+    FLOAT performance
+    FLOAT velocity
+    FLOAT engagement
+    FLOAT relevance
+    FLOAT recency
+    VARCHAR trend_decay
+    FLOAT replication_score
+    FLOAT production_score
+  }
+  video_segments {
+    INTEGER video_id PK, FK
+    INTEGER segment_id PK, FK
+    VARCHAR discovery_source
+    FLOAT relevance_score
+    TIMESTAMP discovered_at
+  }
+  videos {
+    INTEGER id PK
+    VARCHAR platform
+    VARCHAR platform_video_id
+    INTEGER creator_id FK
+    INTEGER transcript_id FK
+    TEXT url
+    TEXT title
+    TEXT description
+    TIMESTAMP published_at
+    INTEGER duration_s
+    VARCHAR language
+    TEXT thumbnail_url
+    JSONB raw
+    TIMESTAMP first_collected_at
+    TIMESTAMP last_collected_at
+  }
+  creative_patterns |o--o{ ideas : "pattern_id"
+  creators |o--o{ videos : "creator_id"
+  ideas ||--o{ scripts : "idea_id"
+  published_videos ||--o{ performance_metrics : "published_video_id"
+  scripts ||--o{ production_jobs : "script_id"
+  scripts ||--o{ published_videos : "script_id"
+  segments |o--o{ collect_runs : "segment_id"
+  segments ||--o{ ideas : "segment_id"
+  segments ||--o{ video_scores : "segment_id"
+  segments ||--o{ video_segments : "segment_id"
+  transcripts |o--o{ videos : "transcript_id"
+  videos |o--o{ creative_patterns : "origin_video_id"
+  videos ||--o{ transcripts : "video_id"
+  videos ||--o{ video_metrics : "video_id"
+  videos ||--o{ video_scores : "video_id"
+  videos ||--o{ video_segments : "video_id"
+</pre>
+</body>
+</html>

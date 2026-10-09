@@ -1,0 +1,6 @@
+[{"id": "7301234567890123456", "desc": "vela de soja derretendo satisfactoria #candle",
+  "createTime": 1759700000, "duration": 14,
+  "author": {"uniqueId": "velaslab", "nickname": "Velas Lab"},
+  "stats": {"playCount": 250000, "diggCount": 18000,
+            "commentCount": 420, "shareCount": 95},
+  "video": {"cover": "https://cdn.example/cover.jpg"}}]

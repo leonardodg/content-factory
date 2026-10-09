@@ -58,24 +58,24 @@ spec §7.
 
 | # | Task | ✅ |
 |---|------|----|
-| 1 | Tooling base (uv, pyproject, ruff, pyright, pre-commit) + legado | ☐ |
-| 2 | Esqueleto de camadas + ports (Protocolos) + config | ☐ |
-| 3 | Domínio: modelos + scoring + trend decay (TDD) | ☐ |
-| 4 | Banco: ORM completo + Alembic + repositórios (integração) | ☐ |
-| 5 | Segmentos: YAML → validação → persistência (TDD) | ☐ |
-| 6 | CLI: envelope + exit codes + `segment load`/`status` (TDD) | ☐ |
-| 7 | Docker: compose único + Dockerfile multi-stage + devcontainer + secrets | ☐ |
-| 8 | CI: quality + docs + teste de privacidade | ☐ |
-| 9 | Docs: mkdocs + architecture + dev + data-model/diagram | ☐ |
-| 10 | Fronteira de coleta: `CandidateVideo` + registry + FakeCollector (TDD) | ☐ |
-| 11 | Use-case `collect` + `collect_runs` + rate-limit/lock Redis (TDD) | ☐ |
-| 12 | Collector YouTube (TDD com fixtures) | ☐ |
-| 13 | Collector TikTok (TDD com fixtures) | ☐ |
-| 14 | Collector Instagram (TDD com fixtures) | ☐ |
-| 15 | Collector Web + `cf ingest` + guarda SSRF (TDD) | ☐ |
-| 16 | Use-case `score` + `cf score` (TDD) | ☐ |
-| 17 | Worker arq + cron 2×/dia + `cf status` | ☐ |
-| 18 | E2E `00`/`01` + gates finais + SOLID_AUDIT + REVISAO + PR | ☐ |
+| 1 | Tooling base (uv, pyproject, ruff, pyright, pre-commit) + legado | ✅ |
+| 2 | Esqueleto de camadas + ports (Protocolos) + config | ✅ |
+| 3 | Domínio: modelos + scoring + trend decay (TDD) | ✅ |
+| 4 | Banco: ORM completo + Alembic + repositórios (integração) | ✅ |
+| 5 | Segmentos: YAML → validação → persistência (TDD) | ✅ |
+| 6 | CLI: envelope + exit codes + `segment load`/`status` (TDD) | ✅ |
+| 7 | Docker: compose único + Dockerfile multi-stage + devcontainer + secrets | ✅ |
+| 8 | CI: quality + docs + teste de privacidade | ✅ |
+| 9 | Docs: mkdocs + architecture + dev + data-model/diagram | ✅ |
+| 10 | Fronteira de coleta: `CandidateVideo` + registry + FakeCollector (TDD) | ✅ |
+| 11 | Use-case `collect` + `collect_runs` + rate-limit/lock Redis (TDD) | ✅ |
+| 12 | Collector YouTube (TDD com fixtures) | ✅ |
+| 13 | Collector TikTok (TDD com fixtures) | ✅ |
+| 14 | Collector Instagram (TDD com fixtures) | ✅ |
+| 15 | Collector Web + `cf ingest` + guarda SSRF (TDD) | ✅ |
+| 16 | Use-case `score` + `cf score` (TDD) | ✅ |
+| 17 | Worker arq + cron 2×/dia + `cf status` | ✅ |
+| 18 | E2E `00`/`01` + gates finais + SOLID_AUDIT + REVISAO + PR | ✅ |
 
 ---
 
@@ -93,7 +93,7 @@ spec §7.
 **Interfaces:**
 - Produz: toolchain onde todas as tasks seguintes rodam (`uv run …`)
 
-- [ ] **Step 1: Mover legado + criar mínimos que o build exige**
+- [✅] **Step 1: Mover legado + criar mínimos que o build exige**
 
 ```bash
 mkdir -p legacy/src && mv src/* legacy/src/ 2>/dev/null; mv src/__pycache__ legacy/src/ 2>/dev/null; rmdir src 2>/dev/null
@@ -111,7 +111,7 @@ Motor de inteligência de conteúdo parametrizado por segmento.
 Estado: docs/HANDOFF.md · Spec: docs/specs/ · CLI: `cf --help`
 ```
 
-- [ ] **Step 2: `pyproject.toml`**
+- [✅] **Step 2: `pyproject.toml`**
 
 ```toml
 [project]
@@ -136,6 +136,7 @@ dependencies = [
   "TikTokApi>=6.4",
   "playwright>=1.49",
   "python-dateutil>=2.9",
+  "pgvector>=0.5.0",
 ]
 
 [dependency-groups]
@@ -188,14 +189,14 @@ markers = [
 ]
 ```
 
-- [ ] **Step 3: `.python-version` + criar venv + instalar**
+- [✅] **Step 3: `.python-version` + criar venv + instalar**
 
 ```bash
 echo "3.14" > .python-version
 uv sync --all-groups
 ```
 
-- [ ] **Step 4: `.pre-commit-config.yaml`**
+- [✅] **Step 4: `.pre-commit-config.yaml`**
 
 ```yaml
 repos:
@@ -220,7 +221,7 @@ repos:
       - id: conventional-pre-commit
 ```
 
-- [ ] **Step 5: `CLAUDE.md` (só regras imutáveis; estado vive no HANDOFF)**
+- [✅] **Step 5: `CLAUDE.md` (só regras imutáveis; estado vive no HANDOFF)**
 
 ```markdown
 # content-factory — regras imutáveis
@@ -235,7 +236,7 @@ repos:
 - CLI devolve só envelope {"ok": ...}; dados no banco
 ```
 
-- [ ] **Step 6: `.env.example` (raiz, interpolação do compose)**
+- [✅] **Step 6: `.env.example` (raiz, interpolação do compose)**
 
 ```env
 # interpolação ${VAR} do compose — NUNCA coloque valores reais aqui
@@ -243,7 +244,7 @@ POSTGRES_USER=contentfactory
 POSTGRES_DB=contentfactory
 ```
 
-- [ ] **Step 7: `Makefile`**
+- [✅] **Step 7: `Makefile`**
 
 ```make
 .PHONY: test test-int lint typecheck security docs gates
@@ -256,7 +257,7 @@ docs:        ; uv run --only-group docs mkdocs build --strict
 gates: test lint typecheck security docs
 ```
 
-- [ ] **Step 8: Rodar gates e ver falhar onde ainda não existe**
+- [✅] **Step 8: Rodar gates e ver falhar onde ainda não existe**
 
 ```bash
 uv run ruff check . ; uv run pyright ; uv run pytest -q
@@ -264,7 +265,7 @@ uv run ruff check . ; uv run pyright ; uv run pytest -q
 Expected: ruff/pyright passam (sem código ainda ou só legado ignorado);
 pytest: **no tests ran** (exit 5) — ok, testes nascem na Task 3.
 
-- [ ] **Step 9: Commit**
+- [✅] **Step 9: Commit**
 
 ```bash
 git add -A && git commit -m "chore: toolchain uv+ruff+pyright strict+pre-commit
@@ -292,27 +293,35 @@ legado movido para legacy/ como referencia de dominio."
 # app/ports.py
 class Collector(Protocol):
     platform: ClassVar[str]
+
     async def discover(self, segment: SegmentConfig, limit: int) -> list[CandidateVideo]: ...
+
     # aceita SegmentConfig (e não Segment): coletores não precisam do id —
     # o id só entra no upsert, via VideoRepository.upsert_candidates
 
+
 class VideoRepository(Protocol):
-    async def upsert_candidates(self, segment_id: int, source: str,
-                                candidates: Sequence[CandidateVideo]) -> UpsertStats: ...
+    async def upsert_candidates(
+        self, segment_id: int, source: str, candidates: Sequence[CandidateVideo]
+    ) -> UpsertStats: ...
+
 
 class SegmentRepository(Protocol):
     async def get_by_slug(self, slug: str) -> Segment: ...
     async def upsert(self, cfg: SegmentConfig) -> Segment: ...
 
+
 class CollectRunRepository(Protocol):
     async def record(self, run: CollectRun) -> int: ...
 
+
 class RateLimiter(Protocol):
-    async def acquire(self, platform: str) -> None: ...   # bloqueia até liberar
+    async def acquire(self, platform: str) -> None: ...  # bloqueia até liberar
+
 
 class Lock(Protocol):
-    async def acquire_once(self, key: str) -> bool: ...   # False se já em execução
-    async def release(self, key: str) -> None: ...         # SEM isso o lock fica eterno
+    async def acquire_once(self, key: str) -> bool: ...  # False se já em execução
+    async def release(self, key: str) -> None: ...  # SEM isso o lock fica eterno
 ```
 
 (Segment/CandidateVideo/CollectRun/UpsertStats vêm de `domain/models.py`,
@@ -328,7 +337,7 @@ import não resolvido.)
   `youtube_api_key`, `instagram_access_token`, `ig_user_id`,
   `tiktok_ms_token`, `tiktok_proxy`
 
-- [ ] **Step 1: Teste falhando (imports)**
+- [✅] **Step 1: Teste falhando (imports)**
 
 `tests/app/test_ports.py`:
 
@@ -349,20 +358,21 @@ def test_collector_error_carries_code() -> None:
     assert err.platform == "tiktok"
 ```
 
-- [ ] **Step 2: Rodar e ver falhar**
+- [✅] **Step 2: Rodar e ver falhar**
 
 ```bash
 uv run pytest tests/app/test_ports.py -v
 ```
 Expected: FAIL — `ModuleNotFoundError: content_factory`
 
-- [ ] **Step 3: Implementar esqueleto**
+- [✅] **Step 3: Implementar esqueleto**
 
 `domain/errors.py`:
 
 ```python
 class DomainError(Exception):
     """Erro de negócio do domínio."""
+
 
 class SegmentNotFound(DomainError):
     def __init__(self, slug: str) -> None:
@@ -432,6 +442,7 @@ class Segment(SegmentConfig):
 
 class CandidateVideo(BaseModel):
     """DTO de fronteira: o que todo collector devolve (validado na entrada)."""
+
     platform: str
     platform_video_id: str
     url: str
@@ -459,7 +470,7 @@ class UpsertStats(BaseModel):
 class CollectRun(BaseModel):
     collector: str
     segment_id: int | None = None
-    status: str = "running"   # running|ok|partial|failed|blocked
+    status: str = "running"  # running|ok|partial|failed|blocked
     found: int = 0
     inserted: int = 0
     updated: int = 0
@@ -495,14 +506,14 @@ def get_settings() -> Settings:
     return Settings()
 ```
 
-- [ ] **Step 4: Rodar teste + gates**
+- [✅] **Step 4: Rodar teste + gates**
 
 ```bash
 uv run pytest tests/app/test_ports.py -q && uv run ruff check . && uv run ruff format . && uv run pyright
 ```
 Expected: `1 passed` (mais os testes), ruff 0, pyright 0 erros
 
-- [ ] **Step 5: Commit**
+- [✅] **Step 5: Commit**
 
 ```bash
 git add src tests && git commit -m "feat: contratos das camadas (ports) e erros de dominio
@@ -523,9 +534,10 @@ por aqui sem tocar em app/ nem domain/."
 - Produz (usado pela Task 16):
   - `viral_score(m: VideoMetrics, relevance: float, now: datetime, published_at: datetime | None) -> ScoreResult`
   - `ScoreResult(total: float, performance: float, velocity: float, engagement: float, relevance: float, recency: float, trend_decay: str)` (`trend_decay` ∈ `none|low|medium|high`)
-  - `engagement_rate(m: VideoMetrics) -> float` (0–100)
+  - `engagement_rate(m: VideoMetrics) -> float` (não-negativo; sem clamp
+    superior — `viral_score` limita `min(eng * 10, 100.0)` antes de pesar)
 
-- [ ] **Step 1: Testes falhando**
+- [✅] **Step 1: Testes falhando**
 
 `tests/domain/test_scoring.py`:
 
@@ -553,8 +565,7 @@ def test_engagement_rate_zero_views() -> None:
 
 
 def test_viral_score_returns_breakdown_and_total() -> None:
-    r = viral_score(metrics(), relevance=0.9, now=NOW,
-                    published_at=NOW - timedelta(hours=6))
+    r = viral_score(metrics(), relevance=0.9, now=NOW, published_at=NOW - timedelta(hours=6))
     assert isinstance(r, ScoreResult)
     for comp in (r.performance, r.velocity, r.engagement, r.relevance, r.recency):
         assert 0.0 <= comp <= 100.0
@@ -570,19 +581,23 @@ def test_viral_score_prefers_recent_over_old() -> None:
 
 
 def test_viral_score_zero_metrics_is_zeroish() -> None:
-    r = viral_score(metrics(views=0, likes=0, comments=0, shares=0, saves=0),
-                    relevance=0.0, now=NOW, published_at=None)
+    r = viral_score(
+        metrics(views=0, likes=0, comments=0, shares=0, saves=0),
+        relevance=0.0,
+        now=NOW,
+        published_at=None,
+    )
     assert r.total == 0.0
 ```
 
-- [ ] **Step 2: Rodar e ver falhar**
+- [✅] **Step 2: Rodar e ver falhar**
 
 ```bash
 uv run pytest tests/domain/test_scoring.py -v
 ```
 Expected: FAIL — `ImportError: cannot import name 'VideoMetrics'`
 
-- [ ] **Step 3: Implementar**
+- [✅] **Step 3: Implementar**
 
 Adicionar em `domain/models.py`:
 
@@ -612,8 +627,13 @@ from datetime import datetime
 
 from content_factory.domain.models import ScoreResult, VideoMetrics
 
-WEIGHTS = {"performance": 0.25, "velocity": 0.20, "engagement": 0.15,
-           "relevance": 0.20, "recency": 0.20}
+WEIGHTS = {
+    "performance": 0.25,
+    "velocity": 0.20,
+    "engagement": 0.15,
+    "relevance": 0.20,
+    "recency": 0.20,
+}
 
 
 def engagement_rate(m: VideoMetrics) -> float:
@@ -634,37 +654,48 @@ def trend_decay(published_at: datetime | None, now: datetime) -> str:
     return "high"
 
 
-def viral_score(m: VideoMetrics, relevance: float, now: datetime,
-                published_at: datetime | None) -> ScoreResult:
+def viral_score(
+    m: VideoMetrics, relevance: float, now: datetime, published_at: datetime | None
+) -> ScoreResult:
     performance = min(m.views / 1_000_000 * 100, 100.0)
-    eng = min(engagement_rate(m) * 10, 100.0)          # 10%+ = 100
+    eng = min(engagement_rate(m) * 10, 100.0)  # 10%+ = 100
     decay = trend_decay(published_at, now)
     age_days = (now - published_at).days if published_at else 999
-    velocity = 100.0 if age_days <= 1 else 80.0 if age_days <= 3 else \
-        50.0 if age_days <= 7 else 20.0
+    velocity = (
+        100.0 if age_days <= 1 else 80.0 if age_days <= 3 else 50.0 if age_days <= 7 else 20.0
+    )
     recency = {"none": 50.0, "low": 100.0, "medium": 50.0, "high": 15.0}[decay]
     rel = min(max(relevance, 0.0), 1.0) * 100
 
     total = round(
-        performance * WEIGHTS["performance"] + velocity * WEIGHTS["velocity"]
-        + eng * WEIGHTS["engagement"] + rel * WEIGHTS["relevance"]
-        + recency * WEIGHTS["recency"], 2)
+        performance * WEIGHTS["performance"]
+        + velocity * WEIGHTS["velocity"]
+        + eng * WEIGHTS["engagement"]
+        + rel * WEIGHTS["relevance"]
+        + recency * WEIGHTS["recency"],
+        2,
+    )
     if m.views == 0 and m.likes == 0 and relevance == 0:
         total = 0.0
-    return ScoreResult(total=total, performance=round(performance, 2),
-                       velocity=velocity, engagement=round(eng, 2),
-                       relevance=round(rel, 2), recency=recency,
-                       trend_decay=decay)
+    return ScoreResult(
+        total=total,
+        performance=round(performance, 2),
+        velocity=velocity,
+        engagement=round(eng, 2),
+        relevance=round(rel, 2),
+        recency=recency,
+        trend_decay=decay,
+    )
 ```
 
-- [ ] **Step 4: Rodar teste + gates**
+- [✅] **Step 4: Rodar teste + gates**
 
 ```bash
 uv run pytest tests/domain -q && uv run ruff check . && uv run pyright
 ```
 Expected: `5 passed`, 0 issues
 
-- [ ] **Step 5: Commit**
+- [✅] **Step 5: Commit**
 
 ```bash
 git add src/content_factory/domain tests/domain && git commit -m "feat: scoring de dominio puro (viral score + trend decay)
@@ -692,7 +723,7 @@ deterministico."
   TODAS as tabelas do spec §5; `alembic check` exit 0
 - Consome: `Settings.database_url`, modelos do spec §5
 
-- [ ] **Step 1: Infra de teste — Postgres/Redis de pé**
+- [✅] **Step 1: Infra de teste — Postgres/Redis de pé**
 
 `tests/conftest.py`:
 
@@ -712,7 +743,7 @@ requires_infra = pytest.mark.skipif(
 rodar sem banco (skip é por ausência de env, erro explícito — nunca verde
 falso).
 
-- [ ] **Step 2: Teste falhando (ORM)**
+- [✅] **Step 2: Teste falhando (ORM)**
 
 `tests/infra/test_orm.py`:
 
@@ -729,28 +760,49 @@ from tests.conftest import requires_infra
 def test_all_tables_exist() -> None:
     engine = create_engine(os.environ["TEST_DATABASE_URL"])
     names = set(inspect(engine).get_table_names())
-    expected = {"segments", "creators", "videos", "video_segments",
-                "video_metrics", "video_scores", "transcripts",
-                "creative_patterns", "ideas", "scripts", "production_jobs",
-                "published_videos", "performance_metrics", "collect_runs"}
+    expected = {
+        "segments",
+        "creators",
+        "videos",
+        "video_segments",
+        "video_metrics",
+        "video_scores",
+        "transcripts",
+        "creative_patterns",
+        "ideas",
+        "scripts",
+        "production_jobs",
+        "published_videos",
+        "performance_metrics",
+        "collect_runs",
+    }
     assert expected <= names
 ```
 
-- [ ] **Step 3: Rodar e ver falhar**
+- [✅] **Step 3: Rodar e ver falhar**
 
 ```bash
 TEST_DATABASE_URL=postgresql+psycopg://… uv run pytest tests/infra/test_orm.py -v
 ```
 Expected: FAIL (tabela inexistente / engine sem migrations)
 
-- [ ] **Step 4: Implementar ORM (spec §5, campo a campo)**
+- [✅] **Step 4: Implementar ORM (spec §5, campo a campo)**
 
 `infra/db/orm.py` (SQLAlchemy 2 declarativo; JSONB, pgvector, FKs):
 
 ```python
 from datetime import datetime
-from sqlalchemy import (BigInteger, DateTime, Float, ForeignKey, Integer,
-                        String, Text, UniqueConstraint, func)
+from sqlalchemy import (
+    BigInteger,
+    DateTime,
+    Float,
+    ForeignKey,
+    Integer,
+    String,
+    Text,
+    UniqueConstraint,
+    func,
+)
 from sqlalchemy.dialects.postgresql import JSONB, VECTOR
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
@@ -813,8 +865,9 @@ class VideoMetricsRow(Base):
     __tablename__ = "video_metrics"
     id: Mapped[int] = mapped_column(primary_key=True)
     video_id: Mapped[int] = mapped_column(ForeignKey("videos.id"), index=True)
-    captured_at: Mapped[datetime] = mapped_column(DateTime(timezone=True),
-                                                  server_default=func.now())
+    captured_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
     views: Mapped[int | None]
     likes: Mapped[int | None]
     comments: Mapped[int | None]
@@ -828,8 +881,9 @@ class VideoScoreRow(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     video_id: Mapped[int] = mapped_column(ForeignKey("videos.id"), index=True)
     segment_id: Mapped[int] = mapped_column(ForeignKey("segments.id"))
-    computed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True),
-                                                  server_default=func.now())
+    computed_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
     viral_score: Mapped[float] = mapped_column(Float, index=True)
     performance: Mapped[float] = mapped_column(Float)
     velocity: Mapped[float] = mapped_column(Float)
@@ -837,8 +891,8 @@ class VideoScoreRow(Base):
     relevance: Mapped[float] = mapped_column(Float)
     recency: Mapped[float] = mapped_column(Float)
     trend_decay: Mapped[str] = mapped_column(String(8))
-    replication_score: Mapped[float | None] = mapped_column(Float)   # fase IA
-    production_score: Mapped[float | None] = mapped_column(Float)     # fase IA
+    replication_score: Mapped[float | None] = mapped_column(Float)  # fase IA
+    production_score: Mapped[float | None] = mapped_column(Float)  # fase IA
 
 
 class TranscriptRow(Base):
@@ -913,10 +967,10 @@ class PublishedVideoRow(Base):
 class PerformanceMetricRow(Base):
     __tablename__ = "performance_metrics"
     id: Mapped[int] = mapped_column(primary_key=True)
-    published_video_id: Mapped[int] = mapped_column(ForeignKey("published_videos.id"),
-                                                     index=True)
-    captured_at: Mapped[datetime] = mapped_column(DateTime(timezone=True),
-                                                  server_default=func.now())
+    published_video_id: Mapped[int] = mapped_column(ForeignKey("published_videos.id"), index=True)
+    captured_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
     views: Mapped[int | None]
     likes: Mapped[int | None]
     comments: Mapped[int | None]
@@ -949,8 +1003,7 @@ class CollectRunRow(Base):
 suporta async com a mesma URL `postgresql+psycopg://`):
 
 ```python
-from sqlalchemy.ext.asyncio import (AsyncSession, async_sessionmaker,
-                                    create_async_engine)
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from content_factory.config import Settings
 
 
@@ -959,7 +1012,7 @@ def get_session_factory(settings: Settings) -> async_sessionmaker[AsyncSession]:
     return async_sessionmaker(bind=engine, expire_on_commit=False)
 ```
 
-- [ ] **Step 5: Alembic init + primeira migration**
+- [✅] **Step 5: Alembic init + primeira migration**
 
 ```bash
 uv run alembic init alembic
@@ -982,7 +1035,7 @@ target_metadata = Base.metadata
 config.set_main_option("sqlalchemy.url", get_settings().database_url)
 ```
 
-- [ ] **Step 6: Repositórios (implementam ports da Task 2)**
+- [✅] **Step 6: Repositórios (implementam ports da Task 2)**
 
 `infra/db/repositories.py`:
 
@@ -992,11 +1045,15 @@ from collections.abc import Sequence
 from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
-from content_factory.app.ports import (CollectRunRepository, SegmentRepository,
-                                       VideoRepository)
+from content_factory.app.ports import CollectRunRepository, SegmentRepository, VideoRepository
 from content_factory.domain.errors import SegmentNotFound
-from content_factory.domain.models import (CandidateVideo, CollectRun,
-                                           Segment, SegmentConfig, UpsertStats)
+from content_factory.domain.models import (
+    CandidateVideo,
+    CollectRun,
+    Segment,
+    SegmentConfig,
+    UpsertStats,
+)
 from content_factory.infra.db.orm import CollectRunRow, SegmentRow, VideoRow
 
 
@@ -1004,19 +1061,29 @@ class VideoRepositoryImpl(VideoRepository):
     def __init__(self, session: AsyncSession) -> None:
         self._s = session
 
-    async def upsert_candidates(self, segment_id: int, source: str,
-                                candidates: Sequence[CandidateVideo]) -> UpsertStats:
+    async def upsert_candidates(
+        self, segment_id: int, source: str, candidates: Sequence[CandidateVideo]
+    ) -> UpsertStats:
         stats = UpsertStats()
         for c in candidates:
             stmt = pg_insert(VideoRow).values(
-                platform=c.platform, platform_video_id=c.platform_video_id,
-                url=c.url, title=c.title, description=c.description,
-                published_at=c.published_at, duration_s=c.duration_s,
-                thumbnail_url=c.thumbnail_url, raw=c.raw)
+                platform=c.platform,
+                platform_video_id=c.platform_video_id,
+                url=c.url,
+                title=c.title,
+                description=c.description,
+                published_at=c.published_at,
+                duration_s=c.duration_s,
+                thumbnail_url=c.thumbnail_url,
+                raw=c.raw,
+            )
             stmt = stmt.on_conflict_do_update(
                 index_elements=["platform", "platform_video_id"],
-                set_={"title": stmt.excluded.title,
-                      "last_collected_at": stmt.excluded.last_collected_at})
+                set_={
+                    "title": stmt.excluded.title,
+                    "last_collected_at": stmt.excluded.last_collected_at,
+                },
+            )
             res = await self._s.execute(stmt)
             if res.rowcount == 1:
                 stats.inserted += 1
@@ -1032,19 +1099,20 @@ class SegmentRepositoryImpl(SegmentRepository):
         self._s = session
 
     async def get_by_slug(self, slug: str) -> Segment:
-        row = (await self._s.execute(
-            select(SegmentRow).where(SegmentRow.slug == slug))).scalar_one_or_none()
+        row = (
+            await self._s.execute(select(SegmentRow).where(SegmentRow.slug == slug))
+        ).scalar_one_or_none()
         if row is None:
             raise SegmentNotFound(slug)
         cfg = SegmentConfig.model_validate(row.config)
         return Segment(id=row.id, **cfg.model_dump())
 
     async def upsert(self, cfg: SegmentConfig) -> Segment:
-        stmt = pg_insert(SegmentRow).values(slug=cfg.slug, name=cfg.name,
-                                            config=cfg.model_dump())
+        stmt = pg_insert(SegmentRow).values(slug=cfg.slug, name=cfg.name, config=cfg.model_dump())
         stmt = stmt.on_conflict_do_update(
             index_elements=["slug"],
-            set_={"name": stmt.excluded.name, "config": stmt.excluded.config})
+            set_={"name": stmt.excluded.name, "config": stmt.excluded.config},
+        )
         row = (await self._s.execute(stmt.returning(SegmentRow))).scalar_one()
         return Segment(id=row.id, **cfg.model_dump())
 
@@ -1060,7 +1128,7 @@ class CollectRunRepositoryImpl(CollectRunRepository):
         return row.id
 ```
 
-- [ ] **Step 7: Teste do upsert idempotente (integração — sem mock)**
+- [✅] **Step 7: Teste do upsert idempotente (integração — sem mock)**
 
 `tests/infra/test_repositories.py`:
 
@@ -1071,16 +1139,19 @@ import pytest
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from content_factory.domain.models import CandidateVideo, SegmentConfig
 from content_factory.infra.db.orm import Base
-from content_factory.infra.db.repositories import (SegmentRepositoryImpl,
-                                                   VideoRepositoryImpl)
+from content_factory.infra.db.repositories import SegmentRepositoryImpl, VideoRepositoryImpl
 from tests.conftest import requires_infra
 
 pytestmark = [pytest.mark.integration, pytest.mark.asyncio]
 
 
 def candidate(i: int) -> CandidateVideo:
-    return CandidateVideo(platform="youtube", platform_video_id=f"vid{i}",
-                          url=f"https://youtu.be/vid{i}", creator_handle="u")
+    return CandidateVideo(
+        platform="youtube",
+        platform_video_id=f"vid{i}",
+        url=f"https://youtu.be/vid{i}",
+        creator_handle="u",
+    )
 
 
 @requires_infra
@@ -1099,6 +1170,7 @@ async def test_upsert_is_idempotent() -> None:
 @requires_infra
 async def test_segment_not_found_raises() -> None:
     from content_factory.domain.errors import SegmentNotFound
+
     engine = create_async_engine(os.environ["TEST_DATABASE_URL"])
     factory = async_sessionmaker(engine, expire_on_commit=False)
     async with factory() as s:
@@ -1110,14 +1182,14 @@ async def test_segment_not_found_raises() -> None:
 > Os testes de integração assumem schema já migrado (`alembic upgrade head`
 > no compose de teste) — nunca criam tabelas por conta própria.
 
-- [ ] **Step 8: Rodar gates**
+- [✅] **Step 8: Rodar gates**
 
 ```bash
 TEST_DATABASE_URL=… uv run pytest tests/infra -q && uv run alembic check && uv run ruff check . && uv run pyright
 ```
 Expected: integration PASS (tabelas existem), `alembic check` exit 0
 
-- [ ] **Step 9: Commit**
+- [✅] **Step 9: Commit**
 
 ```bash
 git add alembic.ini alembic src/content_factory/infra tests && \
@@ -1141,7 +1213,7 @@ historico; colunas de replication/production nascem NULL p/ a fase IA."
 - Produz: `load_segment_file(path: Path) -> SegmentConfig`;
   `upsert_segment(repo, path) -> Segment`
 
-- [ ] **Step 1: Teste falhando**
+- [✅] **Step 1: Teste falhando**
 
 `tests/app/test_segment.py`:
 
@@ -1161,19 +1233,19 @@ def test_load_candles_yaml() -> None:
 
 def test_invalid_yaml_raises_domain_error(tmp_path: Path) -> None:
     bad = tmp_path / "bad.yaml"
-    bad.write_text("segment:\n  name: x\n")   # sem slug/keywords/platforms
+    bad.write_text("segment:\n  name: x\n")  # sem slug/keywords/platforms
     with pytest.raises(DomainError):
         load_segment_file(bad)
 ```
 
-- [ ] **Step 2: Rodar e ver falhar**
+- [✅] **Step 2: Rodar e ver falhar**
 
 ```bash
 uv run pytest tests/app/test_segment.py -v
 ```
 Expected: FAIL — módulo `app.segment` não existe
 
-- [ ] **Step 3: Implementar**
+- [✅] **Step 3: Implementar**
 
 `segments/candles.yaml` (primeiro segmento — velas artesanais):
 
@@ -1227,9 +1299,9 @@ async def upsert_segment(repo: SegmentRepository, path: Path) -> Segment:
     return await repo.upsert(load_segment_file(path))
 ```
 
-- [ ] **Step 4: Rodar teste + gates** (esperado: `2 passed`, ruff/pyright 0)
+- [✅] **Step 4: Rodar teste + gates** (esperado: `2 passed`, ruff/pyright 0)
 
-- [ ] **Step 5: Commit**
+- [✅] **Step 5: Commit**
 
 ```bash
 git add segments src/content_factory/app tests/app && \
@@ -1256,7 +1328,7 @@ Novo segmento = 1 arquivo YAML, sem codigo (criterio de sucesso 3 do PRD)."
     (`collect` na Task 11, `ingest` na 15, `score` na 16, `status` na 17 —
     **não anunciar comando que ainda não existe**)
 
-- [ ] **Step 1: Teste falhando**
+- [✅] **Step 1: Teste falhando**
 
 `tests/cli/test_output.py`:
 
@@ -1296,9 +1368,9 @@ def test_segment_load_missing_file_exit_1() -> None:
     assert '"ok": false' in result.stdout
 ```
 
-- [ ] **Step 2: Rodar e ver falhar** (`uv run pytest tests/cli -v` → ImportError)
+- [✅] **Step 2: Rodar e ver falhar** (`uv run pytest tests/cli -v` → ImportError)
 
-- [ ] **Step 3: Implementar**
+- [✅] **Step 3: Implementar**
 
 `cli/output.py`:
 
@@ -1353,7 +1425,7 @@ def segment_load(path: Path) -> None:
         from content_factory.infra.db.base import get_session_factory
         from content_factory.infra.db.repositories import SegmentRepositoryImpl
 
-        cfg = load_segment_file(path)   # validação primeiro — sem DB na frente
+        cfg = load_segment_file(path)  # validação primeiro — sem DB na frente
         factory: async_sessionmaker[AsyncSession] = get_session_factory(get_settings())
 
         async def _save() -> int:
@@ -1392,9 +1464,9 @@ if __name__ == "__main__":
 
 `[project.scripts]` no pyproject: `cf = "content_factory.cli.main:main"`.
 
-- [ ] **Step 4: Rodar gates** (esperado: `3 passed`; `uv run cf ping` → envelope ok)
+- [✅] **Step 4: Rodar gates** (esperado: `3 passed`; `uv run cf ping` → envelope ok)
 
-- [ ] **Step 5: Commit**
+- [✅] **Step 5: Commit**
 
 ```bash
 git add pyproject.toml src/content_factory/cli tests/cli && \
@@ -1419,7 +1491,7 @@ Contrato com agentes de AI: so status em JSON; dados ficam no banco (ADR-0004)."
   `worker`, `postgres` (pgvector/pg16), `redis`; porta Postgres só via
   `127.0.0.1:5432` em dev; `TEST_DATABASE_URL` derivado
 
-- [ ] **Step 1: `.devcontainer/docker-compose.yml`** (padrão da casa, 1 arquivo)
+- [✅] **Step 1: `.devcontainer/docker-compose.yml`** (padrão da casa, 1 arquivo)
 
 ```yaml
 name: content-factory
@@ -1438,7 +1510,7 @@ services:
     env_file:
       - ./env/app.env
     environment:
-      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-contentfactory}@postgres:5432/${POSTGRES_DB:-contentfactory}
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-contentfactory}:${POSTGRES_PASSWORD:-localdev}@postgres:5432/${POSTGRES_DB:-contentfactory}
       REDIS_URL: redis://redis:6379/0
     depends_on: [postgres, redis]
     networks: [content-factory-net]
@@ -1451,7 +1523,7 @@ services:
       target: worker
     env_file: [./env/app.env]
     environment:
-      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-contentfactory}@postgres:5432/${POSTGRES_DB:-contentfactory}
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-contentfactory}:${POSTGRES_PASSWORD:-localdev}@postgres:5432/${POSTGRES_DB:-contentfactory}
       REDIS_URL: redis://redis:6379/0
     depends_on: [postgres, redis]
     networks: [content-factory-net]
@@ -1474,7 +1546,7 @@ services:
 volumes: { pgdata: {} }
 ```
 
-- [ ] **Step 2: `.devcontainer/Dockerfile` multi-stage**
+- [✅] **Step 2: `.devcontainer/Dockerfile` multi-stage**
 
 ```dockerfile
 FROM python:3.14-slim AS base
@@ -1495,7 +1567,7 @@ RUN uv pip install --system playwright && playwright install --with-deps chromiu
 USER appuser
 ```
 
-- [ ] **Step 3: `devcontainer.json` (sem features — lição da casa)**
+- [✅] **Step 3: `devcontainer.json` (sem features — lição da casa)**
 
 ```jsonc
 {
@@ -1509,7 +1581,7 @@ USER appuser
 }
 ```
 
-- [ ] **Step 4: env 2 camadas + secrets + readme da stack**
+- [✅] **Step 4: env 2 camadas + secrets + readme da stack**
 
 - `.devcontainer/env/defaults.env` (versionado, não sensível):
   `RATE_LIMIT_YOUTUBE_PER_DAY=10000` · `RATE_LIMIT_TIKTOK_PER_MIN=6` · `COLLECT_CRON_HOURS=08,20`
@@ -1530,7 +1602,7 @@ cp .devcontainer/env/app.env.example .devcontainer/env/app.env
 cp .devcontainer/secrets/secrets.env.example .devcontainer/secrets/secrets.env
 ```
 
-- [ ] **Step 5: Gate — stack sobe e CLI responde**
+- [✅] **Step 5: Gate — stack sobe e CLI responde**
 
 ```bash
 docker compose -f .devcontainer/docker-compose.yml up -d postgres redis python
@@ -1538,7 +1610,7 @@ docker compose -f .devcontainer/docker-compose.yml exec python uv run cf ping
 ```
 Expected: `{"ok": true, "command": "ping", ...}`
 
-- [ ] **Step 6: Commit**
+- [✅] **Step 6: Commit**
 
 ```bash
 git add .devcontainer .dockerignore .gitignore && \
@@ -1561,7 +1633,7 @@ secrets gitignored com so exemplos versionados."
 - Produz: gates CI = DoD (spec §10); `scripts/check_privacy.py` exit 1 se
   segredo/path pessoal em arquivo rastreado
 
-- [ ] **Step 1: Teste do guard de privacidade (é código — TDD)**
+- [✅] **Step 1: Teste do guard de privacidade (é código — TDD)**
 
 `tests/cli/test_privacy_script.py`:
 
@@ -1571,17 +1643,19 @@ from pathlib import Path
 
 
 def test_privacy_script_passes_on_repo() -> None:
-    proc = subprocess.run([sys.executable, "scripts/check_privacy.py"],
-                          capture_output=True, text=True)
+    proc = subprocess.run(
+        [sys.executable, "scripts/check_privacy.py"], capture_output=True, text=True
+    )
     assert proc.returncode == 0, proc.stdout + proc.stderr
 ```
 
-- [ ] **Step 2: Rodar e ver falhar** (`uv run pytest tests/cli/test_privacy_script.py -v` → arquivo não existe)
+- [✅] **Step 2: Rodar e ver falhar** (`uv run pytest tests/cli/test_privacy_script.py -v` → arquivo não existe)
 
-- [ ] **Step 3: `scripts/check_privacy.py`**
+- [✅] **Step 3: `scripts/check_privacy.py`**
 
 ```python
 """Falha se segredo/key/path pessoal aparecer em arquivo rastreado."""
+
 import re
 import subprocess
 import sys
@@ -1589,17 +1663,36 @@ from pathlib import Path
 
 PATTERNS = [
     (r"-----BEGIN [A-Z ]*PRIVATE KEY-----", "chave privada"),
-    (r"(?i)(api[_-]?key|secret|password|token)\s*[=:]\s*['\"][A-Za-z0-9_\-]{16,}",
-     "credencial literal"),
+    (
+        r"(?i)(?:api[_-]?key|secret|password|token)['\"]?\s*[=:]\s*['\"]?"
+        r"([A-Za-z0-9_\-]{16,})",
+        "credencial literal",
+    ),
     (r"/home/[a-z]+/", "path pessoal"),
 ]
-ALLOWLIST = {".env.example", "check_privacy.py", "secrets.env.example",
-             "app.env.example", "2026-10-07-content-factory-design.md"}
+# valor placeholder (YOUR_..., ..._HERE) não é segredo
+PLACEHOLDER = re.compile(r"(?i)^(?:your[_-]|.*[_-]here$)")
+ALLOWLIST = {
+    ".env.example",
+    "check_privacy.py",
+    "secrets.env.example",
+    "app.env.example",
+    "2026-10-07-content-factory-design.md",
+}
+
+
+def _hit(pattern: str, text: str) -> bool:
+    for match in re.finditer(pattern, text):
+        if match.lastindex and PLACEHOLDER.search(match.group(match.lastindex)):
+            continue
+        return True
+    return False
 
 
 def main() -> int:
-    files = subprocess.run(["git", "ls-files"], capture_output=True, text=True,
-                           check=True).stdout.splitlines()
+    files = subprocess.run(
+        ["git", "ls-files"], capture_output=True, text=True, check=True
+    ).stdout.splitlines()
     bad = []
     for name in files:
         if Path(name).name in ALLOWLIST or name.endswith((".png", ".svg", ".lock")):
@@ -1609,7 +1702,7 @@ def main() -> int:
         except OSError:
             continue
         for pattern, label in PATTERNS:
-            if re.search(pattern, text):
+            if _hit(pattern, text):
                 bad.append(f"{name}: {label}")
     if bad:
         print("PRIVACIDADE FALHOU:\n" + "\n".join(bad))
@@ -1625,7 +1718,7 @@ if __name__ == "__main__":
 > Roda **antes** de `git add` em toda task (a permissão de commit é do
 > hook de privacidade): se o teste falhar localmente, o commit não sai.
 
-- [ ] **Step 4: `.github/workflows/ci.yml`**
+- [✅] **Step 4: `.github/workflows/ci.yml`**
 
 ```yaml
 name: ci
@@ -1664,7 +1757,7 @@ jobs:
       - run: uv run python scripts/check_privacy.py
 ```
 
-- [ ] **Step 5: `.github/workflows/docs.yml`**
+- [✅] **Step 5: `.github/workflows/docs.yml`**
 
 ```yaml
 name: docs
@@ -1679,7 +1772,7 @@ jobs:
       - run: uv run --only-group docs mkdocs build --strict
 ```
 
-- [ ] **Step 6: Rodar gates locais** (pytest privacidade + ruff + pyright) → commit
+- [✅] **Step 6: Rodar gates locais** (pytest privacidade + ruff + pyright) → commit
 
 ```bash
 uv run pytest tests/cli/test_privacy_script.py -q && uv run ruff check . && \
@@ -1710,7 +1803,7 @@ CI = DoD (spec 10): mesmos gates locais, sem segredo em arquivo rastreado."
   `dev/credentials.md` cobre rotação de tokens + conta secundária TikTok
   (spec §7)
 
-- [ ] **Step 1: `mkdocs.yml`**
+- [✅] **Step 1: `mkdocs.yml`**
 
 ```yaml
 site_name: content-factory
@@ -1723,7 +1816,7 @@ markdown_extensions:
       custom_fences: [{ name: mermaid, class: mermaid, format: !!python/name:pymdownx.superfences.fence_code_format }]
 nav:
   - Início: index.md
-  - Roteamento: README.md
+  - Roteamento: roteamento.md
   - Produto:
       - Ideia inicial (verbatim): produto/ideia-inicial.md
       - PRD: produto/prd.md
@@ -1754,7 +1847,7 @@ nav:
 > Nav sempre com **arquivos**, nunca diretórios — mkdocs `--strict`
 > reprova entrada de diretório e pune página órfã com warning.
 
-- [ ] **Step 2: `docs/index.md`** (visão + mermaid das camadas) e páginas de
+- [✅] **Step 2: `docs/index.md`** (visão + mermaid das camadas) e páginas de
   `architecture/` (estado atual + próximas fases com o diagrama do spec §4),
   `dev/dev-environment.md` (compose, TEST_DATABASE_URL, gates),
   `dev/extending.md` (**novo segmento = YAML** · **novo collector = classe +
@@ -1766,7 +1859,7 @@ nav:
   12–16 entregam (endpoints/mocks/erros por collector; fórmula do score;
   contrato da CLI).
 
-- [ ] **Step 3: scripts geradores**
+- [✅] **Step 3: scripts geradores**
 
 `scripts/gen_datamodel.py`: lê `Base.metadata` via engine
 (`TEST_DATABASE_URL`), escreve `docs/data-model/README.md` com
@@ -1778,7 +1871,7 @@ com links (entrypoint do nav "Diagramas"). `.svg/.png` via
 **falha com mensagem clara** (não degrada silenciosamente — gate é gate).
 Gate: `alembic check` antes de gerar.
 
-- [ ] **Step 4: Gate**
+- [✅] **Step 4: Gate**
 
 ```bash
 uv run python scripts/gen_datamodel.py && uv run python scripts/gen_diagram.py && \
@@ -1786,7 +1879,7 @@ uv run --only-group docs mkdocs build --strict
 ```
 Expected: `Documentation built in …` sem warnings
 
-- [ ] **Step 5: Commit**
+- [✅] **Step 5: Commit**
 
 ```bash
 git add mkdocs.yml docs scripts && \
@@ -1811,7 +1904,7 @@ Nada de doc gerado editado na mão; gate alembic check antes de gerar."
   `registry.resolve(platforms: list[str]) -> list[Collector]` — **ponto único
   de extensão** (Task 12–15 registram aqui)
 
-- [ ] **Step 1: Teste falhando**
+- [✅] **Step 1: Teste falhando**
 
 ```python
 from content_factory.infra.collectors import registry
@@ -1821,7 +1914,9 @@ from content_factory.domain.errors import DomainError
 def test_register_and_resolve() -> None:
     class Fake:
         platform = "fake"
-        async def discover(self, segment, limit): return []
+
+        async def discover(self, segment, limit):
+            return []
 
     registry.register(Fake())
     assert registry.get("fake").platform == "fake"
@@ -1833,7 +1928,7 @@ def test_unknown_platform_raises() -> None:
         registry.get("desconhecida")
 ```
 
-- [ ] **Step 2: Falha** → **Step 3: implementar** (`_REGISTRY: dict[str, Collector]`,
+- [✅] **Step 2: Falha** → **Step 3: implementar** (`_REGISTRY: dict[str, Collector]`,
   `register` sobrescreve com aviso, `resolve` itera platforms na ordem) →
   **Step 4: gates** (`2 passed`) → **Step 5: commit**
 
@@ -1858,22 +1953,26 @@ git commit -m "feat: registry de collectors (ponto de extensao por plataforma)"
   `CollectOutcome(ok, partial, counts: dict[str, int | bool], runs: list[CollectRun])`
   — CLI mapeia direto p/ envelope + exit code (Task 6)
 
-- [ ] **Step 1: Teste falhando (núcleo com fakes, sem Redis/banco)**
+- [✅] **Step 1: Teste falhando (núcleo com fakes, sem Redis/banco)**
 
 ```python
 import asyncio
 from content_factory.app.collect import CollectDeps, collect
 from content_factory.domain.errors import CollectorError
-from tests.stubs import (FakeCollector, FakeLimiter, FakeLock,
-                          FakeRepos)   # stubs/test doubles puros
+from tests.stubs import FakeCollector, FakeLimiter, FakeLock, FakeRepos  # stubs/test doubles puros
 
 
 async def test_collect_partial_failure_marks_partial() -> None:
     good = FakeCollector("youtube", n=3)
     bad = FakeCollector("tiktok", fail=CollectorError("blocked", "tiktok"))
-    deps = CollectDeps(collectors=[good, bad], videos=FakeRepos().videos,
-                       segments=FakeRepos().segments, runs=FakeRepos().runs,
-                       limiter=FakeLimiter(), lock=FakeLock())
+    deps = CollectDeps(
+        collectors=[good, bad],
+        videos=FakeRepos().videos,
+        segments=FakeRepos().segments,
+        runs=FakeRepos().runs,
+        limiter=FakeLimiter(),
+        lock=FakeLock(),
+    )
     out = await collect("candles", ["youtube", "tiktok"], limit=10, deps=deps)
     assert out.ok is False and out.partial is True
     assert out.counts["inserted"] == 3
@@ -1882,10 +1981,14 @@ async def test_collect_partial_failure_marks_partial() -> None:
 
 
 async def test_lock_prevents_second_run() -> None:
-    deps = CollectDeps(collectors=[FakeCollector("youtube")],
-                       videos=FakeRepos().videos, segments=FakeRepos().segments,
-                       runs=FakeRepos().runs, limiter=FakeLimiter(),
-                       lock=FakeLock(acquired=False))
+    deps = CollectDeps(
+        collectors=[FakeCollector("youtube")],
+        videos=FakeRepos().videos,
+        segments=FakeRepos().segments,
+        runs=FakeRepos().runs,
+        limiter=FakeLimiter(),
+        lock=FakeLock(acquired=False),
+    )
     out = await collect("candles", ["youtube"], limit=5, deps=deps)
     assert out.ok is False and out.counts == {"ja_em_execucao": True}
 ```
@@ -1895,14 +1998,19 @@ async def test_lock_prevents_second_run() -> None:
 implementam o **Protocolo inteiro** da Task 2 (métodos não usados levantam
 `NotImplementedError`): pyright strict valida estrutura dos testes também.)
 
-- [ ] **Step 2: Falha** → **Step 3: implementar `app/collect.py`**
+- [✅] **Step 2: Falha** → **Step 3: implementar `app/collect.py`**
 
 ```python
 from datetime import UTC, datetime
 from dataclasses import dataclass, field
-from content_factory.app.ports import (Collector, CollectRunRepository,
-                                       Lock, RateLimiter, SegmentRepository,
-                                       VideoRepository)
+from content_factory.app.ports import (
+    Collector,
+    CollectRunRepository,
+    Lock,
+    RateLimiter,
+    SegmentRepository,
+    VideoRepository,
+)
 from content_factory.domain.errors import CollectorError
 from content_factory.domain.models import CollectRun
 
@@ -1921,31 +2029,31 @@ class CollectDeps:
 class CollectOutcome:
     ok: bool
     partial: bool
-    counts: dict[str, int | bool]   # bool só no caso {"ja_em_execucao": True}
+    counts: dict[str, int | bool]  # bool só no caso {"ja_em_execucao": True}
     runs: list[CollectRun] = field(default_factory=list)
 
 
-async def collect(segment_slug: str, platforms: list[str], limit: int,
-                  deps: CollectDeps) -> CollectOutcome:
+async def collect(
+    segment_slug: str, platforms: list[str], limit: int, deps: CollectDeps
+) -> CollectOutcome:
     if not await deps.lock.acquire_once(f"collect:{segment_slug}"):
         return CollectOutcome(ok=False, partial=False, counts={"ja_em_execucao": True})
     try:
         segment = await deps.segments.get_by_slug(segment_slug)
-        counts: dict[str, int | bool] = {"found": 0, "inserted": 0,
-                                         "updated": 0, "failed": 0}
+        counts: dict[str, int | bool] = {"found": 0, "inserted": 0, "updated": 0, "failed": 0}
         runs: list[CollectRun] = []
         errors = 0
         for collector in deps.collectors:
             if collector.platform not in platforms:
                 continue
             started = datetime.now(UTC)
-            run = CollectRun(collector=collector.platform, segment_id=segment.id,
-                             started_at=started)
+            run = CollectRun(
+                collector=collector.platform, segment_id=segment.id, started_at=started
+            )
             try:
                 await deps.limiter.acquire(collector.platform)
                 found = await collector.discover(segment, limit)
-                stats = await deps.videos.upsert_candidates(
-                    segment.id, collector.platform, found)
+                stats = await deps.videos.upsert_candidates(segment.id, collector.platform, found)
                 run.status = "ok"
                 run.found = len(found)
                 run.inserted, run.updated = stats.inserted, stats.updated
@@ -1963,14 +2071,17 @@ async def collect(segment_slug: str, platforms: list[str], limit: int,
                 runs.append(run)
         ok = errors == 0
         return CollectOutcome(
-            ok=ok, partial=(not ok and int(counts["inserted"]) > 0),
-            counts=counts, runs=runs)
+            ok=ok,
+            partial=(not ok and (int(counts["inserted"]) + int(counts["updated"]) > 0)),
+            counts=counts,
+            runs=runs,
+        )
     finally:
         # SEM release o lock eterno bloqueia a próxima execução — bug clássico
         await deps.lock.release(f"collect:{segment_slug}")
 ```
 
-- [ ] **Step 4: `infra/ratelimit.py` + `infra/redact.py`** —
+- [✅] **Step 4: `infra/ratelimit.py` + `infra/redact.py`** —
   **rate-limit/token bucket Redis** (`redis.asyncio`; janelas: `youtube`
   cota diária via `INCR`+`EXPIRE 86400`; `tiktok` `6/min`; `instagram`
   janela 60 s; backoff com jitter ±20%) e **circuit breaker por plataforma**
@@ -1991,12 +2102,12 @@ async def collect(segment_slug: str, platforms: list[str], limit: int,
 > chamada de `collect` **depois** de uma execução bem-sucedida adquire o
 > lock de novo.
 
-- [ ] **Step 5: CLI `collect`** — com `--segment/--platform/--limit`,
+- [✅] **Step 5: CLI `collect`** — com `--segment/--platform/--limit`,
   envolve `asyncio.run(collect(...))`, traduz `CollectOutcome` → envelope
   (exit 0/2/1). Teste de CLI: `runner.invoke(app, ["collect", …])` com deps
   fake via monkeypatch → exit 2 em falha parcial.
 
-- [ ] **Step 6: Gates + commit**
+- [✅] **Step 6: Gates + commit**
 
 ```bash
 uv run pytest -q -m "not integration and not e2e" && uv run ruff check . && uv run pyright
@@ -2026,7 +2137,7 @@ concorrente do mesmo segmento (anti-padrao de bot)."
   `register_defaults(settings)` registra os 4 coletores — CLI/worker chamam
   **uma vez** no entrypoint
 
-- [ ] **Step 1: Fixtures** (respostas reais reduzidas da Data API v3 — gravar
+- [✅] **Step 1: Fixtures** (respostas reais reduzidas da Data API v3 — gravar
   1× com chave real e anonimizar ids) em `tests/fixtures/*.json`:
 
 `youtube_search.json`:
@@ -2051,7 +2162,7 @@ concorrente do mesmo segmento (anti-padrao de bot)."
 {"items": [{"id": "UC1", "statistics": {"subscriberCount": "54000"}}]}
 ```
 
-- [ ] **Step 2: Transport mock + teste falhando**
+- [✅] **Step 2: Transport mock + teste falhando**
 
 `tests/infra/collectors/conftest.py`:
 
@@ -2089,8 +2200,9 @@ import pytest
 from content_factory.domain.models import SegmentConfig
 from content_factory.infra.collectors.youtube import YoutubeCollector
 
-SEG = SegmentConfig(slug="candles", name="Velas", platforms=["youtube"],
-                    keywords=["candle making", "vela de soja"])
+SEG = SegmentConfig(
+    slug="candles", name="Velas", platforms=["youtube"], keywords=["candle making", "vela de soja"]
+)
 
 
 @pytest.mark.asyncio
@@ -2099,9 +2211,9 @@ async def test_discover_maps_fixture(httpx_mock_transport: httpx.MockTransport) 
     out = await c.discover(SEG, limit=5)
     assert out and out[0].platform == "youtube"
     assert out[0].views is not None and out[0].url.startswith("https://")
-    assert out[0].duration_s == 492          # PT8M12S
+    assert out[0].duration_s == 492  # PT8M12S
     assert out[0].creator_followers == 54000
-    assert c.quota_used == 102               # 100 search + 1 videos + 1 channels
+    assert c.quota_used == 102  # 100 search + 1 videos + 1 channels
 
 
 @pytest.mark.asyncio
@@ -2116,10 +2228,10 @@ async def test_quota_403_becomes_rate_limited() -> None:
         await c.discover(SEG, limit=5)
 ```
 
-- [ ] **Step 3: Rodar e ver falhar** (`uv run pytest tests/infra/collectors/test_youtube.py -v`
+- [✅] **Step 3: Rodar e ver falhar** (`uv run pytest tests/infra/collectors/test_youtube.py -v`
   → ImportError `content_factory.infra.collectors.youtube`)
 
-- [ ] **Step 4: Implementar**
+- [✅] **Step 4: Implementar**
 
 `infra/collectors/youtube.py`:
 
@@ -2148,17 +2260,16 @@ class YoutubeCollector:
     platform = "youtube"
     COST_SEARCH, COST_LIST = 100, 1
 
-    def __init__(self, api_key: str,
-                 transport: httpx.AsyncBaseTransport | None = None,
-                 quota_used: int = 0) -> None:
+    def __init__(
+        self, api_key: str, transport: httpx.AsyncBaseTransport | None = None, quota_used: int = 0
+    ) -> None:
         self._key = api_key
         self._client = httpx.AsyncClient(transport=transport, timeout=20)
         self.quota_used = quota_used
 
     async def _get(self, path: str, params: dict[str, str]) -> dict[str, object]:
         try:
-            r = await self._client.get(f"{API}/{path}",
-                                       params={**params, "key": self._key})
+            r = await self._client.get(f"{API}/{path}", params={**params, "key": self._key})
         except httpx.HTTPError as exc:
             raise NetworkError(self.platform, str(exc)) from exc
         if r.status_code == 403:
@@ -2173,52 +2284,72 @@ class YoutubeCollector:
             raise UpstreamChanged(self.platform, "JSON com shape inesperado")
         return data
 
-    async def discover(self, segment: SegmentConfig,
-                       limit: int) -> list[CandidateVideo]:
+    async def discover(self, segment: SegmentConfig, limit: int) -> list[CandidateVideo]:
         q = " OR ".join(segment.keywords[:5])
         after = (datetime.now(UTC) - timedelta(days=7)).strftime("%Y-%m-%dT%H:%M:%SZ")
-        search = await self._get("search", {
-            "part": "snippet", "q": q, "type": "video", "order": "viewCount",
-            "publishedAfter": after, "maxResults": str(min(limit, 50)),
-        })
+        search = await self._get(
+            "search",
+            {
+                "part": "snippet",
+                "q": q,
+                "type": "video",
+                "order": "viewCount",
+                "publishedAfter": after,
+                "maxResults": str(min(limit, 50)),
+            },
+        )
         self.quota_used += self.COST_SEARCH
         items = search.get("items")
         if not isinstance(items, list):
             raise UpstreamChanged(self.platform, "search sem items")
-        ids = [i["id"]["videoId"] for i in items
-               if isinstance(i, dict) and i.get("id", {}).get("videoId")]
+        ids = [
+            i["id"]["videoId"]
+            for i in items
+            if isinstance(i, dict) and i.get("id", {}).get("videoId")
+        ]
         if not ids:
             return []
-        stats = await self._get("videos", {
-            "part": "statistics,snippet,contentDetails",
-            "id": ",".join(ids[:50]),
-        })
+        stats = await self._get(
+            "videos",
+            {
+                "part": "statistics,snippet,contentDetails",
+                "id": ",".join(ids[:50]),
+            },
+        )
         self.quota_used += self.COST_LIST
         stats_by_id = {v["id"]: v for v in stats.get("items", [])}
-        channels = await self._get("channels", {
-            "part": "statistics",
-            "id": ",".join({v["snippet"]["channelId"] for v in stats_by_id.values()}),
-        })
+        channels = await self._get(
+            "channels",
+            {
+                "part": "statistics",
+                "id": ",".join({v["snippet"]["channelId"] for v in stats_by_id.values()}),
+            },
+        )
         self.quota_used += self.COST_LIST
-        followers = {c["id"]: int(c["statistics"].get("subscriberCount", 0))
-                     for c in channels.get("items", [])}
+        followers = {
+            c["id"]: int(c["statistics"].get("subscriberCount", 0))
+            for c in channels.get("items", [])
+        }
         return [self._map(v, followers) for v in stats_by_id.values()]
 
     def _map(self, v: dict, followers: dict[str, int]) -> CandidateVideo:
         sn, st = v["snippet"], v.get("statistics", {})
         vid = v["id"]
         return CandidateVideo(
-            platform=self.platform, platform_video_id=vid,
+            platform=self.platform,
+            platform_video_id=vid,
             url=f"https://www.youtube.com/watch?v={vid}",
             creator_handle=sn.get("channelTitle", ""),
             creator_followers=followers.get(sn.get("channelId", "")),
-            title=sn.get("title", ""), description=sn.get("description", ""),
+            title=sn.get("title", ""),
+            description=sn.get("description", ""),
             published_at=datetime.fromisoformat(sn["publishedAt"].replace("Z", "+00:00")),
             duration_s=_duration_seconds(v.get("contentDetails", {}).get("duration", "")),
             views=int(st.get("viewCount", 0)),
             likes=int(st.get("likeCount", 0)),
             comments=int(st.get("commentCount", 0)),
-            shares=None, saves=None,        # a API não expõe (ADR-0003)
+            shares=None,
+            saves=None,  # a API não expõe (ADR-0003)
             thumbnail_url=sn.get("thumbnails", {}).get("default", {}).get("url"),
             raw=v,
         )
@@ -2239,7 +2370,7 @@ def register_defaults(settings: Settings) -> None:
     # Task 15: register(WebCollector())
 ```
 
-- [ ] **Step 5: Gates + commit**
+- [✅] **Step 5: Gates + commit**
 
 ```bash
 uv run pytest tests/infra/collectors -q && uv run ruff check . && uv run pyright
@@ -2267,7 +2398,7 @@ git add src tests && git commit -m "feat: collector YouTube (Data API v3) com co
   viewport que a própria biblioteca gera** (não forjar — UA coerente é
   condição anti-bloqueio da spec §7)
 
-- [ ] **Step 1: Fixture** `tests/fixtures/tiktok_trending.json` (lista no
+- [✅] **Step 1: Fixture** `tests/fixtures/tiktok_trending.json` (lista no
   shape do `as_dict()`):
 
 ```json
@@ -2279,7 +2410,7 @@ git add src tests && git commit -m "feat: collector YouTube (Data API v3) com co
   "video": {"cover": "https://cdn.example/cover.jpg"}}]
 ```
 
-- [ ] **Step 2: Teste falhando**
+- [✅] **Step 2: Teste falhando**
 
 `tests/infra/collectors/test_tiktok.py`:
 
@@ -2293,9 +2424,9 @@ from content_factory.domain.models import SegmentConfig
 from content_factory.infra.collectors.tiktok import TikTokCollector
 
 FIXTURE = json.loads(
-    (Path(__file__).parent.parent / "fixtures" / "tiktok_trending.json").read_text())
-SEG = SegmentConfig(slug="candles", name="Velas", platforms=["tiktok"],
-                    keywords=["candle making"])
+    (Path(__file__).parent.parent / "fixtures" / "tiktok_trending.json").read_text()
+)
+SEG = SegmentConfig(slug="candles", name="Velas", platforms=["tiktok"], keywords=["candle making"])
 
 
 class StubTrending:
@@ -2327,7 +2458,7 @@ async def test_discover_maps_fixture() -> None:
     assert out and out[0].platform == "tiktok"
     assert out[0].views == 250000 and out[0].likes == 18000
     assert out[0].url.endswith(FIXTURE[0]["id"])
-    assert out[0].published_at is not None     # epoch → UTC
+    assert out[0].published_at is not None  # epoch → UTC
 
 
 @pytest.mark.asyncio
@@ -2355,10 +2486,10 @@ async def test_empty_response_5x_becomes_blocked() -> None:
     assert ei.value.code == "blocked"
 ```
 
-- [ ] **Step 3: Rodar e ver falhar**
+- [✅] **Step 3: Rodar e ver falhar**
   (`uv run pytest tests/infra/collectors/test_tiktok.py -v` → ImportError)
 
-- [ ] **Step 4: Implementar** `infra/collectors/tiktok.py`:
+- [✅] **Step 4: Implementar** `infra/collectors/tiktok.py`:
 
 ```python
 import asyncio
@@ -2375,21 +2506,36 @@ MAX_ATTEMPTS = 5
 class TikTokCollector:
     platform = "tiktok"
 
-    def __init__(self, ms_token: str, proxy: str | None = None,
-                 client: Any | None = None) -> None:
+    def __init__(self, ms_token: str, proxy: str | None = None, client: Any | None = None) -> None:
         self._token = ms_token
         self._proxy = proxy
         self._client = client
 
     async def discover(self, segment: SegmentConfig, limit: int) -> list[CandidateVideo]:
         if not self._token:
-            raise AuthExpired(self.platform,
-                              "TIKTOK_MS_TOKEN ausente/expirado — ver docs/dev/credentials.md")
-        client = self._client or await self._open_session()
+            raise AuthExpired(
+                self.platform, "TIKTOK_MS_TOKEN ausente/expirado — ver docs/dev/credentials.md"
+            )
+        if self._client is not None:
+            return await self._discover(self._client, segment, limit)
+        api = await self._open_session()
+        try:
+            return await self._discover(api, segment, limit)
+        finally:
+            # uso por-invocação: fecha só a sessão que abrimos (a lib só loga em
+            # __del__); close_sessions já para o Playwright, stop_playwright
+            # extra por segurança (padrão __aexit__ da própria lib)
+            await api.close_sessions()
+            await api.stop_playwright()
+
+    async def _discover(
+        self, client: Any, segment: SegmentConfig, limit: int
+    ) -> list[CandidateVideo]:
         videos = await self._call_with_backoff(client.trending, count=min(limit * 2, 60))
         if segment.keywords:
             videos += await self._call_with_backoff(
-                client.hashtag(segment.keywords[0]), count=min(limit, 30))
+                client.hashtag(segment.keywords[0]), count=min(limit, 30)
+            )
         seen: set[str] = set()
         out = []
         for v in videos:
@@ -2404,21 +2550,22 @@ class TikTokCollector:
                 return await endpoint.videos(count=count)
             except Exception as exc:  # noqa: BLE001 — fronteira classifica depois
                 from TikTokApi.exceptions import EmptyResponseException
+
                 if not isinstance(exc, EmptyResponseException):
                     raise
                 if attempt == MAX_ATTEMPTS - 1:
                     raise CollectorError(
-                        "blocked", self.platform,
-                        f"sem resposta após {MAX_ATTEMPTS} tentativas") from exc
-                await asyncio.sleep(2 ** attempt + random.uniform(0, 2))
+                        "blocked", self.platform, f"sem resposta após {MAX_ATTEMPTS} tentativas"
+                    ) from exc
+                await asyncio.sleep(2**attempt + random.uniform(0, 2))
         return []
 
     async def _open_session(self) -> Any:
         from TikTokApi import TikTokApi
+
         api = TikTokApi(proxy=self._proxy)
         # create_sessions gera UA/viewport reais (fingerprint coerente — spec §7)
-        await api.create_sessions(ms_tokens=[self._token], num_sessions=1,
-                                  headless=True)
+        await api.create_sessions(ms_tokens=[self._token], num_sessions=1, headless=True)
         return api
 
     def _map(self, v: dict[str, Any]) -> CandidateVideo:
@@ -2426,17 +2573,19 @@ class TikTokCollector:
         stats = v.get("stats", {})
         handle = author.get("uniqueId", "")
         return CandidateVideo(
-            platform=self.platform, platform_video_id=v.get("id", ""),
+            platform=self.platform,
+            platform_video_id=v.get("id", ""),
             url=f"https://www.tiktok.com/@{handle}/video/{v.get('id', '')}",
-            creator_handle=handle, title="", description=v.get("desc", ""),
-            published_at=datetime.fromtimestamp(int(v.get("createTime", 0)),
-                                                tz=UTC),
+            creator_handle=handle,
+            title="",
+            description=v.get("desc", ""),
+            published_at=datetime.fromtimestamp(int(v.get("createTime", 0)), tz=UTC),
             duration_s=int(v.get("duration") or 0) or None,
             views=int(stats.get("playCount", 0)),
             likes=int(stats.get("diggCount", 0)),
             comments=int(stats.get("commentCount", 0)),
             shares=int(stats.get("shareCount", 0)),
-            saves=None,                       # TikTok não expõe (ADR-0003)
+            saves=None,  # TikTok não expõe (ADR-0003)
             thumbnail_url=(v.get("video") or {}).get("cover"),
             raw=v,
         )
@@ -2447,7 +2596,7 @@ class TikTokCollector:
 > `api.hashtag(segment.keywords[0]).videos(...)`; a fixture/contrato é o
 > canário (risco registrado no plano, §Em aberto).
 
-- [ ] **Step 5: Gates + commit**
+- [✅] **Step 5: Gates + commit**
 
 ```bash
 uv run pytest tests/infra/collectors -q && uv run ruff check . && uv run pyright
@@ -2472,7 +2621,7 @@ git add src tests && git commit -m "feat: collector TikTok (TikTok-Api) atras do
   terceiros, ADR-0003), `duration_s=None`; header `X-App-Usage` lido em
   toda resposta (`self.app_usage: int`); 400/401 → `AuthExpired`
 
-- [ ] **Step 1: Fixtures**
+- [✅] **Step 1: Fixtures**
 
 `ig_hashtag_search.json`:
 ```json
@@ -2488,7 +2637,7 @@ git add src tests && git commit -m "feat: collector TikTok (TikTok-Api) atras do
   "thumbnail_url": "https://cdn.example/t.jpg", "username": "velaslab"}]}
 ```
 
-- [ ] **Step 2: Teste falhando** `tests/infra/collectors/test_instagram.py`:
+- [✅] **Step 2: Teste falhando** `tests/infra/collectors/test_instagram.py`:
 
 ```python
 import json
@@ -2501,29 +2650,31 @@ from content_factory.domain.models import SegmentConfig
 from content_factory.infra.collectors.instagram import InstagramCollector
 
 FIXDIR = Path(__file__).parent.parent / "fixtures"
-SEG = SegmentConfig(slug="candles", name="Velas", platforms=["instagram"],
-                    keywords=["vela artesanal"])
+SEG = SegmentConfig(
+    slug="candles", name="Velas", platforms=["instagram"], keywords=["vela artesanal"]
+)
 
 
 def _route(request: httpx.Request) -> httpx.Response:
     url = str(request.url)
     headers = {"X-App-Usage": '{"call_count":10,"total_cputime":5,"total_time":5}'}
     if "hashtags" in url:
-        return httpx.Response(200, headers=headers,
-                              content=(FIXDIR / "ig_hashtag_search.json").read_bytes())
+        return httpx.Response(
+            200, headers=headers, content=(FIXDIR / "ig_hashtag_search.json").read_bytes()
+        )
     if "top_media" in url or "recent_media" in url:
-        return httpx.Response(200, headers=headers,
-                              content=(FIXDIR / "ig_hashtag_top.json").read_bytes())
+        return httpx.Response(
+            200, headers=headers, content=(FIXDIR / "ig_hashtag_top.json").read_bytes()
+        )
     return httpx.Response(404, json={})
 
 
 @pytest.mark.asyncio
 async def test_discover_maps_fixture() -> None:
-    c = InstagramCollector(access_token="t", ig_user_id="1",
-                           transport=httpx.MockTransport(_route))
+    c = InstagramCollector(access_token="t", ig_user_id="1", transport=httpx.MockTransport(_route))
     out = await c.discover(SEG, limit=5)
     assert out and out[0].platform == "instagram"
-    assert out[0].views is None            # limitação documentada (ADR-0003)
+    assert out[0].views is None  # limitação documentada (ADR-0003)
     assert out[0].likes == 5400 and out[0].comments == 130
     assert out[0].url.startswith("https://www.instagram.com/p/")
     assert c.app_usage == 10
@@ -2534,15 +2685,16 @@ async def test_401_becomes_auth_expired() -> None:
     def _unauthorized(request: httpx.Request) -> httpx.Response:
         return httpx.Response(401, json={"error": {"message": "invalid token"}})
 
-    c = InstagramCollector(access_token="bad", ig_user_id="1",
-                           transport=httpx.MockTransport(_unauthorized))
+    c = InstagramCollector(
+        access_token="bad", ig_user_id="1", transport=httpx.MockTransport(_unauthorized)
+    )
     with pytest.raises(AuthExpired):
         await c.discover(SEG, limit=5)
 ```
 
-- [ ] **Step 3: Rodar e ver falhar** (ImportError)
+- [✅] **Step 3: Rodar e ver falhar** (ImportError)
 
-- [ ] **Step 4: Implementar** `infra/collectors/instagram.py`:
+- [✅] **Step 4: Implementar** `infra/collectors/instagram.py`:
 
 ```python
 import httpx
@@ -2551,14 +2703,17 @@ from content_factory.domain.errors import AuthExpired, NetworkError, UpstreamCha
 from content_factory.domain.models import CandidateVideo, SegmentConfig
 
 API = "https://graph.facebook.com/v21.0"
-FIELDS = "id,caption,like_count,comments_count,timestamp,media_type,permalink,thumbnail_url,username"
+FIELDS = (
+    "id,caption,like_count,comments_count,timestamp,media_type,permalink,thumbnail_url,username"
+)
 
 
 class InstagramCollector:
     platform = "instagram"
 
-    def __init__(self, access_token: str, ig_user_id: str,
-                 transport: httpx.AsyncBaseTransport | None = None) -> None:
+    def __init__(
+        self, access_token: str, ig_user_id: str, transport: httpx.AsyncBaseTransport | None = None
+    ) -> None:
         self._token = access_token
         self._user = ig_user_id
         self._client = httpx.AsyncClient(transport=transport, timeout=20)
@@ -2566,13 +2721,15 @@ class InstagramCollector:
 
     async def _get(self, path: str, params: dict[str, str]) -> dict:
         try:
-            r = await self._client.get(f"{API}/{path}",
-                                       params={**params, "access_token": self._token})
+            r = await self._client.get(
+                f"{API}/{path}", params={**params, "access_token": self._token}
+            )
         except httpx.HTTPError as exc:
             raise NetworkError(self.platform, str(exc)) from exc
         usage = r.headers.get("X-App-Usage", "")
         if usage and "call_count" in usage:
             import json
+
             self.app_usage = int(json.loads(usage).get("call_count", 0))
         if r.status_code in (400, 401):
             raise AuthExpired(self.platform, f"HTTP {r.status_code}")
@@ -2590,23 +2747,31 @@ class InstagramCollector:
         if not rows:
             return []
         tag_id = rows[0]["id"]
-        top = await self._get(f"{tag_id}/top_media",
-                              {"fields": FIELDS, "limit": str(min(limit, 25))})
+        top = await self._get(
+            f"{tag_id}/top_media", {"fields": FIELDS, "limit": str(min(limit, 25))}
+        )
         items = top.get("data") or []
         return [self._map(i) for i in items[:limit]]
 
     def _map(self, item: dict) -> CandidateVideo:
         from datetime import datetime
+
         return CandidateVideo(
-            platform=self.platform, platform_video_id=item.get("id", ""),
+            platform=self.platform,
+            platform_video_id=item.get("id", ""),
             url=item.get("permalink", ""),
             creator_handle=item.get("username", ""),
-            title="", description=item.get("caption") or "",
-            published_at=datetime.fromisoformat(item["timestamp"]) if item.get("timestamp") else None,
-            views=None,                      # Graph API não expõe (ADR-0003)
+            title="",
+            description=item.get("caption") or "",
+            published_at=datetime.fromisoformat(item["timestamp"])
+            if item.get("timestamp")
+            else None,
+            views=None,  # Graph API não expõe (ADR-0003)
             likes=int(item.get("like_count", 0)),
             comments=int(item.get("comments_count", 0)),
-            shares=None, saves=None, duration_s=None,
+            shares=None,
+            saves=None,
+            duration_s=None,
             thumbnail_url=item.get("thumbnail_url"),
             raw=item,
         )
@@ -2615,7 +2780,7 @@ class InstagramCollector:
 E em `register_defaults`:
 `register(InstagramCollector(settings.instagram_access_token, settings.ig_user_id))`.
 
-- [ ] **Step 5: Gates + commit:**
+- [✅] **Step 5: Gates + commit:**
 
 ```bash
 uv run pytest tests/infra/collectors -q && uv run ruff check . && uv run pyright
@@ -2636,14 +2801,15 @@ git add src tests && git commit -m "feat: collector Instagram via Graph API ofic
 **Interfaces:**
 - Produz: `WebCollector.discover` (ddgs text search por keywords →
   `CandidateVideo(platform="web")`);
-  `ingest_url(url, transport=None) -> CandidateVideo`
-  (fetch + extrai `<title>`/meta description; `transport` só p/ teste);
+  `ingest_url(url, transport=None, guard=None) -> CandidateVideo`
+  (fetch + extrai `<title>`/meta description; `transport` só p/ teste;
+  `guard` é a porta `SsrfGuard` de `app/ports.py`, injetada pela CLI);
   `ssrf.assert_public_http(url)` — valida scheme, resolve DNS e bloqueia
   IP privado/loopback/link-local/`169.254.169.254`/multicast/reserved,
   timeout 10 s, max 2 MB
 - CLI: `cf ingest --url <url>` → envelope; com `--segment` faz upsert
 
-- [ ] **Step 1: Teste SSRF falhando** `tests/infra/test_ssrf.py`:
+- [✅] **Step 1: Teste SSRF falhando** `tests/infra/test_ssrf.py`:
 
 ```python
 import pytest
@@ -2686,9 +2852,9 @@ def test_allows_public_ip(monkeypatch: pytest.MonkeyPatch) -> None:
     assert_public_http("https://example.com/x")   # não levanta
 ```
 
-- [ ] **Step 2: Rodar e ver falhar** (módulo não existe)
+- [✅] **Step 2: Rodar e ver falhar** (módulo não existe)
 
-- [ ] **Step 3: Implementar SSRF** `infra/ssrf.py`:
+- [✅] **Step 3: Implementar SSRF** `infra/ssrf.py`:
 
 ```python
 import ipaddress
@@ -2708,12 +2874,18 @@ def assert_public_http(url: str) -> None:
         raise DomainError(f"DNS falhou para {parsed.hostname}") from exc
     for info in infos:
         ip = ipaddress.ip_address(info[4][0])
-        if (ip.is_private or ip.is_loopback or ip.is_link_local
-                or ip.is_multicast or ip.is_reserved or ip.is_unspecified):
+        if (
+            ip.is_private
+            or ip.is_loopback
+            or ip.is_link_local
+            or ip.is_multicast
+            or ip.is_reserved
+            or ip.is_unspecified
+        ):
             raise DomainError(f"IP não-público bloqueado: {ip} ({url})")
 ```
 
-- [ ] **Step 4: Teste Web falhando → implementar**
+- [✅] **Step 4: Teste Web falhando → implementar**
 
 `tests/infra/collectors/test_web.py`:
 
@@ -2723,14 +2895,18 @@ from content_factory.domain.models import SegmentConfig
 from content_factory.infra.collectors import web as web_mod
 from content_factory.infra.collectors.web import WebCollector
 
-SEG = SegmentConfig(slug="candles", name="Velas", platforms=["web"],
-                    keywords=["vela artesanal"])
+SEG = SegmentConfig(slug="candles", name="Velas", platforms=["web"], keywords=["vela artesanal"])
 
 
 class StubDDGS:
     def text(self, query: str, max_results: int = 10) -> list[dict]:
-        return [{"title": "Tutorial de velas", "href": "https://ex.com/vela",
-                 "body": "aprenda a fazer velas de soja"}]
+        return [
+            {
+                "title": "Tutorial de velas",
+                "href": "https://ex.com/vela",
+                "body": "aprenda a fazer velas de soja",
+            }
+        ]
 
 
 @pytest.mark.asyncio
@@ -2761,18 +2937,24 @@ class WebCollector:
     def __init__(self) -> None:
         pass  # resolve DDGS no momento do discover (monkeypatchável)
 
-    async def discover(self, segment: SegmentConfig,
-                       limit: int) -> list[CandidateVideo]:
+    async def discover(self, segment: SegmentConfig, limit: int) -> list[CandidateVideo]:
         q = " OR ".join(segment.keywords[:3])
-        results = await asyncio.to_thread(
-            lambda: DDGS().text(q, max_results=limit))
+        results = await asyncio.to_thread(lambda: DDGS().text(q, max_results=limit))
         return [
-            CandidateVideo(platform=self.platform,
-                           platform_video_id=r.get("href", ""),
-                           url=r.get("href", ""), creator_handle="",
-                           title=r.get("title", ""), description=r.get("body", ""),
-                           views=None, likes=None, comments=None,
-                           shares=None, saves=None, raw=dict(r))
+            CandidateVideo(
+                platform=self.platform,
+                platform_video_id=r.get("href", ""),
+                url=r.get("href", ""),
+                creator_handle="",
+                title=r.get("title", ""),
+                description=r.get("body", ""),
+                views=None,
+                likes=None,
+                comments=None,
+                shares=None,
+                saves=None,
+                raw=dict(r),
+            )
             for r in results
         ]
 ```
@@ -2782,7 +2964,7 @@ class WebCollector:
 > `monkeypatch.setattr(web_mod, "DDGS", …)` do teste troca. `register_defaults`
 > ganha `register(WebCollector())`.
 
-- [ ] **Step 5: `app/ingest.py` + teste → CLI `ingest`**
+- [✅] **Step 5: `app/ingest.py` + teste → CLI `ingest`**
 
 `tests/app/test_ingest.py`:
 
@@ -2794,30 +2976,39 @@ from content_factory.domain.errors import DomainError
 
 
 @pytest.mark.asyncio
-async def test_ingest_extracts_title(monkeypatch: pytest.MonkeyPatch) -> None:
-    import content_factory.infra.ssrf as ssrf
-    monkeypatch.setattr(ssrf, "assert_public_http", lambda url: None)
+async def test_ingest_extracts_title() -> None:
+    def _no_guard(url: str) -> None:
+        _ = url  # guard só precisa existir — fronteira HTTP mockada
 
     def _route(request: httpx.Request) -> httpx.Response:
-        return httpx.Response(200, text=(
-            "<html><head><title>Minha vela</title>"
-            "<meta name='description' content='feito a mao'></head></html>"))
+        return httpx.Response(
+            200,
+            text=(
+                "<html><head><title>Minha vela</title>"
+                "<meta name='description' content='feito a mao'></head></html>"
+            ),
+        )
 
-    cand = await ingest_url("https://ex.com/vela",
-                            transport=httpx.MockTransport(_route))
+    cand = await ingest_url(
+        "https://ex.com/vela", transport=httpx.MockTransport(_route), guard=_no_guard
+    )
     assert cand.title == "Minha vela"
     assert cand.platform == "web" and cand.url == "https://ex.com/vela"
 
 
 @pytest.mark.asyncio
-async def test_ingest_blocks_private(monkeypatch: pytest.MonkeyPatch) -> None:
-    # sem monkeypatch: URL real 127.0.0.1 → DomainError ANTES de fetch
+async def test_ingest_blocks_private() -> None:
+    # guard real injetada (mesmo wire da CLI): 127.0.0.1 → DomainError ANTES de fetch
     from content_factory.app.ingest import ingest_url as go
+    from content_factory.infra.ssrf import assert_public_http
+
     with pytest.raises(DomainError):
-        await go("http://127.0.0.1:9/x")
+        await go("http://127.0.0.1:9/x", guard=assert_public_http)
 ```
 
-`app/ingest.py`: valida via `ssrf.assert_public_http` → `httpx.AsyncClient.get`
+`app/ingest.py`: valida via porta `SsrfGuard` (`app/ports.py`), default
+fail-closed → `DomainError`; guard real `infra/ssrf.assert_public_http` é
+injetada pela CLI (composition root) → `httpx.AsyncClient.get`
 (`timeout=10`, lê no máx. 2 MB via `aiter_bytes` com corte) → extrai
 `<title>`/`meta[name=description]` com regex → `CandidateVideo(platform="web")`.
 
@@ -2828,7 +3019,8 @@ CLI:
 def ingest(url: str, segment: str | None = None) -> None:
     """Baixa uma URL, extrai título/descrição e grava (se --segment)."""
     try:
-        cand = asyncio.run(ingest_url(url))
+        # guard: infra.ssrf.assert_public_http — composition root (app/ não importa infra/)
+        cand = asyncio.run(ingest_url(url, guard=assert_public_http))
         # se segment: wire p/ VideoRepository.upsert_candidates (mesmo wire da Task 6)
         print(dumps(envelope_ok("ingest", url=cand.url, title=cand.title)))
         raise typer.Exit(0)
@@ -2837,7 +3029,7 @@ def ingest(url: str, segment: str | None = None) -> None:
         raise typer.Exit(1) from exc
 ```
 
-- [ ] **Step 6: Gates + commit:**
+- [✅] **Step 6: Gates + commit:**
 
 ```bash
 uv run pytest tests/infra tests/app -q && uv run ruff check . && uv run pyright
@@ -2859,8 +3051,9 @@ git add src tests && git commit -m "feat: collector Web (ddgs) + cf ingest com g
 
 ```python
 class ScoreRepository(Protocol):
-    async def upsert(self, video_id: int, segment_id: int,
-                     result: ScoreResult, computed_at: datetime) -> None: ...
+    async def upsert(
+        self, video_id: int, segment_id: int, result: ScoreResult, computed_at: datetime
+    ) -> None: ...
 ```
 
   `VideoRepository` ganha:
@@ -2882,16 +3075,20 @@ class VideoSnapshot(BaseModel):
   relevância = `keywords encontradas / len(keywords)` (substring
   case-insensitive em título+descrição)
 
-- [ ] **Step 1: Teste falhando** `tests/app/test_score.py`:
+- [✅] **Step 1: Teste falhando** `tests/app/test_score.py`:
 
 ```python
 from datetime import UTC, datetime, timedelta
 
 import pytest
 from content_factory.app.score import ScoreDeps, score
-from content_factory.domain.models import (ScoreResult, Segment,
-                                           SegmentConfig, VideoMetrics,
-                                           VideoSnapshot)
+from content_factory.domain.models import (
+    ScoreResult,
+    Segment,
+    SegmentConfig,
+    VideoMetrics,
+    VideoSnapshot,
+)
 
 NOW = datetime(2026, 10, 7, 12, 0, tzinfo=UTC)
 
@@ -2903,8 +3100,7 @@ class FakeVideos:
     async def latest_for_segment(self, segment_id: int) -> list[VideoSnapshot]:
         return self._s
 
-    async def upsert_candidates(self, segment_id: int, source: str,
-                                candidates: object) -> object:
+    async def upsert_candidates(self, segment_id: int, source: str, candidates: object) -> object:
         # pyright strict: o fake precisa satisfazer o Protocolo inteiro
         raise NotImplementedError
 
@@ -2913,28 +3109,35 @@ class FakeScores:
     def __init__(self) -> None:
         self.saved: list[tuple[int, ScoreResult]] = []
 
-    async def upsert(self, video_id: int, segment_id: int,
-                     result: ScoreResult, computed_at: datetime) -> None:
+    async def upsert(
+        self, video_id: int, segment_id: int, result: ScoreResult, computed_at: datetime
+    ) -> None:
         self.saved.append((video_id, result))
 
 
-SEG = Segment(id=1, **SegmentConfig(slug="candles", name="Velas",
-                                    platforms=["youtube"],
-                                    keywords=["vela", "soja"]).model_dump())
+SEG = Segment(
+    id=1,
+    **SegmentConfig(
+        slug="candles", name="Velas", platforms=["youtube"], keywords=["vela", "soja"]
+    ).model_dump(),
+)
 
 
-def snap(video_id: int, views: int, title: str = "vela de soja",
-         age_h: int = 6) -> VideoSnapshot:
-    return VideoSnapshot(video_id=video_id, title=title,
-                         published_at=NOW - timedelta(hours=age_h),
-                         metrics=VideoMetrics(views=views, likes=views // 20))
+def snap(video_id: int, views: int, title: str = "vela de soja", age_h: int = 6) -> VideoSnapshot:
+    return VideoSnapshot(
+        video_id=video_id,
+        title=title,
+        published_at=NOW - timedelta(hours=age_h),
+        metrics=VideoMetrics(views=views, likes=views // 20),
+    )
 
 
 async def test_score_writes_one_result_per_video() -> None:
     repo = FakeVideos([snap(1, 100_000), snap(2, 50_000)])
     scores = FakeScores()
-    deps = ScoreDeps(videos=repo, scores=scores, segment=SEG,
-                     keywords=["vela", "soja"], clock=lambda: NOW)
+    deps = ScoreDeps(
+        videos=repo, scores=scores, segment=SEG, keywords=["vela", "soja"], clock=lambda: NOW
+    )
     out = await score(deps)
     assert out.scored == 2 and out.ok is True
     assert len(scores.saved) == 2
@@ -2942,29 +3145,35 @@ async def test_score_writes_one_result_per_video() -> None:
 
 
 async def test_zero_metrics_totals_zero() -> None:
-    zero = VideoSnapshot(video_id=9, title="x", published_at=None,
-                         metrics=VideoMetrics())
+    zero = VideoSnapshot(video_id=9, title="x", published_at=None, metrics=VideoMetrics())
     scores = FakeScores()
-    deps = ScoreDeps(videos=FakeVideos([zero]), scores=scores, segment=SEG,
-                     keywords=["vela"], clock=lambda: NOW)
+    deps = ScoreDeps(
+        videos=FakeVideos([zero]), scores=scores, segment=SEG, keywords=["vela"], clock=lambda: NOW
+    )
     await score(deps)
     assert scores.saved[0][1].total == 0.0
 
 
 async def test_relevance_counts_keyword_hits() -> None:
     # título "vela de soja" casa com 2/2 keywords → relevance 100
-    hits = VideoSnapshot(video_id=1, title="vela de soja",
-                         published_at=NOW, metrics=VideoMetrics(views=10_000))
+    hits = VideoSnapshot(
+        video_id=1, title="vela de soja", published_at=NOW, metrics=VideoMetrics(views=10_000)
+    )
     scores = FakeScores()
-    deps = ScoreDeps(videos=FakeVideos([hits]), scores=scores, segment=SEG,
-                     keywords=["vela", "soja"], clock=lambda: NOW)
+    deps = ScoreDeps(
+        videos=FakeVideos([hits]),
+        scores=scores,
+        segment=SEG,
+        keywords=["vela", "soja"],
+        clock=lambda: NOW,
+    )
     await score(deps)
     assert scores.saved[0][1].relevance == 100.0
 ```
 
-- [ ] **Step 2: Rodar e ver falhar** (ImportError `content_factory.app.score`)
+- [✅] **Step 2: Rodar e ver falhar** (ImportError `content_factory.app.score`)
 
-- [ ] **Step 3: Implementar** `app/score.py`:
+- [✅] **Step 3: Implementar** `app/score.py`:
 
 ```python
 from collections.abc import Callable
@@ -2976,9 +3185,14 @@ from content_factory.domain.scoring import viral_score
 
 
 class ScoreDeps:
-    def __init__(self, videos: VideoRepository, scores: ScoreRepository,
-                 segment: Segment, keywords: list[str],
-                 clock: Callable[[], datetime] = lambda: datetime.now(UTC)) -> None:
+    def __init__(
+        self,
+        videos: VideoRepository,
+        scores: ScoreRepository,
+        segment: Segment,
+        keywords: list[str],
+        clock: Callable[[], datetime] = lambda: datetime.now(UTC),
+    ) -> None:
         self.videos = videos
         self.scores = scores
         self.segment = segment
@@ -3012,19 +3226,48 @@ async def score(deps: ScoreDeps) -> ScoreOutcome:
         try:
             await deps.scores.upsert(snap.video_id, deps.segment.id, result, now)
             scored += 1
-        except Exception:      # repo em falha não derruba o lote
+        except Exception:  # repo em falha não derruba o lote
             errors += 1
     ok = errors == 0
     return ScoreOutcome(ok=ok, partial=(not ok and scored > 0), scored=scored)
 ```
 
-- [ ] **Step 4: CLI `score`** (mesmo wire da Task 6: factory →
+- [✅] **Step 3b: `ScoreRepositoryImpl` com SAVEPOINT por vídeo** — no Postgres
+  um flush quebrado envenena a transação inteira: o try/except do use-case
+  sobreviveria, mas o commit final levantaria `PendingRollbackError` e o lote
+  inteiro seria revertido (o `partial` morreria de mentira). Cada linha roda
+  em `begin_nested()` e só o vídeo doente é revertido; fica no repositório
+  porque a porta continua "upsert de um vídeo" sem vazar transação para `app/`:
+
+```python
+async def upsert(
+    self, video_id: int, segment_id: int, result: ScoreResult, computed_at: datetime
+) -> None:
+    async with self._s.begin_nested():
+        self._s.add(
+            VideoScoreRow(
+                video_id=video_id,
+                segment_id=segment_id,
+                computed_at=computed_at,
+                viral_score=result.total,
+                performance=result.performance,
+                velocity=result.velocity,
+                engagement=result.engagement,
+                relevance=result.relevance,
+                recency=result.recency,
+                trend_decay=result.trend_decay,
+            )
+        )
+        await self._s.flush()
+```
+
+- [✅] **Step 4: CLI `score`** (mesmo wire da Task 6: factory →
   `SegmentRepositoryImpl.get_by_slug` + `VideoRepositoryImpl` +
   `ScoreRepositoryImpl` → `asyncio.run` → envelope `{"ok":…, "scored": N}`).
   Teste de CLI: comando sem segmento inexistente → exit 1
   (`SegmentNotFound` → `envelope_err(code="segment_not_found")`).
 
-- [ ] **Step 5: Gates + commit:**
+- [✅] **Step 5: Gates + commit:**
 
 ```bash
 uv run pytest tests/app -q && uv run ruff check . && uv run pyright
@@ -3034,6 +3277,8 @@ git add src tests && git commit -m "feat: use-case score persiste video_scores t
 ---
 
 ### Task 17: Worker arq + cron 2×/dia + `cf status`
+
+> NOTE (Task 7): `PLAYWRIGHT_BROWSERS_PATH=/ms-playwright` já vem na imagem `worker` (legível por `appuser`) — não reinstalar o chromium.
 
 **Files:**
 - Create: `src/content_factory/infra/queue/__init__.py`,
@@ -3049,7 +3294,7 @@ git add src tests && git commit -m "feat: use-case score persiste video_scores t
   duplicada); `cf status --segment <slug>` lê `collect_runs` últimos 7 dias
   → envelope `{"ok": true, "runs": {"ok": N, "blocked": M, …}}`
 
-- [ ] **Step 1: Teste falhando** `tests/infra/queue/test_worker.py`:
+- [✅] **Step 1: Teste falhando** `tests/infra/queue/test_worker.py`:
 
 ```python
 import pytest
@@ -3064,15 +3309,14 @@ class CountingDeps:
 async def test_run_collect_job_delegates(monkeypatch: pytest.MonkeyPatch) -> None:
     calls: list[str] = []
 
-    async def fake_collect(slug: str, platforms: list[str], limit: int,
-                           deps: object) -> object:
+    async def fake_collect(slug: str, platforms: list[str], limit: int, deps: object) -> object:
         calls.append(slug)
-        raise SystemExit   # sai imediato — só conta a chamada
+        raise SystemExit  # sai imediato — só conta a chamada
 
     monkeypatch.setattr(w, "_collect_impl", fake_collect)
-    monkeypatch.setattr(w, "_load_settings", lambda: {"segment": "candles",
-                                                      "platforms": ["youtube"],
-                                                      "limit": 10})
+    monkeypatch.setattr(
+        w, "_load_settings", lambda: {"segment": "candles", "platforms": ["youtube"], "limit": 10}
+    )
     with pytest.raises(SystemExit):
         await w.run_collect_job({"collect_deps": None})
     assert calls == ["candles"]
@@ -3080,12 +3324,12 @@ async def test_run_collect_job_delegates(monkeypatch: pytest.MonkeyPatch) -> Non
 
 def test_cron_hours_parse() -> None:
     assert w.parse_cron_hours("08,20") == {8, 20}
-    assert w.parse_cron_hours("") == {8, 20}   # default
+    assert w.parse_cron_hours("") == {8, 20}  # default
 ```
 
-- [ ] **Step 2: Rodar e ver falhar** (ImportError)
+- [✅] **Step 2: Rodar e ver falhar** (ImportError)
 
-- [ ] **Step 3: Implementar** `infra/queue/worker.py`:
+- [✅] **Step 3: Implementar** `infra/queue/worker.py`:
 
 ```python
 import os
@@ -3116,7 +3360,7 @@ _load_settings: Callable[[], dict[str, Any]] = dict
 
 async def run_collect_job(ctx: dict[str, Any]) -> dict[str, Any]:
     cfg = _load_settings()
-    deps: CollectDeps = ctx["collect_deps"]   # buildado no startup do worker
+    deps: CollectDeps = ctx["collect_deps"]  # buildado no startup do worker
     out = await _collect_impl(cfg["segment"], cfg["platforms"], cfg["limit"], deps)
     return {"ok": out.ok, "partial": out.partial, **out.counts}
 
@@ -3130,9 +3374,12 @@ async def run_score_job(ctx: dict[str, Any]) -> dict[str, Any]:
 class WorkerSettings:
     functions = [run_collect_job, run_score_job]
     cron_jobs = [
-        cron(run_collect_job, hour=parse_cron_hours(
-            os.getenv("COLLECT_CRON_HOURS", "08,20")), minute=0,
-             unique=True),
+        cron(
+            run_collect_job,
+            hour=parse_cron_hours(os.getenv("COLLECT_CRON_HOURS", "08,20")),
+            minute=0,
+            unique=True,
+        ),
         cron(run_score_job, hour={8, 21}, minute=30, unique=True),
     ]
     redis_settings = RedisSettings.from_dsn(os.getenv("REDIS_URL", "redis://redis:6379/0"))
@@ -3143,13 +3390,13 @@ class WorkerSettings:
 > e é injetado no `ctx` no startup — testes nunca passam por ele
 > (monkeypatch nos hooks).
 
-- [ ] **Step 4: `cf status` + teste** — SQL de contagem por status nos
+- [✅] **Step 4: `cf status` + teste** — SQL de contagem por status nos
   últimos 7 dias (`collect_runs WHERE started_at > now() - 7d GROUP BY
   status`); teste com repo fake devolvendo 2 runs `ok` + 1 `blocked` →
   envelope `{"ok": true, "runs": {"ok": 2, "blocked": 1}}`; segmento
   inexistente → exit 1.
 
-- [ ] **Step 5: Gates + commit:**
+- [✅] **Step 5: Gates + commit:**
 
 ```bash
 uv run pytest tests/infra/queue tests/cli -q && uv run ruff check . && uv run pyright
@@ -3164,13 +3411,13 @@ git add src tests && git commit -m "feat: worker arq com cron 2x/dia e comando s
 - Create: `tests/e2e/__init__.py`, `tests/e2e/test_00_prereq.py`,
   `tests/e2e/test_01_smoke.py`, `PLANO_TESTE_E2E.md`,
   `SOLID_AUDIT.md`, `REVISAO_2026-10-07.md`
-- Modify: `docs/HANDOFF.md`, `docs/README.md`, tracker deste plano
+- Modify: `docs/HANDOFF.md`, `docs/` (índice — renomeado de README.md; 1 linha do spec §11 a amendar nesta task), tracker deste plano
 
 **Interfaces:**
 - Consome: tudo das tasks 1–17
 - Produz: evidência de aceitação (PRD §critérios) e PR
 
-- [ ] **Step 1: `test_00_prereq.py`** (gate — nunca rebaixar limiar):
+- [✅] **Step 1: `test_00_prereq.py`** (gate — nunca rebaixar limiar):
 
 ```python
 import os
@@ -3198,7 +3445,7 @@ def test_docker_presente() -> None:
     assert shutil.which("docker"), "docker não encontrado"
 ```
 
-- [ ] **Step 2: `test_01_smoke.py`** (aceitação — fixtures, sem chaves;
+- [✅] **Step 2: `test_01_smoke.py`** (aceitação — fixtures, sem chaves;
   exige `TEST_DATABASE_URL` + schema migrado):
 
 ```python
@@ -3213,10 +3460,12 @@ from content_factory.app.score import ScoreDeps, score
 from content_factory.app.segment import load_segment_file, upsert_segment
 from content_factory.domain.models import CandidateVideo, SegmentConfig
 from content_factory.infra.db.orm import Base, CollectRunRow, VideoRow, VideoScoreRow
-from content_factory.infra.db.repositories import (CollectRunRepositoryImpl,
-                                                   ScoreRepositoryImpl,
-                                                   SegmentRepositoryImpl,
-                                                   VideoRepositoryImpl)
+from content_factory.infra.db.repositories import (
+    CollectRunRepositoryImpl,
+    ScoreRepositoryImpl,
+    SegmentRepositoryImpl,
+    VideoRepositoryImpl,
+)
 from tests.conftest import requires_infra
 
 pytestmark = [pytest.mark.e2e, pytest.mark.asyncio]
@@ -3226,10 +3475,17 @@ class FakeCollectorOne:
     platform = "youtube"
 
     async def discover(self, segment: SegmentConfig, limit: int) -> list[CandidateVideo]:
-        return [CandidateVideo(platform="youtube", platform_video_id="e2e1",
-                               url="https://youtu.be/e2e1", creator_handle="u",
-                               title="vela de soja test",
-                               views=10_000, likes=500)]
+        return [
+            CandidateVideo(
+                platform="youtube",
+                platform_video_id="e2e1",
+                url="https://youtu.be/e2e1",
+                creator_handle="u",
+                title="vela de soja test",
+                views=10_000,
+                likes=500,
+            )
+        ]
 
 
 class AlwaysLock:
@@ -3251,31 +3507,39 @@ async def test_smoke_segment_collect_score() -> None:
     factory = async_sessionmaker(engine, expire_on_commit=False)
     async with factory() as s:
         # 1) segment load → id > 0
-        seg = await upsert_segment(SegmentRepositoryImpl(s),
-                                   Path("segments/candles.yaml"))
+        seg = await upsert_segment(SegmentRepositoryImpl(s), Path("segments/candles.yaml"))
         assert seg.id > 0
 
         # 2) collect com FakeCollector → upsert real
-        deps = CollectDeps(collectors=[FakeCollectorOne()],
-                           videos=VideoRepositoryImpl(s),
-                           segments=SegmentRepositoryImpl(s),
-                           runs=CollectRunRepositoryImpl(s),
-                           limiter=NoopLimiter(), lock=AlwaysLock())
+        deps = CollectDeps(
+            collectors=[FakeCollectorOne()],
+            videos=VideoRepositoryImpl(s),
+            segments=SegmentRepositoryImpl(s),
+            runs=CollectRunRepositoryImpl(s),
+            limiter=NoopLimiter(),
+            lock=AlwaysLock(),
+        )
         out = await collect("candles", ["youtube"], limit=5, deps=deps)
         assert out.ok and out.counts["inserted"] >= 1
 
         # 3) score → linha em video_scores
-        sdeps = ScoreDeps(videos=VideoRepositoryImpl(s),
-                          scores=ScoreRepositoryImpl(s),
-                          segment=seg, keywords=seg.keywords)
+        sdeps = ScoreDeps(
+            videos=VideoRepositoryImpl(s),
+            scores=ScoreRepositoryImpl(s),
+            segment=seg,
+            keywords=seg.keywords,
+        )
         sout = await score(sdeps)
         assert sout.scored >= 1
 
         # 4) persistência: videos + scores + 1 run ok
         n_videos = (await s.execute(select(func.count()).select_from(VideoRow))).scalar()
         n_scores = (await s.execute(select(func.count()).select_from(VideoScoreRow))).scalar()
-        runs = (await s.execute(select(CollectRunRow).where(
-            CollectRunRow.collector == "youtube"))).scalars().all()
+        runs = (
+            (await s.execute(select(CollectRunRow).where(CollectRunRow.collector == "youtube")))
+            .scalars()
+            .all()
+        )
         assert n_videos and n_videos >= 1
         assert n_scores and n_scores >= 1
         assert [r.status for r in runs][-1] == "ok"
@@ -3287,28 +3551,28 @@ async def test_smoke_segment_collect_score() -> None:
 > e usa os repositórios reais — só o collector é fake (fixture; critério 1
 > do spec §12: CI roda sem chaves).
 
-- [ ] **Step 3: `PLANO_TESTE_E2E.md`** — playtest manual: subir stack,
+- [✅] **Step 3: `PLANO_TESTE_E2E.md`** — playtest manual: subir stack,
   criar `.devcontainer/secrets/secrets.env` com as 3 chaves, rodar
   `cf collect --segment candles --platform youtube,tiktok,instagram,web`,
   anexar saída + contagens neste doc.
 
-- [ ] **Step 4: Gates finais com evidência (anexar saída no `REVISAO`):**
+- [✅] **Step 4: Gates finais com evidência (anexar saída no `REVISAO`):**
 
 ```bash
 make gates && uv run pytest -q -m e2e   # exigindo infra de pé
 ```
 
-- [ ] **Step 5: `SOLID_AUDIT.md`** — métricas com comando+data
+- [✅] **Step 5: `SOLID_AUDIT.md`** — métricas com comando+data
   (`uv run ruff check --statistics`, pior cc via `uv run python -m radon cc -s src`),
   achados `arquivo:linha`, backlog, **go/no-go explícito**.
 
-- [ ] **Step 6: `REVISAO_2026-10-07.md`** — 8 ângulos da skill, até 6
+- [✅] **Step 6: `REVISAO_2026-10-07.md`** — 8 ângulos da skill, até 6
   findings verificados lendo código real, tabela final
   `# | Componente | Findings | Status`, **bug real achado nesta revisão**.
 
-- [ ] **Step 7: Atualizar HANDOFF + tracker (☐→✅) deste plano**
+- [✅] **Step 7: Atualizar HANDOFF + tracker (☐→✅) deste plano**
 
-- [ ] **Step 8: Push + PR**
+- [✅] **Step 8: Push + PR**
 
 ```bash
 git checkout -b update/fundacao-2026-10-07

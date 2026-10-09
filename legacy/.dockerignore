@@ -1,0 +1,36 @@
+# Python-specific files and directories
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.venv/
+venv/
+env/
+
+# IDE and editor files
+.vscode/
+.idea/
+*.swp
+*.bak
+*.swo
+
+# Version control
+.git/
+.gitignore
+
+# Environment variables and secrets
+.env
+.env-copy
+.flaskenv
+
+# Docker-specific files (if not needed in the image)
+Dockerfile
+docker-compose*.yml
+compose*.yml
+.dockerignore
+
+# Logs and temporary files
+*.log
+tmp/
+
+.devcontainer/

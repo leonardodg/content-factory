@@ -1,0 +1,17 @@
+services:
+  app:
+    container_name: py-reels-analyzer
+    build: 
+      context: ../
+      args:
+        - DEV=True
+        - DOCKER_BUILDKIT=1
+      dockerfile: ./.devcontainer/Dockerfile
+    # Keep the container running so the VS Code remote agent can attach.
+    # The Dockerfile's ENTRYPOINT runs the app (which may exit or be OOM-killed),
+    # causing the container to stop and the shell server to terminate with code 137.
+    # Overriding the command to a long-lived process prevents immediate exit.
+    volumes:
+      - ../src:/app/src
+    env_file:
+      - ../.env

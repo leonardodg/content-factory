@@ -1,0 +1,170 @@
+from datetime import UTC, datetime, timedelta
+
+from content_factory.app.score import ScoreDeps, score
+from content_factory.domain.models import (
+    ScoreResult,
+    Segment,
+    SegmentConfig,
+    UpsertStats,
+    VideoMetrics,
+    VideoSnapshot,
+)
+
+NOW = datetime(2026, 10, 7, 12, 0, tzinfo=UTC)
+
+
+class FakeVideos:
+    def __init__(self, snaps: list[VideoSnapshot]) -> None:
+        self._s = snaps
+
+    async def latest_for_segment(self, segment_id: int) -> list[VideoSnapshot]:
+        return self._s
+
+    async def upsert_candidates(
+        self, segment_id: int, source: str, candidates: object
+    ) -> UpsertStats:
+        # pyright strict: o fake precisa satisfazer o Protocolo inteiro
+        # (retorno UpsertStats, não object — covariance do Protocol)
+        raise NotImplementedError
+
+
+class FakeScores:
+    def __init__(self) -> None:
+        self.saved: list[tuple[int, ScoreResult]] = []
+
+    async def upsert(
+        self, video_id: int, segment_id: int, result: ScoreResult, computed_at: datetime
+    ) -> None:
+        self.saved.append((video_id, result))
+
+
+class FailingScores(FakeScores):
+    """Fronteira falha num subconjunto de vídeos (repo em falha ≠ lote derrubado)."""
+
+    def __init__(self, fail_on: set[int]) -> None:
+        super().__init__()
+        self._fail_on = fail_on
+
+    async def upsert(
+        self, video_id: int, segment_id: int, result: ScoreResult, computed_at: datetime
+    ) -> None:
+        if video_id in self._fail_on:
+            raise RuntimeError("repo indisponível")
+        await super().upsert(video_id, segment_id, result, computed_at)
+
+
+SEG = Segment(
+    id=1,
+    **SegmentConfig(
+        slug="candles", name="Velas", platforms=["youtube"], keywords=["vela", "soja"]
+    ).model_dump(),
+)
+
+
+def snap(video_id: int, views: int, title: str = "vela de soja", age_h: int = 6) -> VideoSnapshot:
+    return VideoSnapshot(
+        video_id=video_id,
+        title=title,
+        published_at=NOW - timedelta(hours=age_h),
+        metrics=VideoMetrics(views=views, likes=views // 20),
+    )
+
+
+async def test_score_writes_one_result_per_video() -> None:
+    repo = FakeVideos([snap(1, 100_000), snap(2, 50_000)])
+    scores = FakeScores()
+    deps = ScoreDeps(
+        videos=repo, scores=scores, segment=SEG, keywords=["vela", "soja"], clock=lambda: NOW
+    )
+    out = await score(deps)
+    assert out.scored == 2 and out.ok is True
+    assert len(scores.saved) == 2
+    assert all(0 <= r.total <= 100 for _, r in scores.saved)
+
+
+async def test_zero_metrics_totals_zero() -> None:
+    zero = VideoSnapshot(video_id=9, title="x", published_at=None, metrics=VideoMetrics())
+    scores = FakeScores()
+    deps = ScoreDeps(
+        videos=FakeVideos([zero]), scores=scores, segment=SEG, keywords=["vela"], clock=lambda: NOW
+    )
+    await score(deps)
+    assert scores.saved[0][1].total == 0.0
+
+
+async def test_relevance_counts_keyword_hits() -> None:
+    # título "vela de soja" casa com 2/2 keywords → relevance 100
+    hits = VideoSnapshot(
+        video_id=1, title="vela de soja", published_at=NOW, metrics=VideoMetrics(views=10_000)
+    )
+    scores = FakeScores()
+    deps = ScoreDeps(
+        videos=FakeVideos([hits]),
+        scores=scores,
+        segment=SEG,
+        keywords=["vela", "soja"],
+        clock=lambda: NOW,
+    )
+    await score(deps)
+    assert scores.saved[0][1].relevance == 100.0
+
+
+async def test_relevance_is_case_insensitive_and_uses_description() -> None:
+    """Substring case-insensitive em título+descrição (R4 do trd-scoring)."""
+    mixed = VideoSnapshot(
+        video_id=1,
+        title="VELA artesanal",
+        description="feito com Soja",
+        published_at=NOW,
+        metrics=VideoMetrics(views=10_000),
+    )
+    scores = FakeScores()
+    deps = ScoreDeps(
+        videos=FakeVideos([mixed]),
+        scores=scores,
+        segment=SEG,
+        keywords=["vela", "soja"],
+        clock=lambda: NOW,
+    )
+    await score(deps)
+    assert scores.saved[0][1].relevance == 100.0
+
+
+async def test_partial_when_some_upserts_fail() -> None:
+    """R6: repo em falha não derruba o lote → ok=False, partial=True."""
+    scores = FailingScores(fail_on={1})
+    deps = ScoreDeps(
+        videos=FakeVideos([snap(1, 100_000), snap(2, 50_000)]),
+        scores=scores,
+        segment=SEG,
+        keywords=["vela"],
+        clock=lambda: NOW,
+    )
+    out = await score(deps)
+    assert out.scored == 1
+    assert out.ok is False and out.partial is True
+    assert [vid for vid, _ in scores.saved] == [2]
+
+
+async def test_all_upserts_failing_is_not_partial() -> None:
+    """R6: nada gravado → ok=False, partial=False (exit 1 na CLI)."""
+    deps = ScoreDeps(
+        videos=FakeVideos([snap(1, 100_000)]),
+        scores=FailingScores(fail_on={1}),
+        segment=SEG,
+        keywords=["vela"],
+        clock=lambda: NOW,
+    )
+    out = await score(deps)
+    assert out.scored == 0
+    assert out.ok is False and out.partial is False
+
+
+async def test_empty_segment_scores_nothing_and_is_ok() -> None:
+    scores = FakeScores()
+    deps = ScoreDeps(
+        videos=FakeVideos([]), scores=scores, segment=SEG, keywords=["vela"], clock=lambda: NOW
+    )
+    out = await score(deps)
+    assert out.ok is True and out.partial is False and out.scored == 0
+    assert scores.saved == []

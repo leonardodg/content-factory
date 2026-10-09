@@ -1,0 +1,52 @@
+name: content-factory
+networks: { content-factory-net: {} }
+services:
+  python:
+    container_name: cf-python
+    build:
+      context: ..
+      dockerfile: .devcontainer/Dockerfile
+      target: dev
+    volumes:
+      - ..:/app
+      - ${HOME}/.gitconfig:/home/appuser/.gitconfig:ro
+      - ${HOME}/.ssh:/home/appuser/.ssh:ro
+    env_file:
+      - ./env/app.env
+    environment:
+      UV_PROJECT_ENVIRONMENT: /home/appuser/.venv
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-contentfactory}:${POSTGRES_PASSWORD:-localdev}@postgres:5432/${POSTGRES_DB:-contentfactory}
+      REDIS_URL: redis://redis:6379/0
+    depends_on: [postgres, redis]
+    networks: [content-factory-net]
+    command: sleep infinity
+
+  worker:
+    build:
+      context: ..
+      dockerfile: .devcontainer/Dockerfile
+      target: worker
+    env_file: [./env/app.env, ./secrets/secrets.env]
+    environment:
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-contentfactory}:${POSTGRES_PASSWORD:-localdev}@postgres:5432/${POSTGRES_DB:-contentfactory}
+      REDIS_URL: redis://redis:6379/0
+    depends_on: [postgres, redis]
+    networks: [content-factory-net]
+    profiles: ["worker"]
+    command: uv run arq content_factory.infra.queue.worker.WorkerSettings
+
+  postgres:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-contentfactory}
+      POSTGRES_DB: ${POSTGRES_DB:-contentfactory}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-localdev}
+    ports: ["127.0.0.1:5432:5432"]
+    volumes: [pgdata:/var/lib/postgresql/data]
+    networks: [content-factory-net]
+
+  redis:
+    image: redis:7-alpine
+    networks: [content-factory-net]
+
+volumes: { pgdata: {} }
