@@ -1,6 +1,7 @@
 import pytest
 
 from content_factory.app.collect import CollectDeps
+from content_factory.domain.errors import SegmentNotFound
 from content_factory.infra.queue import worker as w
 from tests.stubs import FakeLimiter, FakeLock, FakeRepos
 
@@ -72,3 +73,45 @@ def test_workersettings_registers_jobs_and_cron() -> None:
     assert settings.on_startup is w.startup
     assert settings.on_job_end is w.job_end
     assert settings.on_shutdown is w.shutdown
+
+
+def test_workersettings_max_jobs_is_one() -> None:
+    """Sessão única compartilhada: 1 job por vez (arq default é 10)."""
+    assert w.WorkerSettings.max_jobs == 1
+
+
+def test_workersettings_timezone_is_sao_paulo() -> None:
+    """Cron dispara 08:00/20:00 no horário local do projeto, não em UTC."""
+    from zoneinfo import ZoneInfo
+
+    tz = w.WorkerSettings.timezone
+    assert isinstance(tz, ZoneInfo)
+    assert tz.key == "America/Sao_Paulo"
+
+
+async def test_startup_failure_then_shutdown_propagates_original_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """arq chama on_shutdown no finally; falha de startup não vira KeyError."""
+
+    async def boom(_settings: object) -> w.AppDeps:
+        raise SegmentNotFound("candles")
+
+    monkeypatch.setattr(w, "create_app_deps", boom)
+    ctx: dict[str, object] = {}
+    with pytest.raises(SegmentNotFound):
+        try:
+            await w.startup(ctx)
+        finally:
+            await w.shutdown(ctx)
+
+
+async def test_shutdown_closes_app_deps_when_present() -> None:
+    closed: list[str] = []
+
+    class FakeAppDeps:
+        async def close(self) -> None:
+            closed.append("close")
+
+    await w.shutdown({"app_deps": FakeAppDeps()})
+    assert closed == ["close"]

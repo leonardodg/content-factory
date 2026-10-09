@@ -12,7 +12,9 @@ import os
 from collections.abc import Awaitable, Callable
 from contextlib import AsyncExitStack
 from dataclasses import dataclass
+from datetime import tzinfo
 from typing import Any, ClassVar
+from zoneinfo import ZoneInfo
 
 from arq.connections import RedisSettings
 from arq.cron import CronJob, cron
@@ -139,7 +141,11 @@ async def job_end(ctx: dict[str, Any]) -> None:
 
 
 async def shutdown(ctx: dict[str, Any]) -> None:
-    await ctx["app_deps"].close()
+    # arq chama on_shutdown no finally, mesmo com o startup falho antes de
+    # injetar os deps — sem o get, o KeyError suprimiria o erro original
+    deps = ctx.get("app_deps")
+    if deps is not None:
+        await deps.close()
 
 
 class WorkerSettings:
@@ -160,6 +166,11 @@ class WorkerSettings:
         cron(run_score_job, name="score_job", hour={8, 21}, minute=30, unique=True),
     ]
     redis_settings = RedisSettings.from_dsn(os.getenv("REDIS_URL", "redis://redis:6379/0"))
+    # sessão única compartilhada entre os 2 jobs: 1 job por vez
+    # (arq default max_jobs=10 quebraria a sessão com IllegalStateChangeError)
+    max_jobs: ClassVar[int] = 1
+    # cron em horário local do projeto (08:00/20:00 BRT, não 05:00/17:00 UTC)
+    timezone: ClassVar[tzinfo] = ZoneInfo("America/Sao_Paulo")
     on_startup: ClassVar[StartupShutdown] = startup
     on_job_end: ClassVar[StartupShutdown] = job_end
     on_shutdown: ClassVar[StartupShutdown] = shutdown
