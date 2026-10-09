@@ -1,4 +1,5 @@
 import asyncio
+import hashlib
 from typing import ClassVar
 
 # classe real: o re-export `ddgs.DDGS` é proxy lazy — parcialmente Unknown p/ pyright
@@ -23,7 +24,12 @@ class WebCollector:
         return [
             CandidateVideo(
                 platform=self.platform,
-                platform_video_id=r.get("href", ""),
+                # id estável ≤ 64 chars (VARCHAR do banco); URL cheia vive em url/raw
+                # (bug E2E T18: href real >64 chars abortava o upsert inteiro);
+                # usedforsecurity=False: é fingerprint de id, não criptografia
+                platform_video_id=hashlib.sha1(
+                    r.get("href", "").encode(), usedforsecurity=False
+                ).hexdigest(),
                 url=r.get("href", ""),
                 creator_handle="",
                 title=r.get("title", ""),
