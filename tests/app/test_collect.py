@@ -22,6 +22,26 @@ async def test_collect_partial_failure_marks_partial() -> None:
     assert run_bad.status in {"blocked", "failed"} and run_bad.error_code == "blocked"
 
 
+async def test_rerun_updates_only_with_failure_is_still_partial() -> None:
+    repos = FakeRepos(updates_only=True)
+    deps = CollectDeps(
+        collectors=[
+            FakeCollector("youtube", n=3),
+            FakeCollector("tiktok", fail=CollectorError("blocked", "tiktok")),
+        ],
+        videos=repos.videos,
+        segments=repos.segments,
+        runs=repos.runs,
+        limiter=FakeLimiter(),
+        lock=FakeLock(),
+    )
+    out = await collect("candles", ["youtube", "tiktok"], limit=10, deps=deps)
+    assert out.ok is False
+    assert out.counts["inserted"] == 0
+    assert out.counts["updated"] == 3
+    assert out.partial is True
+
+
 async def test_lock_prevents_second_run() -> None:
     deps = CollectDeps(
         collectors=[FakeCollector("youtube")],

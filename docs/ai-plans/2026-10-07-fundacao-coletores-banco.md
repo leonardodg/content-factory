@@ -2071,7 +2071,10 @@ async def collect(
                 runs.append(run)
         ok = errors == 0
         return CollectOutcome(
-            ok=ok, partial=(not ok and int(counts["inserted"]) > 0), counts=counts, runs=runs
+            ok=ok,
+            partial=(not ok and (int(counts["inserted"]) + int(counts["updated"]) > 0)),
+            counts=counts,
+            runs=runs,
         )
     finally:
         # SEM release o lock eterno bloqueia a próxima execução — bug clássico

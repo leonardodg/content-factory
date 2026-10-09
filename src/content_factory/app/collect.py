@@ -75,7 +75,7 @@ async def collect(
         ok = errors == 0
         return CollectOutcome(
             ok=ok,
-            partial=(not ok and int(counts["inserted"]) > 0),
+            partial=(not ok and (int(counts["inserted"]) + int(counts["updated"]) > 0)),
             counts=counts,
             runs=runs,
         )

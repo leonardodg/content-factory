@@ -44,18 +44,19 @@ def test_usage_error_missing_arg_exit_1_envelope(
 
 
 def _fake_deps(
-    collectors: list[Collector], lock: FakeLock | None = None
+    collectors: list[Collector], lock: FakeLock | None = None, *, updates_only: bool = False
 ) -> Callable[[list[str]], AbstractAsyncContextManager[CollectDeps]]:
     """Seam de monkeypatch: devolve deps fake no lugar das reais (sem DB/Redis)."""
     lock = FakeLock() if lock is None else lock
 
     @asynccontextmanager
     async def factory(platforms: list[str]) -> AsyncGenerator[CollectDeps]:
+        repos = FakeRepos(updates_only=updates_only)
         yield CollectDeps(
             collectors=collectors,
-            videos=FakeRepos().videos,
-            segments=FakeRepos().segments,
-            runs=FakeRepos().runs,
+            videos=repos.videos,
+            segments=repos.segments,
+            runs=repos.runs,
             limiter=FakeLimiter(),
             lock=lock,
         )
@@ -79,6 +80,27 @@ def test_collect_partial_failure_exit_2(monkeypatch: pytest.MonkeyPatch) -> None
     assert '"ok": true' in result.stdout
     assert '"partial": true' in result.stdout
     assert '"inserted": 3' in result.stdout
+    assert '"failed": 1' in result.stdout
+
+
+def test_collect_updates_only_partial_exit_2(monkeypatch: pytest.MonkeyPatch) -> None:
+    deps = _fake_deps(
+        [
+            FakeCollector("youtube", n=3),
+            FakeCollector("tiktok", fail=CollectorError("blocked", "tiktok")),
+        ],
+        updates_only=True,
+    )
+    monkeypatch.setattr("content_factory.cli.main._collect_deps", deps)
+    result = runner.invoke(
+        app,
+        ["collect", "--segment", "candles", "--platform", "youtube,tiktok", "--limit", "10"],
+    )
+    assert result.exit_code == 2
+    assert '"ok": true' in result.stdout
+    assert '"partial": true' in result.stdout
+    assert '"inserted": 0' in result.stdout
+    assert '"updated": 3' in result.stdout
     assert '"failed": 1' in result.stdout
 
 

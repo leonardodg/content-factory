@@ -87,13 +87,16 @@ class FakeLock:
 
 
 class _FakeVideos:
-    def __init__(self) -> None:
+    def __init__(self, updates_only: bool = False) -> None:
+        self._updates_only = updates_only
         self.upserts: list[tuple[int, str, int]] = []
 
     async def upsert_candidates(
         self, segment_id: int, source: str, candidates: Sequence[CandidateVideo]
     ) -> UpsertStats:
         self.upserts.append((segment_id, source, len(candidates)))
+        if self._updates_only:  # re-execução idempotente: tudo já existe
+            return UpsertStats(inserted=0, updated=len(candidates))
         return UpsertStats(inserted=len(candidates))
 
 
@@ -126,8 +129,8 @@ class _FakeRuns:
 class FakeRepos:
     """Tripla de repositórios em memória (videos/segments/runs)."""
 
-    def __init__(self, segment_id: int = 1) -> None:
-        self.videos: VideoRepository = _FakeVideos()
+    def __init__(self, segment_id: int = 1, *, updates_only: bool = False) -> None:
+        self.videos: VideoRepository = _FakeVideos(updates_only)
         self.segments: SegmentRepository = _FakeSegments(segment_id)
         self.runs: CollectRunRepository = _FakeRuns()
 
