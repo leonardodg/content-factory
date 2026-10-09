@@ -2516,7 +2516,21 @@ class TikTokCollector:
             raise AuthExpired(
                 self.platform, "TIKTOK_MS_TOKEN ausente/expirado — ver docs/dev/credentials.md"
             )
-        client = self._client or await self._open_session()
+        if self._client is not None:
+            return await self._discover(self._client, segment, limit)
+        api = await self._open_session()
+        try:
+            return await self._discover(api, segment, limit)
+        finally:
+            # uso por-invocação: fecha só a sessão que abrimos (a lib só loga em
+            # __del__); close_sessions já para o Playwright, stop_playwright
+            # extra por segurança (padrão __aexit__ da própria lib)
+            await api.close_sessions()
+            await api.stop_playwright()
+
+    async def _discover(
+        self, client: Any, segment: SegmentConfig, limit: int
+    ) -> list[CandidateVideo]:
         videos = await self._call_with_backoff(client.trending, count=min(limit * 2, 60))
         if segment.keywords:
             videos += await self._call_with_backoff(

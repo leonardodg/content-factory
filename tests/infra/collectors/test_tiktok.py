@@ -121,3 +121,40 @@ def test_register_defaults_registers_tiktok() -> None:
 
     register_defaults(Settings(tiktok_ms_token="tok"))
     assert isinstance(registry.get("tiktok"), TikTokCollector)
+
+
+@pytest.mark.asyncio
+async def test_sessao_aberta_fecha_mesmo_com_erro_no_meio(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Sessão Playwright aberta por invocação não vaza — fecha mesmo com erro no meio."""
+    from TikTokApi.exceptions import EmptyResponseException  # type: ignore[reportMissingTypeStubs]
+
+    class BoomEndpoint:
+        async def videos(self, **kw: object) -> list[dict[str, Any]]:
+            raise EmptyResponseException("", "TikTok retornou resposta vazia")
+
+    class CountingApi:
+        def __init__(self) -> None:
+            self.closed = 0
+            self.stopped = 0
+            self.trending = BoomEndpoint()
+
+        async def close_sessions(self) -> None:
+            self.closed += 1
+
+        async def stop_playwright(self) -> None:
+            self.stopped += 1
+
+    api = CountingApi()
+
+    async def _fake_open(self: TikTokCollector) -> Any:
+        return api
+
+    monkeypatch.setattr(TikTokCollector, "_open_session", _fake_open)
+    c = TikTokCollector(ms_token="tok")  # sem client injetado → sessão própria
+    with pytest.raises(CollectorError) as ei:
+        await c.discover(SEG, limit=5)
+    assert ei.value.code == "blocked"
+    assert api.closed == 1
+    assert api.stopped == 1

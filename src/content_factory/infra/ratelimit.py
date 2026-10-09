@@ -40,7 +40,8 @@ _MAX_WAIT_S = 60.0
 
 def backoff_delay(attempt: int) -> float:
     """Backoff exponencial (base 1 s) com jitter ±20%."""
-    return float(2**attempt) * random.uniform(0.8, 1.2)
+    # jitter de retry não é uso criptográfico (B311 aceito aqui)
+    return float(2**attempt) * random.uniform(0.8, 1.2)  # nosec B311
 
 
 class RedisRateLimiter:
