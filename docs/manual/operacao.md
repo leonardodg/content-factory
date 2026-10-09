@@ -21,8 +21,8 @@ Serviços base (Postgres, Redis e o container `cf-python` da CLI):
 docker compose -f .devcontainer/docker-compose.yml up -d postgres redis python
 ```
 
-Worker (perfil `worker` — **não** sobe no `up -d` acima; exige o perfil
-explícito):
+Worker (perfil `worker` — não sobe no `up -d` acima, que só seleciona os
+serviços nomeados; manter `--profile` nos exemplos deixa a intenção explícita):
 
 ```bash
 docker compose -f .devcontainer/docker-compose.yml --profile worker up -d worker
@@ -88,12 +88,18 @@ docker compose -f .devcontainer/docker-compose.yml --profile worker logs -f work
 
 O que procurar:
 
-- `Starting worker for 2 functions: collect_job, score_job` — o arq registrou
-  os 2 jobs e o worker entrou no loop do cron. Sem essa linha, o startup não
-  terminou;
-- **traceback de job** quando `collect_job`/`score_job` lança: o job falha, a
-  transação dá rollback (`on_job_end`) e a falha fica auditada em
-  `collect_runs` (com `error_code`) — queries em [Análise](analise.md);
+- `Starting worker for 2 functions: collect_job, score_job` — o worker subiu,
+  conectou no Redis e registrou os 2 jobs. Atenção: essa linha é emitida
+  **antes** do `on_startup`; para confirmar que o startup terminou, procure a
+  **ausência** de traceback logo abaixo (o fail-fast `SegmentNotFound` vem
+  depois desta linha) ou confirme o estado via `cf status`;
+- **falha de job tratada** (`CollectorError` — plataforma bloqueada, cota,
+  auth): capturada por plataforma dentro do `collect`, o job **retorna**
+  normalmente e a sessão é commitada — auditada em `collect_runs` com
+  `status`/`error_code` (queries em [Análise](analise.md));
+- **exceção não tratada no job** (bug): o job lança, `on_job_end` dá rollback
+  na sessão — a linha de auditoria **não** persiste em `collect_runs`; o que
+  sobra é o traceback no log do worker;
 - `SegmentNotFound` no startup (fail-fast): o segmento de `COLLECT_SEGMENT`
   não existe no banco; o container morre com exit ≠ 0. Corrigir com
   `cf segment load` e subir de novo ([§5](#5-limitacoes-conhecidas));
@@ -168,8 +174,11 @@ montada no startup do worker; mais de um job em paralelo quebraria a sessão
 
 ## 6. Parada, restart e atualização
 
-Operar o worker sempre com `--profile worker` (sem o perfil, o compose não
-enxerga o serviço):
+Manter `--profile worker` nos comandos: o perfil é necessário quando o
+serviço **não** é nomeado (ex.: um `up -d` geral sem argumentos); comandos
+que nomeiam `worker` explicitamente funcionam sem o perfil nesta versão do
+compose — os exemplos abaixo trazem o flag de propósito, para a seleção ser
+explícita:
 
 ```bash
 # parar só o worker
@@ -190,7 +199,7 @@ Rotina de atualização após `git pull`, conforme o que mudou:
 | `src/` que o **worker** executa | `… --profile worker up -d --build worker` (sem bind-mount: código entra só via imagem) |
 | `Dockerfile`/`uv.lock` (serviço `python`) | `… up -d --build python` e depois `… exec python uv sync` |
 | migrações (alembic) | `… exec python uv run alembic upgrade head` |
-| `secrets.env` (chaves novas) | `… --profile worker up -d worker` — o secret é sourced no startup do container |
+| `secrets.env` (chaves novas) | `… --profile worker restart worker` (ou `up -d --force-recreate worker`) — o `up -d` normal **não** recria o container por causa do arquivo de secret mudado, e o worker só faz `set -a; . /run/secrets/app_secrets` no startup: sem restart, as envs antigas continuam valendo |
 
 `up -d` é idempotente: recria só o que mudou (imagem, env, comando). `down`
 remove os containers, mas **não** o volume `pgdata` do Postgres — não use
