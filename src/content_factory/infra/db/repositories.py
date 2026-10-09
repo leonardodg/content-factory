@@ -1,7 +1,7 @@
 from collections.abc import Sequence
 from datetime import datetime
 
-from sqlalchemy import select, text
+from sqlalchemy import func, select, text
 from sqlalchemy.dialects.postgresql import distinct_on
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -156,6 +156,15 @@ class CollectRunRepositoryImpl(CollectRunRepository):
         self._s.add(row)
         await self._s.flush()
         return row.id
+
+    async def status_counts(self, segment_id: int, since: datetime) -> dict[str, int]:
+        stmt = (
+            select(CollectRunRow.status, func.count(CollectRunRow.id))
+            .where(CollectRunRow.segment_id == segment_id, CollectRunRow.started_at > since)
+            .group_by(CollectRunRow.status)
+        )
+        rows = (await self._s.execute(stmt)).all()
+        return {status: count for status, count in rows}
 
 
 class ScoreRepositoryImpl(ScoreRepository):

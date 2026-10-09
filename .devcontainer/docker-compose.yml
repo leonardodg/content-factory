@@ -33,6 +33,7 @@ services:
     depends_on: [postgres, redis]
     networks: [content-factory-net]
     profiles: ["worker"]
+    command: uv run arq content_factory.infra.queue.worker.WorkerSettings
 
   postgres:
     image: pgvector/pgvector:pg16

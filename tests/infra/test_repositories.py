@@ -265,3 +265,36 @@ async def test_collect_run_record_persists_and_returns_id() -> None:
         assert row.status == "running"
         assert row.found == 0
     await engine.dispose()
+
+
+@requires_infra
+async def test_collect_run_status_counts_last_7_days() -> None:
+    engine = create_async_engine(os.environ["TEST_DATABASE_URL"])
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    async with factory() as s:
+        await s.rollback()
+        seg = await SegmentRepositoryImpl(s).upsert(
+            SegmentConfig(
+                slug=f"status-{uuid4().hex[:8]}",
+                name="Status",
+                platforms=["youtube"],
+                keywords=["k"],
+            )
+        )
+        now = datetime.now(UTC)
+        repo = CollectRunRepositoryImpl(s)
+        for status in ("ok", "ok", "blocked"):
+            await repo.record(
+                CollectRun(collector="youtube", segment_id=seg.id, status=status, started_at=now)
+            )
+        await repo.record(
+            CollectRun(
+                collector="youtube",
+                segment_id=seg.id,
+                status="failed",
+                started_at=now - timedelta(days=8),  # fora da janela de 7 dias
+            )
+        )
+        counts = await repo.status_counts(seg.id, now - timedelta(days=7))
+        assert counts == {"ok": 2, "blocked": 1}  # o failed de 8 dias fica de fora
+    await engine.dispose()

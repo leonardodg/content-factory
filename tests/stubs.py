@@ -6,6 +6,7 @@ estrutura dos testes. Sem Redis, sem banco, sem rede.
 """
 
 from collections.abc import Sequence
+from datetime import datetime
 from math import ceil
 from typing import ClassVar
 
@@ -123,21 +124,34 @@ class _FakeSegments:
 
 
 class _FakeRuns:
-    def __init__(self) -> None:
+    def __init__(self, status_counts: dict[str, int] | None = None) -> None:
         self.recorded: list[CollectRun] = []
+        self._status_counts = status_counts
 
     async def record(self, run: CollectRun) -> int:
         self.recorded.append(run)
         return len(self.recorded)
 
+    async def status_counts(self, segment_id: int, since: datetime) -> dict[str, int]:
+        _ = segment_id, since
+        if self._status_counts is None:
+            raise NotImplementedError("configure via FakeRepos(..., status_counts={...})")
+        return dict(self._status_counts)
+
 
 class FakeRepos:
     """Tripla de repositórios em memória (videos/segments/runs)."""
 
-    def __init__(self, segment_id: int = 1, *, updates_only: bool = False) -> None:
+    def __init__(
+        self,
+        segment_id: int = 1,
+        *,
+        updates_only: bool = False,
+        status_counts: dict[str, int] | None = None,
+    ) -> None:
         self.videos: VideoRepository = _FakeVideos(updates_only)
         self.segments: SegmentRepository = _FakeSegments(segment_id)
-        self.runs: CollectRunRepository = _FakeRuns()
+        self.runs: CollectRunRepository = _FakeRuns(status_counts)
 
 
 class FakeRedis:

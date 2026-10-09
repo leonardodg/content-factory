@@ -9,10 +9,11 @@ import pytest
 from typer.testing import CliRunner
 
 from content_factory.app.collect import CollectDeps
-from content_factory.app.ports import Collector
+from content_factory.app.ports import Collector, CollectRunRepository, SegmentRepository
 from content_factory.app.score import ScoreOutcome
 from content_factory.cli.main import app, main
-from content_factory.domain.errors import CollectorError
+from content_factory.domain.errors import CollectorError, SegmentNotFound
+from content_factory.domain.models import Segment, SegmentConfig
 from tests.conftest import requires_infra
 from tests.stubs import FakeCollector, FakeLimiter, FakeLock, FakeRepos
 
@@ -225,3 +226,47 @@ def test_score_total_failure_exit_1_envelope(monkeypatch: pytest.MonkeyPatch) ->
     result = runner.invoke(app, ["score", "--segment", "candles"])
     assert result.exit_code == 1
     assert '"ok": false' in result.stdout
+
+
+class _MissingSegments:
+    async def get_by_slug(self, slug: str) -> Segment:
+        raise SegmentNotFound(slug)
+
+    async def upsert(self, cfg: SegmentConfig) -> Segment:
+        raise NotImplementedError("status não grava segmento")
+
+
+def _fake_status_deps(
+    counts: dict[str, int] | None = None, *, missing: bool = False
+) -> Callable[[], AbstractAsyncContextManager[tuple[SegmentRepository, CollectRunRepository]]]:
+    """Seam de monkeypatch: (segments, runs) fake no lugar das reais (sem DB)."""
+
+    @asynccontextmanager
+    async def factory() -> AsyncGenerator[tuple[SegmentRepository, CollectRunRepository]]:
+        repos = FakeRepos(status_counts=counts)
+        if missing:
+            yield _MissingSegments(), repos.runs
+        else:
+            yield repos.segments, repos.runs
+
+    return factory
+
+
+def test_status_success_envelope(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        "content_factory.cli.main._status_deps", _fake_status_deps({"ok": 2, "blocked": 1})
+    )
+    result = runner.invoke(app, ["status", "--segment", "candles"])
+    assert result.exit_code == 0
+    assert '"ok": true' in result.stdout
+    assert '"runs": {' in result.stdout
+    assert '"ok": 2' in result.stdout
+    assert '"blocked": 1' in result.stdout
+
+
+def test_status_unknown_segment_exit_1(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("content_factory.cli.main._status_deps", _fake_status_deps(missing=True))
+    result = runner.invoke(app, ["status", "--segment", "nao-existe"])
+    assert result.exit_code == 1
+    assert '"ok": false' in result.stdout
+    assert '"code": "segment_not_found"' in result.stdout

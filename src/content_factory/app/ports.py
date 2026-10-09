@@ -45,6 +45,9 @@ class SegmentRepository(Protocol):
 
 class CollectRunRepository(Protocol):
     async def record(self, run: CollectRun) -> int: ...
+    async def status_counts(self, segment_id: int, since: datetime) -> dict[str, int]:
+        """Contagem de runs por status a partir de `since` (janela do `cf status`)."""
+        ...
 
 
 class RateLimiter(Protocol):

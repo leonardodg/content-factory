@@ -1,6 +1,7 @@
 import asyncio
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -8,6 +9,7 @@ import typer
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from content_factory.app.collect import CollectDeps, CollectOutcome, collect
+from content_factory.app.ports import CollectRunRepository, SegmentRepository
 from content_factory.app.score import ScoreDeps, ScoreOutcome, score
 from content_factory.cli.output import dumps, envelope_err, envelope_ok, exit_code_for
 from content_factory.domain.errors import CollectorError, DomainError, SegmentNotFound
@@ -260,6 +262,47 @@ def score_cmd(
 def ping() -> None:
     """Healthcheck do CLI (sem banco)."""
     print(dumps(envelope_ok("ping")))
+    raise typer.Exit(exit_code_for(ok=True))
+
+
+@asynccontextmanager
+async def _status_deps() -> AsyncGenerator[tuple[SegmentRepository, CollectRunRepository]]:
+    """Deps do `status`: só Postgres (sem Redis/registry — é leitura)."""
+    from content_factory.config import get_settings
+    from content_factory.infra.db.base import get_session_factory
+    from content_factory.infra.db.repositories import (
+        CollectRunRepositoryImpl,
+        SegmentRepositoryImpl,
+    )
+
+    factory: async_sessionmaker[AsyncSession] = get_session_factory(get_settings())
+    async with factory() as session:
+        yield SegmentRepositoryImpl(session), CollectRunRepositoryImpl(session)
+
+
+async def _astatus(segment_slug: str) -> dict[str, int]:
+    """Últimos 7 dias de `collect_runs` do segmento, agrupados por status."""
+    async with _status_deps() as (segments, runs):
+        seg = await segments.get_by_slug(segment_slug)
+        since = datetime.now(UTC) - timedelta(days=7)
+        return await runs.status_counts(seg.id, since)
+
+
+@app.command("status")
+def status_cmd(segment: str = typer.Option(..., "--segment", help="slug do segmento")) -> None:
+    """Resumo das coletas do segmento nos últimos 7 dias (collect_runs)."""
+    try:
+        counts = asyncio.run(_astatus(segment))
+    except SegmentNotFound as exc:
+        print(dumps(envelope_err("status", "segment_not_found", redact(str(exc)))))
+        raise typer.Exit(exit_code_for(ok=False)) from exc
+    except DomainError as exc:
+        print(dumps(envelope_err("status", "usage_error", redact(str(exc)))))
+        raise typer.Exit(exit_code_for(ok=False)) from exc
+    except Exception as exc:
+        print(dumps(envelope_err("status", "internal_error", redact(str(exc)))))
+        raise typer.Exit(exit_code_for(ok=False)) from exc
+    print(dumps(envelope_ok("status", runs=counts)))
     raise typer.Exit(exit_code_for(ok=True))
 
 

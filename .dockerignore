@@ -1,5 +1,6 @@
-# Build context enxuto — a imagem copia só pyproject.toml + uv.lock;
-# o código chega por bind-mount do compose (..:/app).
+# Build context enxuto — a imagem base copia só pyproject.toml + uv.lock;
+# o serviço `python` recebe o código por bind-mount (..:/app) e o `worker`
+# o copia no estágio final do Dockerfile (COPY src).
 
 # VCS e caches
 .git
