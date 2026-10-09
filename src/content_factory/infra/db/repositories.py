@@ -1,19 +1,58 @@
 from collections.abc import Sequence
+from datetime import datetime
 
 from sqlalchemy import select, text
+from sqlalchemy.dialects.postgresql import distinct_on
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from content_factory.app.ports import CollectRunRepository, SegmentRepository, VideoRepository
+from content_factory.app.ports import (
+    CollectRunRepository,
+    ScoreRepository,
+    SegmentRepository,
+    VideoRepository,
+)
 from content_factory.domain.errors import SegmentNotFound
 from content_factory.domain.models import (
     CandidateVideo,
     CollectRun,
+    ScoreResult,
     Segment,
     SegmentConfig,
     UpsertStats,
+    VideoMetrics,
+    VideoSnapshot,
 )
-from content_factory.infra.db.orm import CollectRunRow, SegmentRow, VideoRow, VideoSegmentRow
+from content_factory.infra.db.orm import (
+    CollectRunRow,
+    SegmentRow,
+    VideoMetricsRow,
+    VideoRow,
+    VideoScoreRow,
+    VideoSegmentRow,
+)
+
+
+def _snapshot(video: VideoRow, m: VideoMetricsRow | None) -> VideoSnapshot:
+    """LEFT JOIN sem match vira `None` ⇒ métricas zeradas (vídeo ainda não capturado)."""
+    metrics = (
+        VideoMetrics(
+            views=m.views or 0,
+            likes=m.likes or 0,
+            comments=m.comments or 0,
+            shares=m.shares or 0,
+            saves=m.saves or 0,
+        )
+        if m is not None
+        else VideoMetrics()
+    )
+    return VideoSnapshot(
+        video_id=video.id,
+        title=video.title,
+        description=video.description,
+        published_at=video.published_at,
+        metrics=metrics,
+    )
 
 
 class VideoRepositoryImpl(VideoRepository):
@@ -64,6 +103,26 @@ class VideoRepositoryImpl(VideoRepository):
             await self._s.execute(link)
         return stats
 
+    async def latest_for_segment(self, segment_id: int) -> list[VideoSnapshot]:
+        """1 snapshot por vídeo do segmento com a métrica mais recente.
+
+        `DISTINCT ON (video_id) ORDER BY video_id, captured_at DESC` — Postgres
+        escolhe a captura mais nova por vídeo. Vídeo sem captura em
+        `video_metrics` entra com métricas zeradas (LEFT JOIN): quem foi
+        vinculado pelo `cf collect` é pontuado mesmo antes da primeira coleta
+        de métricas.
+        """
+        stmt = (
+            select(VideoRow, VideoMetricsRow)
+            .join(VideoSegmentRow, VideoSegmentRow.video_id == VideoRow.id)
+            .outerjoin(VideoMetricsRow, VideoMetricsRow.video_id == VideoRow.id)
+            .where(VideoSegmentRow.segment_id == segment_id)
+            .ext(distinct_on(VideoRow.id))
+            .order_by(VideoRow.id, VideoMetricsRow.captured_at.desc())
+        )
+        rows = (await self._s.execute(stmt)).all()
+        return [_snapshot(video, m) for video, m in rows]
+
 
 class SegmentRepositoryImpl(SegmentRepository):
     def __init__(self, session: AsyncSession) -> None:
@@ -97,3 +156,31 @@ class CollectRunRepositoryImpl(CollectRunRepository):
         self._s.add(row)
         await self._s.flush()
         return row.id
+
+
+class ScoreRepositoryImpl(ScoreRepository):
+    """`video_scores` é timeseries: 1 linha por captura (append, sem ON CONFLICT)."""
+
+    def __init__(self, session: AsyncSession) -> None:
+        self._s = session
+
+    async def upsert(
+        self, video_id: int, segment_id: int, result: ScoreResult, computed_at: datetime
+    ) -> None:
+        self._s.add(
+            VideoScoreRow(
+                video_id=video_id,
+                segment_id=segment_id,
+                computed_at=computed_at,
+                viral_score=result.total,
+                performance=result.performance,
+                velocity=result.velocity,
+                engagement=result.engagement,
+                relevance=result.relevance,
+                recency=result.recency,
+                trend_decay=result.trend_decay,
+            )
+        )
+        # flush por linha: a falha sobe como exceção para o use-case contar
+        # como erro parcial em vez de engolir o lote inteiro
+        await self._s.flush()

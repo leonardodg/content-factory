@@ -48,6 +48,16 @@ class VideoMetrics(BaseModel):
     saves: int = 0
 
 
+class VideoSnapshot(BaseModel):
+    """Vídeo + sua métrica mais recente — entrada do use-case de score."""
+
+    video_id: int
+    title: str = ""
+    description: str = ""
+    published_at: datetime | None = None
+    metrics: VideoMetrics
+
+
 class ScoreResult(BaseModel):
     total: float
     performance: float

@@ -8,6 +8,7 @@ import typer
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from content_factory.app.collect import CollectDeps, CollectOutcome, collect
+from content_factory.app.score import ScoreDeps, ScoreOutcome, score
 from content_factory.cli.output import dumps, envelope_err, envelope_ok, exit_code_for
 from content_factory.domain.errors import CollectorError, DomainError, SegmentNotFound
 from content_factory.domain.models import CandidateVideo
@@ -200,6 +201,58 @@ def ingest(
         raise typer.Exit(exit_code_for(ok=False)) from exc
     print(dumps(envelope_ok("ingest", url=cand.url, title=cand.title)))
     raise typer.Exit(exit_code_for(ok=True))
+
+
+async def _ascore(segment_slug: str) -> ScoreOutcome:
+    """Mesmo wire do Task 6: segmento por slug → snapshots → upsert de video_scores."""
+    from content_factory.config import get_settings
+    from content_factory.infra.db.base import get_session_factory
+    from content_factory.infra.db.repositories import (
+        ScoreRepositoryImpl,
+        SegmentRepositoryImpl,
+        VideoRepositoryImpl,
+    )
+
+    factory: async_sessionmaker[AsyncSession] = get_session_factory(get_settings())
+    async with factory() as session:
+        seg = await SegmentRepositoryImpl(session).get_by_slug(segment_slug)
+        outcome = await score(
+            ScoreDeps(
+                videos=VideoRepositoryImpl(session),
+                scores=ScoreRepositoryImpl(session),
+                segment=seg,
+                keywords=seg.keywords,
+            )
+        )
+        await session.commit()
+        return outcome
+
+
+@app.command("score")
+def score_cmd(
+    segment: str = typer.Option(..., "--segment", help="slug do segmento"),
+) -> None:
+    """Pontua os vídeos do segmento (métrica mais recente) em video_scores."""
+    try:
+        outcome = asyncio.run(_ascore(segment))
+    except SegmentNotFound as exc:
+        print(dumps(envelope_err("score", "segment_not_found", redact(str(exc)))))
+        raise typer.Exit(exit_code_for(ok=False)) from exc
+    except DomainError as exc:
+        print(dumps(envelope_err("score", "usage_error", redact(str(exc)))))
+        raise typer.Exit(exit_code_for(ok=False)) from exc
+    except Exception as exc:
+        print(dumps(envelope_err("score", "internal_error", redact(str(exc)))))
+        raise typer.Exit(exit_code_for(ok=False)) from exc
+
+    if outcome.partial:
+        print(dumps(envelope_ok("score", partial=True, scored=outcome.scored)))
+        raise typer.Exit(exit_code_for(ok=True, partial=True))
+    if outcome.ok:
+        print(dumps(envelope_ok("score", scored=outcome.scored)))
+        raise typer.Exit(exit_code_for(ok=True))
+    print(dumps(envelope_err("score", "internal_error", f"falha ao gravar scores de {segment}")))
+    raise typer.Exit(exit_code_for(ok=False))
 
 
 @app.command("ping")

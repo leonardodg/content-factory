@@ -1,15 +1,19 @@
+import os
 import sys
-from collections.abc import AsyncGenerator, Callable
+from collections.abc import AsyncGenerator, Callable, Coroutine
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from pathlib import Path
+from typing import Any
 
 import pytest
 from typer.testing import CliRunner
 
 from content_factory.app.collect import CollectDeps
 from content_factory.app.ports import Collector
+from content_factory.app.score import ScoreOutcome
 from content_factory.cli.main import app, main
 from content_factory.domain.errors import CollectorError
+from tests.conftest import requires_infra
 from tests.stubs import FakeCollector, FakeLimiter, FakeLock, FakeRepos
 
 runner = CliRunner()
@@ -173,3 +177,51 @@ def test_ingest_with_segment_upserts(monkeypatch: pytest.MonkeyPatch) -> None:
     assert '"ok": true' in result.stdout
     assert saved and saved[0][0] == "candles"
     assert saved[0][1].platform == "web"
+
+
+@requires_infra
+def test_score_unknown_segment_exit_1_envelope(monkeypatch: pytest.MonkeyPatch) -> None:
+    """R7 trd-scoring: slug inexistente → segment_not_found + exit 1 (Postgres real)."""
+    monkeypatch.setenv("DATABASE_URL", os.environ["TEST_DATABASE_URL"])
+    result = runner.invoke(app, ["score", "--segment", "nao-existe-task16"])
+    assert result.exit_code == 1
+    assert '"ok": false' in result.stdout
+    assert '"command": "score"' in result.stdout
+    assert '"code": "segment_not_found"' in result.stdout
+
+
+def _fake_score(
+    ok: bool, partial: bool, scored: int
+) -> Callable[[str], Coroutine[Any, Any, ScoreOutcome]]:
+    """Seam: devolve o ScoreOutcome fake no lugar do wire real (sem DB)."""
+
+    async def _run(slug: str) -> ScoreOutcome:
+        _ = slug
+        return ScoreOutcome(ok=ok, partial=partial, scored=scored)
+
+    return _run
+
+
+def test_score_success_exit_0_envelope(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("content_factory.cli.main._ascore", _fake_score(True, False, 3))
+    result = runner.invoke(app, ["score", "--segment", "candles"])
+    assert result.exit_code == 0
+    assert '"ok": true' in result.stdout
+    assert '"scored": 3' in result.stdout
+    assert '"partial"' not in result.stdout
+
+
+def test_score_partial_exit_2_envelope(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("content_factory.cli.main._ascore", _fake_score(False, True, 2))
+    result = runner.invoke(app, ["score", "--segment", "candles"])
+    assert result.exit_code == 2
+    assert '"ok": true' in result.stdout
+    assert '"partial": true' in result.stdout
+    assert '"scored": 2' in result.stdout
+
+
+def test_score_total_failure_exit_1_envelope(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("content_factory.cli.main._ascore", _fake_score(False, False, 0))
+    result = runner.invoke(app, ["score", "--segment", "candles"])
+    assert result.exit_code == 1
+    assert '"ok": false' in result.stdout

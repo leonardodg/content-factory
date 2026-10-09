@@ -22,6 +22,7 @@ from content_factory.domain.models import (
     Segment,
     SegmentConfig,
     UpsertStats,
+    VideoSnapshot,
 )
 
 
@@ -98,6 +99,10 @@ class _FakeVideos:
         if self._updates_only:  # re-execução idempotente: tudo já existe
             return UpsertStats(inserted=0, updated=len(candidates))
         return UpsertStats(inserted=len(candidates))
+
+    async def latest_for_segment(self, segment_id: int) -> list[VideoSnapshot]:
+        # collect não pontua — snapshots vazios (o use-case score usa fakes próprios)
+        return []
 
 
 class _FakeSegments:

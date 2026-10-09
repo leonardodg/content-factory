@@ -1,12 +1,15 @@
 from collections.abc import Sequence
+from datetime import datetime
 from typing import ClassVar, Protocol
 
 from content_factory.domain.models import (
     CandidateVideo,
     CollectRun,
+    ScoreResult,
     Segment,
     SegmentConfig,
     UpsertStats,
+    VideoSnapshot,
 )
 
 
@@ -23,6 +26,16 @@ class VideoRepository(Protocol):
     async def upsert_candidates(
         self, segment_id: int, source: str, candidates: Sequence[CandidateVideo]
     ) -> UpsertStats: ...
+
+    async def latest_for_segment(self, segment_id: int) -> list[VideoSnapshot]:
+        """1 linha por vídeo do segmento com a métrica mais recente."""
+        ...
+
+
+class ScoreRepository(Protocol):
+    async def upsert(
+        self, video_id: int, segment_id: int, result: ScoreResult, computed_at: datetime
+    ) -> None: ...
 
 
 class SegmentRepository(Protocol):
