@@ -1,11 +1,16 @@
+import asyncio
+from collections.abc import AsyncGenerator
+from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
 
 import typer
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from content_factory.app.collect import CollectDeps, CollectOutcome, collect
 from content_factory.cli.output import dumps, envelope_err, envelope_ok, exit_code_for
-from content_factory.domain.errors import DomainError
+from content_factory.domain.errors import CollectorError, DomainError, SegmentNotFound
+from content_factory.infra.redact import redact
 
 app = typer.Typer(no_args_is_help=True)
 segment_app = typer.Typer()
@@ -55,6 +60,97 @@ def segment_load(path: Path) -> None:
         raise typer.Exit(exit_code_for(ok=False)) from exc
     print(dumps(envelope_ok("segment.load", slug=cfg.slug, id=seg_id)))
     raise typer.Exit(exit_code_for(ok=True))
+
+
+async def _segment_platforms(segment_slug: str) -> list[str]:
+    """Fallback do `--platform` vazio: as plataformas declaradas no segmento."""
+    from content_factory.config import get_settings
+    from content_factory.infra.db.base import get_session_factory
+    from content_factory.infra.db.repositories import SegmentRepositoryImpl
+
+    factory: async_sessionmaker[AsyncSession] = get_session_factory(get_settings())
+    async with factory() as session:
+        seg = await SegmentRepositoryImpl(session).get_by_slug(segment_slug)
+        return seg.platforms
+
+
+@asynccontextmanager
+async def _collect_deps(platforms: list[str]) -> AsyncGenerator[CollectDeps]:
+    """Deps reais do `collect`: registry de collectors + Postgres + Redis."""
+    from content_factory.config import get_settings
+    from content_factory.infra.collectors import registry
+    from content_factory.infra.db.base import get_session_factory
+    from content_factory.infra.db.repositories import (
+        CollectRunRepositoryImpl,
+        SegmentRepositoryImpl,
+        VideoRepositoryImpl,
+    )
+    from content_factory.infra.lock import RedisLock
+    from content_factory.infra.ratelimit import RedisRateLimiter
+    from content_factory.infra.redis_ops import redis_client
+
+    settings = get_settings()
+    factory: async_sessionmaker[AsyncSession] = get_session_factory(settings)
+    async with redis_client(settings.redis_url) as client, factory() as session:
+        yield CollectDeps(
+            collectors=registry.resolve(platforms),
+            videos=VideoRepositoryImpl(session),
+            segments=SegmentRepositoryImpl(session),
+            runs=CollectRunRepositoryImpl(session),
+            limiter=RedisRateLimiter(client),
+            lock=RedisLock(client),
+        )
+        await session.commit()
+
+
+async def _acollect(segment_slug: str, platforms: list[str], limit: int) -> CollectOutcome:
+    if not platforms:
+        platforms = await _segment_platforms(segment_slug)
+    async with _collect_deps(platforms) as deps:
+        return await collect(segment_slug, platforms, limit, deps)
+
+
+@app.command("collect")
+def collect_cmd(
+    segment: str = typer.Option(..., "--segment", help="slug do segmento"),
+    platform: str | None = typer.Option(
+        None,
+        "--platform",
+        help="plataformas separadas por vírgula (default: as do segmento)",
+    ),
+    limit: int = typer.Option(10, "--limit", min=1, max=50, help="máximo por plataforma"),
+) -> None:
+    """Coleta candidatos → upsert idempotente + auditoria em collect_runs."""
+    platforms = [p.strip() for p in platform.split(",") if p.strip()] if platform else []
+    try:
+        outcome = asyncio.run(_acollect(segment, platforms, limit))
+    except SegmentNotFound as exc:
+        print(dumps(envelope_err("collect", "segment_not_found", redact(str(exc)))))
+        raise typer.Exit(exit_code_for(ok=False)) from exc
+    except CollectorError as exc:
+        print(dumps(envelope_err("collect", exc.code, redact(str(exc)))))
+        raise typer.Exit(exit_code_for(ok=False)) from exc
+    except DomainError as exc:  # ex.: plataforma fora do registry = erro de uso
+        print(dumps(envelope_err("collect", "usage_error", redact(str(exc)))))
+        raise typer.Exit(exit_code_for(ok=False)) from exc
+    except Exception as exc:
+        print(dumps(envelope_err("collect", "internal_error", redact(str(exc)))))
+        raise typer.Exit(exit_code_for(ok=False)) from exc
+
+    if outcome.partial:
+        print(dumps(envelope_ok("collect", partial=True, **outcome.counts)))
+        raise typer.Exit(exit_code_for(ok=True, partial=True))
+    if outcome.ok:
+        print(dumps(envelope_ok("collect", **outcome.counts)))
+        raise typer.Exit(exit_code_for(ok=True))
+    if "ja_em_execucao" in outcome.counts:
+        code = "ja_em_execucao"
+        message = f"coleta já em execução para o segmento {segment}"
+    else:
+        code = next((r.error_code for r in outcome.runs if r.error_code), "internal_error")
+        message = f"coleta falhou em {int(outcome.counts.get('failed', 0))} plataforma(s)"
+    print(dumps(envelope_err("collect", code, message)))
+    raise typer.Exit(exit_code_for(ok=False))
 
 
 @app.command("ping")

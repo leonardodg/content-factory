@@ -1,10 +1,16 @@
 import sys
+from collections.abc import AsyncGenerator, Callable
+from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from pathlib import Path
 
 import pytest
 from typer.testing import CliRunner
 
+from content_factory.app.collect import CollectDeps
+from content_factory.app.ports import Collector
 from content_factory.cli.main import app, main
+from content_factory.domain.errors import CollectorError
+from tests.stubs import FakeCollector, FakeLimiter, FakeLock, FakeRepos
 
 runner = CliRunner()
 CANDLES = Path("segments/candles.yaml")
@@ -35,3 +41,62 @@ def test_usage_error_missing_arg_exit_1_envelope(
     assert '"ok": false' in out
     assert '"code": "usage_error"' in out
     assert '"command": "segment.load"' in out
+
+
+def _fake_deps(
+    collectors: list[Collector], lock: FakeLock | None = None
+) -> Callable[[list[str]], AbstractAsyncContextManager[CollectDeps]]:
+    """Seam de monkeypatch: devolve deps fake no lugar das reais (sem DB/Redis)."""
+    lock = FakeLock() if lock is None else lock
+
+    @asynccontextmanager
+    async def factory(platforms: list[str]) -> AsyncGenerator[CollectDeps]:
+        yield CollectDeps(
+            collectors=collectors,
+            videos=FakeRepos().videos,
+            segments=FakeRepos().segments,
+            runs=FakeRepos().runs,
+            limiter=FakeLimiter(),
+            lock=lock,
+        )
+
+    return factory
+
+
+def test_collect_partial_failure_exit_2(monkeypatch: pytest.MonkeyPatch) -> None:
+    deps = _fake_deps(
+        [
+            FakeCollector("youtube", n=3),
+            FakeCollector("tiktok", fail=CollectorError("blocked", "tiktok")),
+        ]
+    )
+    monkeypatch.setattr("content_factory.cli.main._collect_deps", deps)
+    result = runner.invoke(
+        app,
+        ["collect", "--segment", "candles", "--platform", "youtube,tiktok", "--limit", "10"],
+    )
+    assert result.exit_code == 2
+    assert '"ok": true' in result.stdout
+    assert '"partial": true' in result.stdout
+    assert '"inserted": 3' in result.stdout
+    assert '"failed": 1' in result.stdout
+
+
+def test_collect_success_exit_0(monkeypatch: pytest.MonkeyPatch) -> None:
+    deps = _fake_deps([FakeCollector("youtube", n=2)])
+    monkeypatch.setattr("content_factory.cli.main._collect_deps", deps)
+    result = runner.invoke(
+        app, ["collect", "--segment", "candles", "--platform", "youtube", "--limit", "5"]
+    )
+    assert result.exit_code == 0
+    assert '"ok": true' in result.stdout
+    assert '"partial"' not in result.stdout
+
+
+def test_collect_lock_held_exit_1(monkeypatch: pytest.MonkeyPatch) -> None:
+    deps = _fake_deps([FakeCollector("youtube")], lock=FakeLock(acquired=False))
+    monkeypatch.setattr("content_factory.cli.main._collect_deps", deps)
+    result = runner.invoke(app, ["collect", "--segment", "candles", "--platform", "youtube"])
+    assert result.exit_code == 1
+    assert '"ok": false' in result.stdout
+    assert '"code": "ja_em_execucao"' in result.stdout
