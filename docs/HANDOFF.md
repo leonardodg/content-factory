@@ -5,8 +5,8 @@
 
 ## 🔄 EM ANDAMENTO
 
-- **PR de entrega**: branch `update/fundacao-2026-10-07` → `main`
-  ("Fundação + coletores + banco (frentes 1-2 do PRD)").
+- **PR de entrega**: [#1 — Fundação + coletores + banco (frentes 1-2 do PRD)](https://github.com/leonardodg/content-factory/pull/1),
+  branch `update/fundacao-2026-10-07` → `main`.
   CI (`ci.yml` + `docs.yml`) deve estar verde antes do merge; pós-merge:
   apagar branch local + remota (contrato do plano Task 18).
 
