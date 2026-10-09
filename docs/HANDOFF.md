@@ -41,6 +41,10 @@
   TEST_DATABASE_URL), e2e 4 passed, ruff check/format 0, pyright strict 0,
   bandit exit 0, `alembic check` ok, pip-audit 0 vulns, privacy ok (142
   arquivos), `mkdocs build --strict` ok
+- [x] **Build do Dev Container corrigido**: serviço `python` declara o
+  diretório temporário de features como `additional_context`, permitindo ao
+  Compose passar a leitura específica requerida pelo Buildx 0.38; build via
+  Dev Containers CLI 0.89.0 concluído e container `cf-python` iniciado
 
 ## ⛔ O que falta (próximos passos aprovados)
 
