@@ -136,7 +136,10 @@ def test_ingest_success_exit_0_envelope(monkeypatch: pytest.MonkeyPatch) -> None
     from content_factory.app import ingest as ingest_mod
     from content_factory.domain.models import CandidateVideo
 
+    seen: dict[str, object] = {}
+
     async def _fake(url: str, **kw: object) -> CandidateVideo:
+        seen.update(kw)
         return CandidateVideo(
             platform="web", platform_video_id=url, url=url, creator_handle="", title="T"
         )
@@ -146,6 +149,7 @@ def test_ingest_success_exit_0_envelope(monkeypatch: pytest.MonkeyPatch) -> None
     assert result.exit_code == 0
     assert '"ok": true' in result.stdout
     assert '"title": "T"' in result.stdout
+    assert seen.get("guard") is not None  # composition root fia a guarda real
 
 
 def test_ingest_with_segment_upserts(monkeypatch: pytest.MonkeyPatch) -> None:

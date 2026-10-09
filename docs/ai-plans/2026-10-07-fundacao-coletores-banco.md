@@ -2801,8 +2801,9 @@ git add src tests && git commit -m "feat: collector Instagram via Graph API ofic
 **Interfaces:**
 - Produz: `WebCollector.discover` (ddgs text search por keywords →
   `CandidateVideo(platform="web")`);
-  `ingest_url(url, transport=None) -> CandidateVideo`
-  (fetch + extrai `<title>`/meta description; `transport` só p/ teste);
+  `ingest_url(url, transport=None, guard=None) -> CandidateVideo`
+  (fetch + extrai `<title>`/meta description; `transport` só p/ teste;
+  `guard` é a porta `SsrfGuard` de `app/ports.py`, injetada pela CLI);
   `ssrf.assert_public_http(url)` — valida scheme, resolve DNS e bloqueia
   IP privado/loopback/link-local/`169.254.169.254`/multicast/reserved,
   timeout 10 s, max 2 MB
@@ -2975,10 +2976,9 @@ from content_factory.domain.errors import DomainError
 
 
 @pytest.mark.asyncio
-async def test_ingest_extracts_title(monkeypatch: pytest.MonkeyPatch) -> None:
-    import content_factory.infra.ssrf as ssrf
-
-    monkeypatch.setattr(ssrf, "assert_public_http", lambda url: None)
+async def test_ingest_extracts_title() -> None:
+    def _no_guard(url: str) -> None:
+        _ = url  # guard só precisa existir — fronteira HTTP mockada
 
     def _route(request: httpx.Request) -> httpx.Response:
         return httpx.Response(
@@ -2989,21 +2989,26 @@ async def test_ingest_extracts_title(monkeypatch: pytest.MonkeyPatch) -> None:
             ),
         )
 
-    cand = await ingest_url("https://ex.com/vela", transport=httpx.MockTransport(_route))
+    cand = await ingest_url(
+        "https://ex.com/vela", transport=httpx.MockTransport(_route), guard=_no_guard
+    )
     assert cand.title == "Minha vela"
     assert cand.platform == "web" and cand.url == "https://ex.com/vela"
 
 
 @pytest.mark.asyncio
-async def test_ingest_blocks_private(monkeypatch: pytest.MonkeyPatch) -> None:
-    # sem monkeypatch: URL real 127.0.0.1 → DomainError ANTES de fetch
+async def test_ingest_blocks_private() -> None:
+    # guard real injetada (mesmo wire da CLI): 127.0.0.1 → DomainError ANTES de fetch
     from content_factory.app.ingest import ingest_url as go
+    from content_factory.infra.ssrf import assert_public_http
 
     with pytest.raises(DomainError):
-        await go("http://127.0.0.1:9/x")
+        await go("http://127.0.0.1:9/x", guard=assert_public_http)
 ```
 
-`app/ingest.py`: valida via `ssrf.assert_public_http` → `httpx.AsyncClient.get`
+`app/ingest.py`: valida via porta `SsrfGuard` (`app/ports.py`), default
+fail-closed → `DomainError`; guard real `infra/ssrf.assert_public_http` é
+injetada pela CLI (composition root) → `httpx.AsyncClient.get`
 (`timeout=10`, lê no máx. 2 MB via `aiter_bytes` com corte) → extrai
 `<title>`/`meta[name=description]` com regex → `CandidateVideo(platform="web")`.
 
@@ -3014,7 +3019,8 @@ CLI:
 def ingest(url: str, segment: str | None = None) -> None:
     """Baixa uma URL, extrai título/descrição e grava (se --segment)."""
     try:
-        cand = asyncio.run(ingest_url(url))
+        # guard: infra.ssrf.assert_public_http — composition root (app/ não importa infra/)
+        cand = asyncio.run(ingest_url(url, guard=assert_public_http))
         # se segment: wire p/ VideoRepository.upsert_candidates (mesmo wire da Task 6)
         print(dumps(envelope_ok("ingest", url=cand.url, title=cand.title)))
         raise typer.Exit(0)

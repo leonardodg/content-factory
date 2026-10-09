@@ -155,10 +155,12 @@ def collect_cmd(
 
 
 async def _aingest(url: str, segment: str | None) -> CandidateVideo:
-    # import sob demanda (padrão segment_load): seam monkeypatchável nos testes
+    # composition root: injeta a guarda de infra (app/ não conhece infra);
+    # import sob demanda (padrão segment_load) — seam monkeypatchável nos testes
     from content_factory.app.ingest import ingest_url
+    from content_factory.infra.ssrf import assert_public_http
 
-    cand = await ingest_url(url)
+    cand = await ingest_url(url, guard=assert_public_http)
     if segment is not None:
         await _ingest_save(segment, cand)
     return cand

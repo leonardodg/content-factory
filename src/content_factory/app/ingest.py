@@ -1,11 +1,10 @@
 import re
-from collections.abc import Callable
 
 import httpx
 
+from content_factory.app.ports import SsrfGuard
+from content_factory.domain.errors import DomainError
 from content_factory.domain.models import CandidateVideo
-
-UrlGuard = Callable[[str], None]
 
 MAX_BYTES = 2 * 1024 * 1024
 TIMEOUT_S = 10
@@ -16,17 +15,14 @@ _META_NAME_DESC_RE = re.compile(r"""name\s*=\s*["']description["']""", re.IGNORE
 _META_CONTENT_RE = re.compile(r"""content\s*=\s*["']([^"']*)["']""", re.IGNORECASE)
 
 
-def _default_guard() -> UrlGuard:
-    """Guarda SSRF mora em infra (resolve DNS via socket).
+def _guard_unset(url: str) -> None:
+    """Fail-closed: sem guard injetada nunca busca — o wire é obrigatório.
 
-    Resolvida sob demanda para que `ingest_url` seja autônomo sem puxar infra
-    no import do módulo; o monkeypatch de `content_factory.infra.ssrf` nos
-    testes depende desse lookup por chamada (contrato tests/app/test_ingest.py).
-    Quem tem composition root (CLI/worker) pode injetar `guard=` explícito.
+    A guarda real (`infra/ssrf.assert_public_http`) é injetada pela
+    composition root (CLI); default não pode ser o guard real porque isso
+    exigiria que `app/` importasse `infra/`.
     """
-    from content_factory.infra.ssrf import assert_public_http
-
-    return assert_public_http
+    raise DomainError(f"guarda SSRF não injetada (wire obrigatório): {url}")
 
 
 def _extract(html: str) -> tuple[str, str]:
@@ -65,10 +61,10 @@ async def _fetch(url: str, transport: httpx.AsyncBaseTransport | None) -> str:
 async def ingest_url(
     url: str,
     transport: httpx.AsyncBaseTransport | None = None,
-    guard: UrlGuard | None = None,
+    guard: SsrfGuard | None = None,
 ) -> CandidateVideo:
-    """Valida URL (guarda SSRF), baixa e devolve candidato platform="web"."""
-    (guard or _default_guard())(url)
+    """Valida URL (guarda SSRF injetada), baixa e devolve candidato platform="web"."""
+    (guard or _guard_unset)(url)
     html = await _fetch(url, transport)
     title, description = _extract(html)
     return CandidateVideo(

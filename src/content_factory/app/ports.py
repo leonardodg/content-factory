@@ -41,3 +41,14 @@ class RateLimiter(Protocol):
 class Lock(Protocol):
     async def acquire_once(self, key: str) -> bool: ...  # False se já em execução
     async def release(self, key: str) -> None: ...  # SEM isso o lock fica eterno
+
+
+class SsrfGuard(Protocol):
+    """Guarda SSRF de uma URL — implementada em infra/ssrf.py.
+
+    `infra.ssrf.assert_public_http` satisfaz o protocolo estruturalmente
+    (função `def(url: str) -> None` que levanta `DomainError`); a composition
+    root (CLI/worker) é quem injeta — `app/` nunca importa `infra/`.
+    """
+
+    def __call__(self, url: str) -> None: ...
