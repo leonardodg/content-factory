@@ -100,13 +100,14 @@ async def test_network_error_redacts_access_token() -> None:
     def _raise(request: httpx.Request) -> httpx.Response:
         raise httpx.ConnectError(f"falha ao conectar em {request.url}", request=request)
 
+    # placeholder (PLACEHOLDER do guard) — o valor não importa, a prova é o redact
     c = InstagramCollector(
-        access_token="SEGREDO-TOKEN-123", ig_user_id="1", transport=httpx.MockTransport(_raise)
+        access_token="YOUR_TOKEN_HERE", ig_user_id="1", transport=httpx.MockTransport(_raise)
     )
     with pytest.raises(NetworkError) as ei:
         await c.discover(SEG, limit=5)
     assert ei.value.code == "network"
-    assert "SEGREDO-TOKEN-123" not in str(ei.value)
+    assert "YOUR_TOKEN_HERE" not in str(ei.value)
 
 
 def test_register_defaults_registers_instagram() -> None:
