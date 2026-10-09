@@ -26,3 +26,14 @@ def get(platform: str) -> Collector:
 
 def resolve(platforms: list[str]) -> list[Collector]:
     return [get(platform) for platform in platforms]
+
+
+def snapshot() -> dict[str, Collector]:
+    """Cópia do registry — suporte a teste (registry é global no processo)."""
+    return dict(_REGISTRY)
+
+
+def restore(state: dict[str, Collector]) -> None:
+    """Substitui o conteúdo do registry pelo de `snapshot()` (suporte a teste)."""
+    _REGISTRY.clear()
+    _REGISTRY.update(state)
