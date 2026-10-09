@@ -129,6 +129,40 @@ def test_collect_lock_held_exit_1(monkeypatch: pytest.MonkeyPatch) -> None:
     assert '"code": "ja_em_execucao"' in result.stdout
 
 
+async def test_collect_deps_registers_default_collectors(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Composition root do `cf collect` registra os coletores default (gap T17)."""
+    from content_factory.cli.main import _collect_deps  # pyright: ignore[reportPrivateUsage]
+    from content_factory.config import Settings
+    from content_factory.infra.collectors.registry import snapshot
+
+    class _DummySession:
+        async def commit(self) -> None:
+            return None
+
+    @asynccontextmanager
+    async def _fake_session() -> AsyncGenerator[_DummySession]:
+        yield _DummySession()
+
+    @asynccontextmanager
+    async def _fake_redis(_url: str) -> AsyncGenerator[object]:
+        yield object()
+
+    def _fake_get_session_factory(
+        _settings: Settings,
+    ) -> Callable[[], AbstractAsyncContextManager[_DummySession]]:
+        return _fake_session
+
+    monkeypatch.setattr("content_factory.config.get_settings", Settings)
+    monkeypatch.setattr(
+        "content_factory.infra.db.base.get_session_factory", _fake_get_session_factory
+    )
+    monkeypatch.setattr("content_factory.infra.redis_ops.redis_client", _fake_redis)
+
+    async with _collect_deps([]):
+        pass
+    assert {"youtube", "tiktok", "instagram", "web"} <= set(snapshot())
+
+
 def test_ingest_blocks_private_url_exit_1_envelope() -> None:
     """Sem rede: guarda SSRF do caminho real rejeita 127.0.0.1 antes do fetch."""
     result = runner.invoke(app, ["ingest", "--url", "http://127.0.0.1:9/x"])

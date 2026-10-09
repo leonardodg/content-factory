@@ -82,7 +82,7 @@ async def _segment_platforms(segment_slug: str) -> list[str]:
 async def _collect_deps(platforms: list[str]) -> AsyncGenerator[CollectDeps]:
     """Deps reais do `collect`: registry de collectors + Postgres + Redis."""
     from content_factory.config import get_settings
-    from content_factory.infra.collectors import registry
+    from content_factory.infra.collectors import register_defaults, registry
     from content_factory.infra.db.base import get_session_factory
     from content_factory.infra.db.repositories import (
         CollectRunRepositoryImpl,
@@ -94,6 +94,7 @@ async def _collect_deps(platforms: list[str]) -> AsyncGenerator[CollectDeps]:
     from content_factory.infra.redis_ops import redis_client
 
     settings = get_settings()
+    register_defaults(settings)  # composition root: worker já fazia o mesmo no startup
     factory: async_sessionmaker[AsyncSession] = get_session_factory(settings)
     async with redis_client(settings.redis_url) as client, factory() as session:
         yield CollectDeps(
