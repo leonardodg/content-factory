@@ -1,11 +1,13 @@
 import os
 from datetime import UTC, datetime, timedelta
+from typing import Any, cast
 from uuid import uuid4
 
 import pytest
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
+from content_factory.app.score import ScoreDeps, score
 from content_factory.domain.models import CandidateVideo, CollectRun, ScoreResult, SegmentConfig
 from content_factory.infra.db.orm import (
     CollectRunRow,
@@ -160,6 +162,77 @@ async def test_score_upsert_appends_one_row_per_capture() -> None:
         assert rows[0].relevance == 100.0
         assert rows[0].segment_id == seg.id
         assert rows[0].computed_at == first  # timestamptz roundtrip consciente
+    await engine.dispose()
+
+
+@requires_infra
+async def test_score_partial_persists_healthy_rows_when_one_insert_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """SAVEPOINT por vídeo: um INSERT que falha não envenena o lote inteiro.
+
+    Sem begin_nested no ScoreRepositoryImpl, o flush quebrado do vídeo doente
+    marca a transação como failed no Postgres → o try/except do use-case
+    sobrevive, mas o commit final levanta PendingRollbackError e NENHUMA
+    linha persiste: o partial viraria mentira. Com savepoint, só o vídeo
+    doente é revertido e os vizinhos seguem para o commit.
+    """
+    engine = create_async_engine(os.environ["TEST_DATABASE_URL"])
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    async with factory() as s:
+        await s.rollback()
+        seg = await SegmentRepositoryImpl(s).upsert(
+            SegmentConfig(
+                # slug único por execução: latest_for_segment veria vídeos
+                # deixados por runs anteriores e os asserts globais mentiriam
+                slug=f"teste-partial-{uuid4().hex[:8]}",
+                name="Teste partial",
+                platforms=["youtube"],
+                keywords=["vela"],
+            )
+        )
+        repo = VideoRepositoryImpl(s)
+        cands = [candidate(10), candidate(11), candidate(12)]
+        await repo.upsert_candidates(seg.id, "youtube", cands)
+        vids = [await video_id_of(s, c) for c in cands]
+        base = datetime(2026, 10, 7, 12, 0, tzinfo=UTC)
+        s.add_all(
+            [VideoMetricsRow(video_id=vid, captured_at=base, views=1_000, likes=10) for vid in vids]
+        )
+        await s.flush()
+
+        # falha de INSERT só no vídeo do meio do lote: o objeto entra na
+        # sessão, mas com segment_id nulado — o Postgres estoura NOT NULL
+        # no flush (IntegrityError real, que envenena a transação)
+        poison_id = vids[1]
+        original_add = s.add
+
+        def flaky_add(obj: object) -> None:
+            original_add(obj)
+            if isinstance(obj, VideoScoreRow) and obj.video_id == poison_id:
+                cast(Any, obj).segment_id = None  # NOT NULL → IntegrityError real
+
+        monkeypatch.setattr(s, "add", flaky_add)
+
+        outcome = await score(
+            ScoreDeps(
+                videos=repo,
+                scores=ScoreRepositoryImpl(s),
+                segment=seg,
+                keywords=seg.keywords,
+            )
+        )
+        await s.commit()
+
+        assert outcome.ok is False
+        assert outcome.partial is True
+        assert outcome.scored == 2  # os dois vizinhos saudáveis, não o doente
+        rows = (
+            (await s.execute(select(VideoScoreRow.id).where(VideoScoreRow.segment_id == seg.id)))
+            .scalars()
+            .all()
+        )
+        assert len(rows) == 2  # persistiram apesar do meio do lote ter falhado
     await engine.dispose()
 
 

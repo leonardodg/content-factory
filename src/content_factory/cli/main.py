@@ -251,7 +251,8 @@ def score_cmd(
     if outcome.ok:
         print(dumps(envelope_ok("score", scored=outcome.scored)))
         raise typer.Exit(exit_code_for(ok=True))
-    print(dumps(envelope_err("score", "internal_error", f"falha ao gravar scores de {segment}")))
+    msg = f"falha ao gravar scores de {segment}"
+    print(dumps(envelope_err("score", "internal_error", redact(msg))))
     raise typer.Exit(exit_code_for(ok=False))
 
 

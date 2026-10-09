@@ -3232,6 +3232,35 @@ async def score(deps: ScoreDeps) -> ScoreOutcome:
     return ScoreOutcome(ok=ok, partial=(not ok and scored > 0), scored=scored)
 ```
 
+- [ ] **Step 3b: `ScoreRepositoryImpl` com SAVEPOINT por vídeo** — no Postgres
+  um flush quebrado envenena a transação inteira: o try/except do use-case
+  sobreviveria, mas o commit final levantaria `PendingRollbackError` e o lote
+  inteiro seria revertido (o `partial` morreria de mentira). Cada linha roda
+  em `begin_nested()` e só o vídeo doente é revertido; fica no repositório
+  porque a porta continua "upsert de um vídeo" sem vazar transação para `app/`:
+
+```python
+async def upsert(
+    self, video_id: int, segment_id: int, result: ScoreResult, computed_at: datetime
+) -> None:
+    async with self._s.begin_nested():
+        self._s.add(
+            VideoScoreRow(
+                video_id=video_id,
+                segment_id=segment_id,
+                computed_at=computed_at,
+                viral_score=result.total,
+                performance=result.performance,
+                velocity=result.velocity,
+                engagement=result.engagement,
+                relevance=result.relevance,
+                recency=result.recency,
+                trend_decay=result.trend_decay,
+            )
+        )
+        await self._s.flush()
+```
+
 - [ ] **Step 4: CLI `score`** (mesmo wire da Task 6: factory →
   `SegmentRepositoryImpl.get_by_slug` + `VideoRepositoryImpl` +
   `ScoreRepositoryImpl` → `asyncio.run` → envelope `{"ok":…, "scored": N}`).

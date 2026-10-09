@@ -167,20 +167,24 @@ class ScoreRepositoryImpl(ScoreRepository):
     async def upsert(
         self, video_id: int, segment_id: int, result: ScoreResult, computed_at: datetime
     ) -> None:
-        self._s.add(
-            VideoScoreRow(
-                video_id=video_id,
-                segment_id=segment_id,
-                computed_at=computed_at,
-                viral_score=result.total,
-                performance=result.performance,
-                velocity=result.velocity,
-                engagement=result.engagement,
-                relevance=result.relevance,
-                recency=result.recency,
-                trend_decay=result.trend_decay,
+        # SAVEPOINT por vídeo: no Postgres um flush quebrado envenena a
+        # transação inteira — sem begin_nested o try/except do use-case
+        # sobreviveria, mas o commit final levantaria PendingRollbackError
+        # e reverteria o lote todo. Fica aqui (não no use-case): a porta
+        # continua "upsert de um vídeo" sem vazar transação para app/.
+        async with self._s.begin_nested():
+            self._s.add(
+                VideoScoreRow(
+                    video_id=video_id,
+                    segment_id=segment_id,
+                    computed_at=computed_at,
+                    viral_score=result.total,
+                    performance=result.performance,
+                    velocity=result.velocity,
+                    engagement=result.engagement,
+                    relevance=result.relevance,
+                    recency=result.recency,
+                    trend_decay=result.trend_decay,
+                )
             )
-        )
-        # flush por linha: a falha sobe como exceção para o use-case contar
-        # como erro parcial em vez de engolir o lote inteiro
-        await self._s.flush()
+            await self._s.flush()
