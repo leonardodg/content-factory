@@ -58,24 +58,24 @@ spec §7.
 
 | # | Task | ✅ |
 |---|------|----|
-| 1 | Tooling base (uv, pyproject, ruff, pyright, pre-commit) + legado | ☐ |
-| 2 | Esqueleto de camadas + ports (Protocolos) + config | ☐ |
-| 3 | Domínio: modelos + scoring + trend decay (TDD) | ☐ |
-| 4 | Banco: ORM completo + Alembic + repositórios (integração) | ☐ |
-| 5 | Segmentos: YAML → validação → persistência (TDD) | ☐ |
-| 6 | CLI: envelope + exit codes + `segment load`/`status` (TDD) | ☐ |
-| 7 | Docker: compose único + Dockerfile multi-stage + devcontainer + secrets | ☐ |
-| 8 | CI: quality + docs + teste de privacidade | ☐ |
-| 9 | Docs: mkdocs + architecture + dev + data-model/diagram | ☐ |
-| 10 | Fronteira de coleta: `CandidateVideo` + registry + FakeCollector (TDD) | ☐ |
-| 11 | Use-case `collect` + `collect_runs` + rate-limit/lock Redis (TDD) | ☐ |
-| 12 | Collector YouTube (TDD com fixtures) | ☐ |
-| 13 | Collector TikTok (TDD com fixtures) | ☐ |
-| 14 | Collector Instagram (TDD com fixtures) | ☐ |
-| 15 | Collector Web + `cf ingest` + guarda SSRF (TDD) | ☐ |
-| 16 | Use-case `score` + `cf score` (TDD) | ☐ |
-| 17 | Worker arq + cron 2×/dia + `cf status` | ☐ |
-| 18 | E2E `00`/`01` + gates finais + SOLID_AUDIT + REVISAO + PR | ☐ |
+| 1 | Tooling base (uv, pyproject, ruff, pyright, pre-commit) + legado | ✅ |
+| 2 | Esqueleto de camadas + ports (Protocolos) + config | ✅ |
+| 3 | Domínio: modelos + scoring + trend decay (TDD) | ✅ |
+| 4 | Banco: ORM completo + Alembic + repositórios (integração) | ✅ |
+| 5 | Segmentos: YAML → validação → persistência (TDD) | ✅ |
+| 6 | CLI: envelope + exit codes + `segment load`/`status` (TDD) | ✅ |
+| 7 | Docker: compose único + Dockerfile multi-stage + devcontainer + secrets | ✅ |
+| 8 | CI: quality + docs + teste de privacidade | ✅ |
+| 9 | Docs: mkdocs + architecture + dev + data-model/diagram | ✅ |
+| 10 | Fronteira de coleta: `CandidateVideo` + registry + FakeCollector (TDD) | ✅ |
+| 11 | Use-case `collect` + `collect_runs` + rate-limit/lock Redis (TDD) | ✅ |
+| 12 | Collector YouTube (TDD com fixtures) | ✅ |
+| 13 | Collector TikTok (TDD com fixtures) | ✅ |
+| 14 | Collector Instagram (TDD com fixtures) | ✅ |
+| 15 | Collector Web + `cf ingest` + guarda SSRF (TDD) | ✅ |
+| 16 | Use-case `score` + `cf score` (TDD) | ✅ |
+| 17 | Worker arq + cron 2×/dia + `cf status` | ✅ |
+| 18 | E2E `00`/`01` + gates finais + SOLID_AUDIT + REVISAO + PR | ✅ |
 
 ---
 
@@ -93,7 +93,7 @@ spec §7.
 **Interfaces:**
 - Produz: toolchain onde todas as tasks seguintes rodam (`uv run …`)
 
-- [ ] **Step 1: Mover legado + criar mínimos que o build exige**
+- [✅] **Step 1: Mover legado + criar mínimos que o build exige**
 
 ```bash
 mkdir -p legacy/src && mv src/* legacy/src/ 2>/dev/null; mv src/__pycache__ legacy/src/ 2>/dev/null; rmdir src 2>/dev/null
@@ -111,7 +111,7 @@ Motor de inteligência de conteúdo parametrizado por segmento.
 Estado: docs/HANDOFF.md · Spec: docs/specs/ · CLI: `cf --help`
 ```
 
-- [ ] **Step 2: `pyproject.toml`**
+- [✅] **Step 2: `pyproject.toml`**
 
 ```toml
 [project]
@@ -189,14 +189,14 @@ markers = [
 ]
 ```
 
-- [ ] **Step 3: `.python-version` + criar venv + instalar**
+- [✅] **Step 3: `.python-version` + criar venv + instalar**
 
 ```bash
 echo "3.14" > .python-version
 uv sync --all-groups
 ```
 
-- [ ] **Step 4: `.pre-commit-config.yaml`**
+- [✅] **Step 4: `.pre-commit-config.yaml`**
 
 ```yaml
 repos:
@@ -221,7 +221,7 @@ repos:
       - id: conventional-pre-commit
 ```
 
-- [ ] **Step 5: `CLAUDE.md` (só regras imutáveis; estado vive no HANDOFF)**
+- [✅] **Step 5: `CLAUDE.md` (só regras imutáveis; estado vive no HANDOFF)**
 
 ```markdown
 # content-factory — regras imutáveis
@@ -236,7 +236,7 @@ repos:
 - CLI devolve só envelope {"ok": ...}; dados no banco
 ```
 
-- [ ] **Step 6: `.env.example` (raiz, interpolação do compose)**
+- [✅] **Step 6: `.env.example` (raiz, interpolação do compose)**
 
 ```env
 # interpolação ${VAR} do compose — NUNCA coloque valores reais aqui
@@ -244,7 +244,7 @@ POSTGRES_USER=contentfactory
 POSTGRES_DB=contentfactory
 ```
 
-- [ ] **Step 7: `Makefile`**
+- [✅] **Step 7: `Makefile`**
 
 ```make
 .PHONY: test test-int lint typecheck security docs gates
@@ -257,7 +257,7 @@ docs:        ; uv run --only-group docs mkdocs build --strict
 gates: test lint typecheck security docs
 ```
 
-- [ ] **Step 8: Rodar gates e ver falhar onde ainda não existe**
+- [✅] **Step 8: Rodar gates e ver falhar onde ainda não existe**
 
 ```bash
 uv run ruff check . ; uv run pyright ; uv run pytest -q
@@ -265,7 +265,7 @@ uv run ruff check . ; uv run pyright ; uv run pytest -q
 Expected: ruff/pyright passam (sem código ainda ou só legado ignorado);
 pytest: **no tests ran** (exit 5) — ok, testes nascem na Task 3.
 
-- [ ] **Step 9: Commit**
+- [✅] **Step 9: Commit**
 
 ```bash
 git add -A && git commit -m "chore: toolchain uv+ruff+pyright strict+pre-commit
@@ -337,7 +337,7 @@ import não resolvido.)
   `youtube_api_key`, `instagram_access_token`, `ig_user_id`,
   `tiktok_ms_token`, `tiktok_proxy`
 
-- [ ] **Step 1: Teste falhando (imports)**
+- [✅] **Step 1: Teste falhando (imports)**
 
 `tests/app/test_ports.py`:
 
@@ -358,14 +358,14 @@ def test_collector_error_carries_code() -> None:
     assert err.platform == "tiktok"
 ```
 
-- [ ] **Step 2: Rodar e ver falhar**
+- [✅] **Step 2: Rodar e ver falhar**
 
 ```bash
 uv run pytest tests/app/test_ports.py -v
 ```
 Expected: FAIL — `ModuleNotFoundError: content_factory`
 
-- [ ] **Step 3: Implementar esqueleto**
+- [✅] **Step 3: Implementar esqueleto**
 
 `domain/errors.py`:
 
@@ -506,14 +506,14 @@ def get_settings() -> Settings:
     return Settings()
 ```
 
-- [ ] **Step 4: Rodar teste + gates**
+- [✅] **Step 4: Rodar teste + gates**
 
 ```bash
 uv run pytest tests/app/test_ports.py -q && uv run ruff check . && uv run ruff format . && uv run pyright
 ```
 Expected: `1 passed` (mais os testes), ruff 0, pyright 0 erros
 
-- [ ] **Step 5: Commit**
+- [✅] **Step 5: Commit**
 
 ```bash
 git add src tests && git commit -m "feat: contratos das camadas (ports) e erros de dominio
@@ -537,7 +537,7 @@ por aqui sem tocar em app/ nem domain/."
   - `engagement_rate(m: VideoMetrics) -> float` (não-negativo; sem clamp
     superior — `viral_score` limita `min(eng * 10, 100.0)` antes de pesar)
 
-- [ ] **Step 1: Testes falhando**
+- [✅] **Step 1: Testes falhando**
 
 `tests/domain/test_scoring.py`:
 
@@ -590,14 +590,14 @@ def test_viral_score_zero_metrics_is_zeroish() -> None:
     assert r.total == 0.0
 ```
 
-- [ ] **Step 2: Rodar e ver falhar**
+- [✅] **Step 2: Rodar e ver falhar**
 
 ```bash
 uv run pytest tests/domain/test_scoring.py -v
 ```
 Expected: FAIL — `ImportError: cannot import name 'VideoMetrics'`
 
-- [ ] **Step 3: Implementar**
+- [✅] **Step 3: Implementar**
 
 Adicionar em `domain/models.py`:
 
@@ -688,14 +688,14 @@ def viral_score(
     )
 ```
 
-- [ ] **Step 4: Rodar teste + gates**
+- [✅] **Step 4: Rodar teste + gates**
 
 ```bash
 uv run pytest tests/domain -q && uv run ruff check . && uv run pyright
 ```
 Expected: `5 passed`, 0 issues
 
-- [ ] **Step 5: Commit**
+- [✅] **Step 5: Commit**
 
 ```bash
 git add src/content_factory/domain tests/domain && git commit -m "feat: scoring de dominio puro (viral score + trend decay)
@@ -723,7 +723,7 @@ deterministico."
   TODAS as tabelas do spec §5; `alembic check` exit 0
 - Consome: `Settings.database_url`, modelos do spec §5
 
-- [ ] **Step 1: Infra de teste — Postgres/Redis de pé**
+- [✅] **Step 1: Infra de teste — Postgres/Redis de pé**
 
 `tests/conftest.py`:
 
@@ -743,7 +743,7 @@ requires_infra = pytest.mark.skipif(
 rodar sem banco (skip é por ausência de env, erro explícito — nunca verde
 falso).
 
-- [ ] **Step 2: Teste falhando (ORM)**
+- [✅] **Step 2: Teste falhando (ORM)**
 
 `tests/infra/test_orm.py`:
 
@@ -779,14 +779,14 @@ def test_all_tables_exist() -> None:
     assert expected <= names
 ```
 
-- [ ] **Step 3: Rodar e ver falhar**
+- [✅] **Step 3: Rodar e ver falhar**
 
 ```bash
 TEST_DATABASE_URL=postgresql+psycopg://… uv run pytest tests/infra/test_orm.py -v
 ```
 Expected: FAIL (tabela inexistente / engine sem migrations)
 
-- [ ] **Step 4: Implementar ORM (spec §5, campo a campo)**
+- [✅] **Step 4: Implementar ORM (spec §5, campo a campo)**
 
 `infra/db/orm.py` (SQLAlchemy 2 declarativo; JSONB, pgvector, FKs):
 
@@ -1012,7 +1012,7 @@ def get_session_factory(settings: Settings) -> async_sessionmaker[AsyncSession]:
     return async_sessionmaker(bind=engine, expire_on_commit=False)
 ```
 
-- [ ] **Step 5: Alembic init + primeira migration**
+- [✅] **Step 5: Alembic init + primeira migration**
 
 ```bash
 uv run alembic init alembic
@@ -1035,7 +1035,7 @@ target_metadata = Base.metadata
 config.set_main_option("sqlalchemy.url", get_settings().database_url)
 ```
 
-- [ ] **Step 6: Repositórios (implementam ports da Task 2)**
+- [✅] **Step 6: Repositórios (implementam ports da Task 2)**
 
 `infra/db/repositories.py`:
 
@@ -1128,7 +1128,7 @@ class CollectRunRepositoryImpl(CollectRunRepository):
         return row.id
 ```
 
-- [ ] **Step 7: Teste do upsert idempotente (integração — sem mock)**
+- [✅] **Step 7: Teste do upsert idempotente (integração — sem mock)**
 
 `tests/infra/test_repositories.py`:
 
@@ -1182,14 +1182,14 @@ async def test_segment_not_found_raises() -> None:
 > Os testes de integração assumem schema já migrado (`alembic upgrade head`
 > no compose de teste) — nunca criam tabelas por conta própria.
 
-- [ ] **Step 8: Rodar gates**
+- [✅] **Step 8: Rodar gates**
 
 ```bash
 TEST_DATABASE_URL=… uv run pytest tests/infra -q && uv run alembic check && uv run ruff check . && uv run pyright
 ```
 Expected: integration PASS (tabelas existem), `alembic check` exit 0
 
-- [ ] **Step 9: Commit**
+- [✅] **Step 9: Commit**
 
 ```bash
 git add alembic.ini alembic src/content_factory/infra tests && \
@@ -1213,7 +1213,7 @@ historico; colunas de replication/production nascem NULL p/ a fase IA."
 - Produz: `load_segment_file(path: Path) -> SegmentConfig`;
   `upsert_segment(repo, path) -> Segment`
 
-- [ ] **Step 1: Teste falhando**
+- [✅] **Step 1: Teste falhando**
 
 `tests/app/test_segment.py`:
 
@@ -1238,14 +1238,14 @@ def test_invalid_yaml_raises_domain_error(tmp_path: Path) -> None:
         load_segment_file(bad)
 ```
 
-- [ ] **Step 2: Rodar e ver falhar**
+- [✅] **Step 2: Rodar e ver falhar**
 
 ```bash
 uv run pytest tests/app/test_segment.py -v
 ```
 Expected: FAIL — módulo `app.segment` não existe
 
-- [ ] **Step 3: Implementar**
+- [✅] **Step 3: Implementar**
 
 `segments/candles.yaml` (primeiro segmento — velas artesanais):
 
@@ -1299,9 +1299,9 @@ async def upsert_segment(repo: SegmentRepository, path: Path) -> Segment:
     return await repo.upsert(load_segment_file(path))
 ```
 
-- [ ] **Step 4: Rodar teste + gates** (esperado: `2 passed`, ruff/pyright 0)
+- [✅] **Step 4: Rodar teste + gates** (esperado: `2 passed`, ruff/pyright 0)
 
-- [ ] **Step 5: Commit**
+- [✅] **Step 5: Commit**
 
 ```bash
 git add segments src/content_factory/app tests/app && \
@@ -1328,7 +1328,7 @@ Novo segmento = 1 arquivo YAML, sem codigo (criterio de sucesso 3 do PRD)."
     (`collect` na Task 11, `ingest` na 15, `score` na 16, `status` na 17 —
     **não anunciar comando que ainda não existe**)
 
-- [ ] **Step 1: Teste falhando**
+- [✅] **Step 1: Teste falhando**
 
 `tests/cli/test_output.py`:
 
@@ -1368,9 +1368,9 @@ def test_segment_load_missing_file_exit_1() -> None:
     assert '"ok": false' in result.stdout
 ```
 
-- [ ] **Step 2: Rodar e ver falhar** (`uv run pytest tests/cli -v` → ImportError)
+- [✅] **Step 2: Rodar e ver falhar** (`uv run pytest tests/cli -v` → ImportError)
 
-- [ ] **Step 3: Implementar**
+- [✅] **Step 3: Implementar**
 
 `cli/output.py`:
 
@@ -1464,9 +1464,9 @@ if __name__ == "__main__":
 
 `[project.scripts]` no pyproject: `cf = "content_factory.cli.main:main"`.
 
-- [ ] **Step 4: Rodar gates** (esperado: `3 passed`; `uv run cf ping` → envelope ok)
+- [✅] **Step 4: Rodar gates** (esperado: `3 passed`; `uv run cf ping` → envelope ok)
 
-- [ ] **Step 5: Commit**
+- [✅] **Step 5: Commit**
 
 ```bash
 git add pyproject.toml src/content_factory/cli tests/cli && \
@@ -1491,7 +1491,7 @@ Contrato com agentes de AI: so status em JSON; dados ficam no banco (ADR-0004)."
   `worker`, `postgres` (pgvector/pg16), `redis`; porta Postgres só via
   `127.0.0.1:5432` em dev; `TEST_DATABASE_URL` derivado
 
-- [ ] **Step 1: `.devcontainer/docker-compose.yml`** (padrão da casa, 1 arquivo)
+- [✅] **Step 1: `.devcontainer/docker-compose.yml`** (padrão da casa, 1 arquivo)
 
 ```yaml
 name: content-factory
@@ -1546,7 +1546,7 @@ services:
 volumes: { pgdata: {} }
 ```
 
-- [ ] **Step 2: `.devcontainer/Dockerfile` multi-stage**
+- [✅] **Step 2: `.devcontainer/Dockerfile` multi-stage**
 
 ```dockerfile
 FROM python:3.14-slim AS base
@@ -1567,7 +1567,7 @@ RUN uv pip install --system playwright && playwright install --with-deps chromiu
 USER appuser
 ```
 
-- [ ] **Step 3: `devcontainer.json` (sem features — lição da casa)**
+- [✅] **Step 3: `devcontainer.json` (sem features — lição da casa)**
 
 ```jsonc
 {
@@ -1581,7 +1581,7 @@ USER appuser
 }
 ```
 
-- [ ] **Step 4: env 2 camadas + secrets + readme da stack**
+- [✅] **Step 4: env 2 camadas + secrets + readme da stack**
 
 - `.devcontainer/env/defaults.env` (versionado, não sensível):
   `RATE_LIMIT_YOUTUBE_PER_DAY=10000` · `RATE_LIMIT_TIKTOK_PER_MIN=6` · `COLLECT_CRON_HOURS=08,20`
@@ -1602,7 +1602,7 @@ cp .devcontainer/env/app.env.example .devcontainer/env/app.env
 cp .devcontainer/secrets/secrets.env.example .devcontainer/secrets/secrets.env
 ```
 
-- [ ] **Step 5: Gate — stack sobe e CLI responde**
+- [✅] **Step 5: Gate — stack sobe e CLI responde**
 
 ```bash
 docker compose -f .devcontainer/docker-compose.yml up -d postgres redis python
@@ -1610,7 +1610,7 @@ docker compose -f .devcontainer/docker-compose.yml exec python uv run cf ping
 ```
 Expected: `{"ok": true, "command": "ping", ...}`
 
-- [ ] **Step 6: Commit**
+- [✅] **Step 6: Commit**
 
 ```bash
 git add .devcontainer .dockerignore .gitignore && \
@@ -1633,7 +1633,7 @@ secrets gitignored com so exemplos versionados."
 - Produz: gates CI = DoD (spec §10); `scripts/check_privacy.py` exit 1 se
   segredo/path pessoal em arquivo rastreado
 
-- [ ] **Step 1: Teste do guard de privacidade (é código — TDD)**
+- [✅] **Step 1: Teste do guard de privacidade (é código — TDD)**
 
 `tests/cli/test_privacy_script.py`:
 
@@ -1649,9 +1649,9 @@ def test_privacy_script_passes_on_repo() -> None:
     assert proc.returncode == 0, proc.stdout + proc.stderr
 ```
 
-- [ ] **Step 2: Rodar e ver falhar** (`uv run pytest tests/cli/test_privacy_script.py -v` → arquivo não existe)
+- [✅] **Step 2: Rodar e ver falhar** (`uv run pytest tests/cli/test_privacy_script.py -v` → arquivo não existe)
 
-- [ ] **Step 3: `scripts/check_privacy.py`**
+- [✅] **Step 3: `scripts/check_privacy.py`**
 
 ```python
 """Falha se segredo/key/path pessoal aparecer em arquivo rastreado."""
@@ -1718,7 +1718,7 @@ if __name__ == "__main__":
 > Roda **antes** de `git add` em toda task (a permissão de commit é do
 > hook de privacidade): se o teste falhar localmente, o commit não sai.
 
-- [ ] **Step 4: `.github/workflows/ci.yml`**
+- [✅] **Step 4: `.github/workflows/ci.yml`**
 
 ```yaml
 name: ci
@@ -1757,7 +1757,7 @@ jobs:
       - run: uv run python scripts/check_privacy.py
 ```
 
-- [ ] **Step 5: `.github/workflows/docs.yml`**
+- [✅] **Step 5: `.github/workflows/docs.yml`**
 
 ```yaml
 name: docs
@@ -1772,7 +1772,7 @@ jobs:
       - run: uv run --only-group docs mkdocs build --strict
 ```
 
-- [ ] **Step 6: Rodar gates locais** (pytest privacidade + ruff + pyright) → commit
+- [✅] **Step 6: Rodar gates locais** (pytest privacidade + ruff + pyright) → commit
 
 ```bash
 uv run pytest tests/cli/test_privacy_script.py -q && uv run ruff check . && \
@@ -1803,7 +1803,7 @@ CI = DoD (spec 10): mesmos gates locais, sem segredo em arquivo rastreado."
   `dev/credentials.md` cobre rotação de tokens + conta secundária TikTok
   (spec §7)
 
-- [ ] **Step 1: `mkdocs.yml`**
+- [✅] **Step 1: `mkdocs.yml`**
 
 ```yaml
 site_name: content-factory
@@ -1847,7 +1847,7 @@ nav:
 > Nav sempre com **arquivos**, nunca diretórios — mkdocs `--strict`
 > reprova entrada de diretório e pune página órfã com warning.
 
-- [ ] **Step 2: `docs/index.md`** (visão + mermaid das camadas) e páginas de
+- [✅] **Step 2: `docs/index.md`** (visão + mermaid das camadas) e páginas de
   `architecture/` (estado atual + próximas fases com o diagrama do spec §4),
   `dev/dev-environment.md` (compose, TEST_DATABASE_URL, gates),
   `dev/extending.md` (**novo segmento = YAML** · **novo collector = classe +
@@ -1859,7 +1859,7 @@ nav:
   12–16 entregam (endpoints/mocks/erros por collector; fórmula do score;
   contrato da CLI).
 
-- [ ] **Step 3: scripts geradores**
+- [✅] **Step 3: scripts geradores**
 
 `scripts/gen_datamodel.py`: lê `Base.metadata` via engine
 (`TEST_DATABASE_URL`), escreve `docs/data-model/README.md` com
@@ -1871,7 +1871,7 @@ com links (entrypoint do nav "Diagramas"). `.svg/.png` via
 **falha com mensagem clara** (não degrada silenciosamente — gate é gate).
 Gate: `alembic check` antes de gerar.
 
-- [ ] **Step 4: Gate**
+- [✅] **Step 4: Gate**
 
 ```bash
 uv run python scripts/gen_datamodel.py && uv run python scripts/gen_diagram.py && \
@@ -1879,7 +1879,7 @@ uv run --only-group docs mkdocs build --strict
 ```
 Expected: `Documentation built in …` sem warnings
 
-- [ ] **Step 5: Commit**
+- [✅] **Step 5: Commit**
 
 ```bash
 git add mkdocs.yml docs scripts && \
@@ -1904,7 +1904,7 @@ Nada de doc gerado editado na mão; gate alembic check antes de gerar."
   `registry.resolve(platforms: list[str]) -> list[Collector]` — **ponto único
   de extensão** (Task 12–15 registram aqui)
 
-- [ ] **Step 1: Teste falhando**
+- [✅] **Step 1: Teste falhando**
 
 ```python
 from content_factory.infra.collectors import registry
@@ -1928,7 +1928,7 @@ def test_unknown_platform_raises() -> None:
         registry.get("desconhecida")
 ```
 
-- [ ] **Step 2: Falha** → **Step 3: implementar** (`_REGISTRY: dict[str, Collector]`,
+- [✅] **Step 2: Falha** → **Step 3: implementar** (`_REGISTRY: dict[str, Collector]`,
   `register` sobrescreve com aviso, `resolve` itera platforms na ordem) →
   **Step 4: gates** (`2 passed`) → **Step 5: commit**
 
@@ -1953,7 +1953,7 @@ git commit -m "feat: registry de collectors (ponto de extensao por plataforma)"
   `CollectOutcome(ok, partial, counts: dict[str, int | bool], runs: list[CollectRun])`
   — CLI mapeia direto p/ envelope + exit code (Task 6)
 
-- [ ] **Step 1: Teste falhando (núcleo com fakes, sem Redis/banco)**
+- [✅] **Step 1: Teste falhando (núcleo com fakes, sem Redis/banco)**
 
 ```python
 import asyncio
@@ -1998,7 +1998,7 @@ async def test_lock_prevents_second_run() -> None:
 implementam o **Protocolo inteiro** da Task 2 (métodos não usados levantam
 `NotImplementedError`): pyright strict valida estrutura dos testes também.)
 
-- [ ] **Step 2: Falha** → **Step 3: implementar `app/collect.py`**
+- [✅] **Step 2: Falha** → **Step 3: implementar `app/collect.py`**
 
 ```python
 from datetime import UTC, datetime
@@ -2081,7 +2081,7 @@ async def collect(
         await deps.lock.release(f"collect:{segment_slug}")
 ```
 
-- [ ] **Step 4: `infra/ratelimit.py` + `infra/redact.py`** —
+- [✅] **Step 4: `infra/ratelimit.py` + `infra/redact.py`** —
   **rate-limit/token bucket Redis** (`redis.asyncio`; janelas: `youtube`
   cota diária via `INCR`+`EXPIRE 86400`; `tiktok` `6/min`; `instagram`
   janela 60 s; backoff com jitter ±20%) e **circuit breaker por plataforma**
@@ -2102,12 +2102,12 @@ async def collect(
 > chamada de `collect` **depois** de uma execução bem-sucedida adquire o
 > lock de novo.
 
-- [ ] **Step 5: CLI `collect`** — com `--segment/--platform/--limit`,
+- [✅] **Step 5: CLI `collect`** — com `--segment/--platform/--limit`,
   envolve `asyncio.run(collect(...))`, traduz `CollectOutcome` → envelope
   (exit 0/2/1). Teste de CLI: `runner.invoke(app, ["collect", …])` com deps
   fake via monkeypatch → exit 2 em falha parcial.
 
-- [ ] **Step 6: Gates + commit**
+- [✅] **Step 6: Gates + commit**
 
 ```bash
 uv run pytest -q -m "not integration and not e2e" && uv run ruff check . && uv run pyright
@@ -2137,7 +2137,7 @@ concorrente do mesmo segmento (anti-padrao de bot)."
   `register_defaults(settings)` registra os 4 coletores — CLI/worker chamam
   **uma vez** no entrypoint
 
-- [ ] **Step 1: Fixtures** (respostas reais reduzidas da Data API v3 — gravar
+- [✅] **Step 1: Fixtures** (respostas reais reduzidas da Data API v3 — gravar
   1× com chave real e anonimizar ids) em `tests/fixtures/*.json`:
 
 `youtube_search.json`:
@@ -2162,7 +2162,7 @@ concorrente do mesmo segmento (anti-padrao de bot)."
 {"items": [{"id": "UC1", "statistics": {"subscriberCount": "54000"}}]}
 ```
 
-- [ ] **Step 2: Transport mock + teste falhando**
+- [✅] **Step 2: Transport mock + teste falhando**
 
 `tests/infra/collectors/conftest.py`:
 
@@ -2228,10 +2228,10 @@ async def test_quota_403_becomes_rate_limited() -> None:
         await c.discover(SEG, limit=5)
 ```
 
-- [ ] **Step 3: Rodar e ver falhar** (`uv run pytest tests/infra/collectors/test_youtube.py -v`
+- [✅] **Step 3: Rodar e ver falhar** (`uv run pytest tests/infra/collectors/test_youtube.py -v`
   → ImportError `content_factory.infra.collectors.youtube`)
 
-- [ ] **Step 4: Implementar**
+- [✅] **Step 4: Implementar**
 
 `infra/collectors/youtube.py`:
 
@@ -2370,7 +2370,7 @@ def register_defaults(settings: Settings) -> None:
     # Task 15: register(WebCollector())
 ```
 
-- [ ] **Step 5: Gates + commit**
+- [✅] **Step 5: Gates + commit**
 
 ```bash
 uv run pytest tests/infra/collectors -q && uv run ruff check . && uv run pyright
@@ -2398,7 +2398,7 @@ git add src tests && git commit -m "feat: collector YouTube (Data API v3) com co
   viewport que a própria biblioteca gera** (não forjar — UA coerente é
   condição anti-bloqueio da spec §7)
 
-- [ ] **Step 1: Fixture** `tests/fixtures/tiktok_trending.json` (lista no
+- [✅] **Step 1: Fixture** `tests/fixtures/tiktok_trending.json` (lista no
   shape do `as_dict()`):
 
 ```json
@@ -2410,7 +2410,7 @@ git add src tests && git commit -m "feat: collector YouTube (Data API v3) com co
   "video": {"cover": "https://cdn.example/cover.jpg"}}]
 ```
 
-- [ ] **Step 2: Teste falhando**
+- [✅] **Step 2: Teste falhando**
 
 `tests/infra/collectors/test_tiktok.py`:
 
@@ -2486,10 +2486,10 @@ async def test_empty_response_5x_becomes_blocked() -> None:
     assert ei.value.code == "blocked"
 ```
 
-- [ ] **Step 3: Rodar e ver falhar**
+- [✅] **Step 3: Rodar e ver falhar**
   (`uv run pytest tests/infra/collectors/test_tiktok.py -v` → ImportError)
 
-- [ ] **Step 4: Implementar** `infra/collectors/tiktok.py`:
+- [✅] **Step 4: Implementar** `infra/collectors/tiktok.py`:
 
 ```python
 import asyncio
@@ -2596,7 +2596,7 @@ class TikTokCollector:
 > `api.hashtag(segment.keywords[0]).videos(...)`; a fixture/contrato é o
 > canário (risco registrado no plano, §Em aberto).
 
-- [ ] **Step 5: Gates + commit**
+- [✅] **Step 5: Gates + commit**
 
 ```bash
 uv run pytest tests/infra/collectors -q && uv run ruff check . && uv run pyright
@@ -2621,7 +2621,7 @@ git add src tests && git commit -m "feat: collector TikTok (TikTok-Api) atras do
   terceiros, ADR-0003), `duration_s=None`; header `X-App-Usage` lido em
   toda resposta (`self.app_usage: int`); 400/401 → `AuthExpired`
 
-- [ ] **Step 1: Fixtures**
+- [✅] **Step 1: Fixtures**
 
 `ig_hashtag_search.json`:
 ```json
@@ -2637,7 +2637,7 @@ git add src tests && git commit -m "feat: collector TikTok (TikTok-Api) atras do
   "thumbnail_url": "https://cdn.example/t.jpg", "username": "velaslab"}]}
 ```
 
-- [ ] **Step 2: Teste falhando** `tests/infra/collectors/test_instagram.py`:
+- [✅] **Step 2: Teste falhando** `tests/infra/collectors/test_instagram.py`:
 
 ```python
 import json
@@ -2692,9 +2692,9 @@ async def test_401_becomes_auth_expired() -> None:
         await c.discover(SEG, limit=5)
 ```
 
-- [ ] **Step 3: Rodar e ver falhar** (ImportError)
+- [✅] **Step 3: Rodar e ver falhar** (ImportError)
 
-- [ ] **Step 4: Implementar** `infra/collectors/instagram.py`:
+- [✅] **Step 4: Implementar** `infra/collectors/instagram.py`:
 
 ```python
 import httpx
@@ -2780,7 +2780,7 @@ class InstagramCollector:
 E em `register_defaults`:
 `register(InstagramCollector(settings.instagram_access_token, settings.ig_user_id))`.
 
-- [ ] **Step 5: Gates + commit:**
+- [✅] **Step 5: Gates + commit:**
 
 ```bash
 uv run pytest tests/infra/collectors -q && uv run ruff check . && uv run pyright
@@ -2809,7 +2809,7 @@ git add src tests && git commit -m "feat: collector Instagram via Graph API ofic
   timeout 10 s, max 2 MB
 - CLI: `cf ingest --url <url>` → envelope; com `--segment` faz upsert
 
-- [ ] **Step 1: Teste SSRF falhando** `tests/infra/test_ssrf.py`:
+- [✅] **Step 1: Teste SSRF falhando** `tests/infra/test_ssrf.py`:
 
 ```python
 import pytest
@@ -2852,9 +2852,9 @@ def test_allows_public_ip(monkeypatch: pytest.MonkeyPatch) -> None:
     assert_public_http("https://example.com/x")   # não levanta
 ```
 
-- [ ] **Step 2: Rodar e ver falhar** (módulo não existe)
+- [✅] **Step 2: Rodar e ver falhar** (módulo não existe)
 
-- [ ] **Step 3: Implementar SSRF** `infra/ssrf.py`:
+- [✅] **Step 3: Implementar SSRF** `infra/ssrf.py`:
 
 ```python
 import ipaddress
@@ -2885,7 +2885,7 @@ def assert_public_http(url: str) -> None:
             raise DomainError(f"IP não-público bloqueado: {ip} ({url})")
 ```
 
-- [ ] **Step 4: Teste Web falhando → implementar**
+- [✅] **Step 4: Teste Web falhando → implementar**
 
 `tests/infra/collectors/test_web.py`:
 
@@ -2964,7 +2964,7 @@ class WebCollector:
 > `monkeypatch.setattr(web_mod, "DDGS", …)` do teste troca. `register_defaults`
 > ganha `register(WebCollector())`.
 
-- [ ] **Step 5: `app/ingest.py` + teste → CLI `ingest`**
+- [✅] **Step 5: `app/ingest.py` + teste → CLI `ingest`**
 
 `tests/app/test_ingest.py`:
 
@@ -3029,7 +3029,7 @@ def ingest(url: str, segment: str | None = None) -> None:
         raise typer.Exit(1) from exc
 ```
 
-- [ ] **Step 6: Gates + commit:**
+- [✅] **Step 6: Gates + commit:**
 
 ```bash
 uv run pytest tests/infra tests/app -q && uv run ruff check . && uv run pyright
@@ -3075,7 +3075,7 @@ class VideoSnapshot(BaseModel):
   relevância = `keywords encontradas / len(keywords)` (substring
   case-insensitive em título+descrição)
 
-- [ ] **Step 1: Teste falhando** `tests/app/test_score.py`:
+- [✅] **Step 1: Teste falhando** `tests/app/test_score.py`:
 
 ```python
 from datetime import UTC, datetime, timedelta
@@ -3171,9 +3171,9 @@ async def test_relevance_counts_keyword_hits() -> None:
     assert scores.saved[0][1].relevance == 100.0
 ```
 
-- [ ] **Step 2: Rodar e ver falhar** (ImportError `content_factory.app.score`)
+- [✅] **Step 2: Rodar e ver falhar** (ImportError `content_factory.app.score`)
 
-- [ ] **Step 3: Implementar** `app/score.py`:
+- [✅] **Step 3: Implementar** `app/score.py`:
 
 ```python
 from collections.abc import Callable
@@ -3232,7 +3232,7 @@ async def score(deps: ScoreDeps) -> ScoreOutcome:
     return ScoreOutcome(ok=ok, partial=(not ok and scored > 0), scored=scored)
 ```
 
-- [ ] **Step 3b: `ScoreRepositoryImpl` com SAVEPOINT por vídeo** — no Postgres
+- [✅] **Step 3b: `ScoreRepositoryImpl` com SAVEPOINT por vídeo** — no Postgres
   um flush quebrado envenena a transação inteira: o try/except do use-case
   sobreviveria, mas o commit final levantaria `PendingRollbackError` e o lote
   inteiro seria revertido (o `partial` morreria de mentira). Cada linha roda
@@ -3261,13 +3261,13 @@ async def upsert(
         await self._s.flush()
 ```
 
-- [ ] **Step 4: CLI `score`** (mesmo wire da Task 6: factory →
+- [✅] **Step 4: CLI `score`** (mesmo wire da Task 6: factory →
   `SegmentRepositoryImpl.get_by_slug` + `VideoRepositoryImpl` +
   `ScoreRepositoryImpl` → `asyncio.run` → envelope `{"ok":…, "scored": N}`).
   Teste de CLI: comando sem segmento inexistente → exit 1
   (`SegmentNotFound` → `envelope_err(code="segment_not_found")`).
 
-- [ ] **Step 5: Gates + commit:**
+- [✅] **Step 5: Gates + commit:**
 
 ```bash
 uv run pytest tests/app -q && uv run ruff check . && uv run pyright
@@ -3294,7 +3294,7 @@ git add src tests && git commit -m "feat: use-case score persiste video_scores t
   duplicada); `cf status --segment <slug>` lê `collect_runs` últimos 7 dias
   → envelope `{"ok": true, "runs": {"ok": N, "blocked": M, …}}`
 
-- [ ] **Step 1: Teste falhando** `tests/infra/queue/test_worker.py`:
+- [✅] **Step 1: Teste falhando** `tests/infra/queue/test_worker.py`:
 
 ```python
 import pytest
@@ -3327,9 +3327,9 @@ def test_cron_hours_parse() -> None:
     assert w.parse_cron_hours("") == {8, 20}  # default
 ```
 
-- [ ] **Step 2: Rodar e ver falhar** (ImportError)
+- [✅] **Step 2: Rodar e ver falhar** (ImportError)
 
-- [ ] **Step 3: Implementar** `infra/queue/worker.py`:
+- [✅] **Step 3: Implementar** `infra/queue/worker.py`:
 
 ```python
 import os
@@ -3390,13 +3390,13 @@ class WorkerSettings:
 > e é injetado no `ctx` no startup — testes nunca passam por ele
 > (monkeypatch nos hooks).
 
-- [ ] **Step 4: `cf status` + teste** — SQL de contagem por status nos
+- [✅] **Step 4: `cf status` + teste** — SQL de contagem por status nos
   últimos 7 dias (`collect_runs WHERE started_at > now() - 7d GROUP BY
   status`); teste com repo fake devolvendo 2 runs `ok` + 1 `blocked` →
   envelope `{"ok": true, "runs": {"ok": 2, "blocked": 1}}`; segmento
   inexistente → exit 1.
 
-- [ ] **Step 5: Gates + commit:**
+- [✅] **Step 5: Gates + commit:**
 
 ```bash
 uv run pytest tests/infra/queue tests/cli -q && uv run ruff check . && uv run pyright
@@ -3411,13 +3411,13 @@ git add src tests && git commit -m "feat: worker arq com cron 2x/dia e comando s
 - Create: `tests/e2e/__init__.py`, `tests/e2e/test_00_prereq.py`,
   `tests/e2e/test_01_smoke.py`, `PLANO_TESTE_E2E.md`,
   `SOLID_AUDIT.md`, `REVISAO_2026-10-07.md`
-- Modify: `docs/HANDOFF.md`, `docs/README.md`, tracker deste plano
+- Modify: `docs/HANDOFF.md`, `docs/` (índice — renomeado de README.md; 1 linha do spec §11 a amendar nesta task), tracker deste plano
 
 **Interfaces:**
 - Consome: tudo das tasks 1–17
 - Produz: evidência de aceitação (PRD §critérios) e PR
 
-- [ ] **Step 1: `test_00_prereq.py`** (gate — nunca rebaixar limiar):
+- [✅] **Step 1: `test_00_prereq.py`** (gate — nunca rebaixar limiar):
 
 ```python
 import os
@@ -3445,7 +3445,7 @@ def test_docker_presente() -> None:
     assert shutil.which("docker"), "docker não encontrado"
 ```
 
-- [ ] **Step 2: `test_01_smoke.py`** (aceitação — fixtures, sem chaves;
+- [✅] **Step 2: `test_01_smoke.py`** (aceitação — fixtures, sem chaves;
   exige `TEST_DATABASE_URL` + schema migrado):
 
 ```python
@@ -3551,28 +3551,28 @@ async def test_smoke_segment_collect_score() -> None:
 > e usa os repositórios reais — só o collector é fake (fixture; critério 1
 > do spec §12: CI roda sem chaves).
 
-- [ ] **Step 3: `PLANO_TESTE_E2E.md`** — playtest manual: subir stack,
+- [✅] **Step 3: `PLANO_TESTE_E2E.md`** — playtest manual: subir stack,
   criar `.devcontainer/secrets/secrets.env` com as 3 chaves, rodar
   `cf collect --segment candles --platform youtube,tiktok,instagram,web`,
   anexar saída + contagens neste doc.
 
-- [ ] **Step 4: Gates finais com evidência (anexar saída no `REVISAO`):**
+- [✅] **Step 4: Gates finais com evidência (anexar saída no `REVISAO`):**
 
 ```bash
 make gates && uv run pytest -q -m e2e   # exigindo infra de pé
 ```
 
-- [ ] **Step 5: `SOLID_AUDIT.md`** — métricas com comando+data
+- [✅] **Step 5: `SOLID_AUDIT.md`** — métricas com comando+data
   (`uv run ruff check --statistics`, pior cc via `uv run python -m radon cc -s src`),
   achados `arquivo:linha`, backlog, **go/no-go explícito**.
 
-- [ ] **Step 6: `REVISAO_2026-10-07.md`** — 8 ângulos da skill, até 6
+- [✅] **Step 6: `REVISAO_2026-10-07.md`** — 8 ângulos da skill, até 6
   findings verificados lendo código real, tabela final
   `# | Componente | Findings | Status`, **bug real achado nesta revisão**.
 
-- [ ] **Step 7: Atualizar HANDOFF + tracker (☐→✅) deste plano**
+- [✅] **Step 7: Atualizar HANDOFF + tracker (☐→✅) deste plano**
 
-- [ ] **Step 8: Push + PR**
+- [✅] **Step 8: Push + PR**
 
 ```bash
 git checkout -b update/fundacao-2026-10-07

@@ -5,52 +5,67 @@
 
 ## 🔄 EM ANDAMENTO
 
-- **Execução do plano** task-by-task via `superpowers:subagent-driven-development`
-  `docs/ai-plans/2026-10-07-fundacao-coletores-banco.md` (18 tasks, TDD;
-  commitado `2276254`). Isolamento: branch `update/fundacao-2026-10-07`
-  (in place, p/ manter legado untracked visível à Task 1); workspace SDD
-  `.superpowers/sdd/2026-10-07-fundacao-coletores-banco/` (ledger `progress.md`).
-  Iniciada em 2026-10-07 — começar pela **Task 1**.
+- **PR de entrega**: branch `update/fundacao-2026-10-07` → `main`
+  ("Fundação + coletores + banco (frentes 1-2 do PRD)").
+  CI (`ci.yml` + `docs.yml`) deve estar verde antes do merge; pós-merge:
+  apagar branch local + remota (contrato do plano Task 18).
 
-## ✅ CONCLUÍDO (sessão 2026-10-07)
+## ✅ CONCLUÍDO (sessão 2026-10-07 → 2026-10-09)
 
-- [x] Skill `python-quality-standards` + `bootstrapping-python-devcontainer-projects` carregadas
-- [x] Perguntas obrigatórias respondidas (nome, docs completos, infra, GPU= não, escopo)
-- [x] Decisões fechadas em brainstorming (1 por vez, aprovadas por seção):
-  - PostgreSQL 16 + pgvector · Redis + arq · TikTok-Api · Instagram Graph oficial
-  - CLI-first (JSON = envelope de status; dados no banco) · monolito modular
-  - Compose único padrão da casa · segurança + anti-bloqueio aprovados
-- [x] Spec de design: `docs/specs/2026-10-07-content-factory-design.md` (auto-revisão feita)
-- [x] ADRs: `0001-postgres-pgvector`, `0002-redis-arq-fila`, `0003-coletores-fontes`, `0004-cli-first`
-- [x] PRD: `docs/produto/prd.md`
-- [x] Índice de roteamento: `docs/roteamento.md`
-- [x] Ideia inicial preservada verbatim: `docs/produto/ideia-inicial.md` (`4b81c65`)
-- [x] **Plano 18 tasks escrito + auto-revisão concluída** e commitado
-  (`2276254`): protocolos fechados, snippets concretos sem placeholder,
-  nav mkdocs por arquivos, SSRF/redact, privacy check no CI
-- [x] git init (`main`) + `.gitignore` (`.env`, `database.db*` ignorados)
-- [x] Commits: `5f9b4ef` (spec), `2c80bde` (ADRs, PRD, HANDOFF, índice),
-  `4b81c65` (ideia inicial), `2276254` (plano)
+- [x] Fase 0 (brain/spec/ADRs/PRD/plano 18 tasks): commits `5f9b4ef`,
+  `2c80bde`, `4b81c65`, `2276254`
+- [x] **Plano `docs/ai-plans/2026-10-07-fundacao-coletores-banco.md`
+  EXECUTADO INTEIRO (Tasks 1–18)** na branch `update/fundacao-2026-10-07`
+  (SDD task-by-task, TDD, review por task; ledger
+  `.superpowers/sdd/2026-10-07-fundacao-coletores-banco/progress.md`)
+- [x] Frente 1 — fundação: uv/ruff/pyright strict/pre-commit, camadas
+  `domain/app/infra/cli`, domínio+scoring, ORM+Alembic+repositórios,
+  segmentos YAML, CLI envelope 0/2/1, compose+devcontainer, CI+privacy,
+  mkdocs strict (Tasks 1–9)
+- [x] Frente 2 — coletores+banco: ports/DTO, use-case `collect` (lock+
+  rate-limit Redis), coletores YouTube/TikTok/Instagram/Web, `cf ingest`
+  com guarda SSRF, use-case `cf score`, worker arq (cron 2×/dia BRT,
+  `max_jobs=1`), `cf status`, E2E `00`/`01` (Tasks 10–18)
+- [x] **Gap T17 corrigido**: `cf collect` de produção agora chama
+  `register_defaults` na composition root (`30f06a2`, TDD)
+- [x] **Bug real do playtest E2E corrigido** (decisão humana opção 1):
+  `WebCollector` usava URL cheia como `platform_video_id` >
+  `VARCHAR(64)` → abortava collect; agora `sha1(url)` (`f393674`, TDD)
+- [x] Playtest E2E real (compose de pé): `cf collect` (web ok=3;
+  multi-plataforma partial yt/tt/ig=failed com chaves vazias) →
+  `cf score` `scored=7` → `cf status` — transcrição em
+  `docs/PLANO_TESTE_E2E.md`
+- [x] Auditorias finais: `docs/SOLID_AUDIT.md` (GO) +
+  `docs/REVISAO_2026-10-07.md` (GO, 6 findings: 2 corrigidos, 4 backlog)
+- [x] Gates finais (2026-10-09, com evidência): pytest 119 passed (+
+  TEST_DATABASE_URL), e2e 4 passed, ruff check/format 0, pyright strict 0,
+  bandit exit 0, `alembic check` ok, pip-audit 0 vulns, privacy ok (142
+  arquivos), `mkdocs build --strict` ok
 
-## ⛔ O que falta (ordem aprovada)
+## ⛔ O que falta (próximos passos aprovados)
 
-1. **Execução fase A (fundação)**: tooling → camadas → domínio → DB/Alembic →
-   CLI/segmento → compose/devcontainer → CI → docs/mkdocs (Tasks 1–9)
-2. **Execução fase B (coletores + score)**: ports/DTO → use-case collect →
-   YouTube → TikTok → Instagram → Web → score → worker arq → E2E (Tasks 10–18)
-3. Gates de aceitação do PRD (§critérios) + `SOLID_AUDIT.md` + `REVISAO_*.md`
-4. Push final da branch + PR em `leonardodg/content-factory` (repo privado
-   **já criado e com `main` + branch da execução pushados**; `ci.yml` +
-   `docs.yml` verdes ao fim da Task 18)
+1. **CI verde no PR** → merge em `main` → apagar branches local+remota
+2. **Issues pós-merge** (backlog da REVISAO §6): mascaramento de erro no
+   `finally` do collect (#1 alta), lock token (#2 alta), INCR+EXPIRE (#3),
+   detalhe de erro do score (#4)
+3. **Playtest com chaves reais**: preencher
+   `.devcontainer/secrets/secrets.env` (fora do git) e rodar
+   `cf collect --platform youtube,tiktok,instagram,web` (ver
+   `docs/PLANO_TESTE_E2E.md`)
+4. Fase de IA (replication/production + renormalização de pesos) e spec de
+   segurança TOCTOU — próximos planos, não desta entrega
 
 ## Pendências / cuidados
 
-- Remote `origin` = `github.com/leonardodg/content-factory` (privado, criado
-  2026-10-07); legado não commitado e tratado na Task 1 (mover p/ `legacy/`): `src/` flat, `README.md` antigo, `pyproject.toml`
-  (poetry), `.devcontainer/` (2025), `.env-copy`, `.dockerignore` —
-  referência de domínio: `viral_analyzer.py`, `instagram_graph_api.py`,
-  `content_analyzer.py`
-- Credenciais pendentes p/ execução real: `YOUTUBE_API_KEY`, `INSTAGRAM_ACCESS_TOKEN`+`IG_USER_ID`,
-  `TIKTOK_MS_TOKEN` (fornecidas pelo usuário; nunca em arquivo rastreado)
-- `mkdocs` e docs geradas só na fase de execução (estrutura de docs nascida hoje
-  é manual e versionada)
+- Remote `origin` = `github.com/leonardodg/content-factory` (privado);
+  legado pré-migração em `legacy/` (untracked de referência: `viral_analyzer.py`,
+  `instagram_graph_api.py`, `content_analyzer.py`)
+- Credenciais **nunca** em arquivo rastreado; placeholders em
+  `.devcontainer/secrets/secrets.env` (gitignored); `check_privacy.py` é gate
+  (`.pre-commit` não o tem — ledger T8)
+- Redis do compose **não publica porta no host** — CLI/worker rodam via
+  `docker exec cf-python` / perfil `worker` do compose
+- `TEST_DATABASE_URL` (testes) ≠ `DATABASE_URL` (CLI) — E2E automatizado usa a
+  primeira, playtest manual exporta a segunda (ledger T6/coord T18)
+- Deferreds de todas as tasks: ledger
+  `.superpowers/sdd/2026-10-07-fundacao-coletores-banco/progress.md`

@@ -34,4 +34,8 @@ nav:
       - Estender: dev/extending.md
       - Credenciais: dev/credentials.md
   - Planos: ai-plans/2026-10-07-fundacao-coletores-banco.md
+  - Entrega:
+      - Playtest E2E: PLANO_TESTE_E2E.md
+      - SOLID audit: SOLID_AUDIT.md
+      - Revisão 2026-10-07: REVISAO_2026-10-07.md
   - HANDOFF: HANDOFF.md
