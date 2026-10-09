@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from content_factory.app.collect import CollectDeps, CollectOutcome, collect
 from content_factory.cli.output import dumps, envelope_err, envelope_ok, exit_code_for
 from content_factory.domain.errors import CollectorError, DomainError, SegmentNotFound
+from content_factory.domain.models import CandidateVideo
 from content_factory.infra.redact import redact
 
 app = typer.Typer(no_args_is_help=True)
@@ -151,6 +152,52 @@ def collect_cmd(
         message = f"coleta falhou em {int(outcome.counts.get('failed', 0))} plataforma(s)"
     print(dumps(envelope_err("collect", code, message)))
     raise typer.Exit(exit_code_for(ok=False))
+
+
+async def _aingest(url: str, segment: str | None) -> CandidateVideo:
+    # import sob demanda (padrão segment_load): seam monkeypatchável nos testes
+    from content_factory.app.ingest import ingest_url
+
+    cand = await ingest_url(url)
+    if segment is not None:
+        await _ingest_save(segment, cand)
+    return cand
+
+
+async def _ingest_save(segment_slug: str, cand: CandidateVideo) -> None:
+    """Mesmo wire do Task 6: segmento por slug → upsert_candidates (idempotente)."""
+    from content_factory.config import get_settings
+    from content_factory.infra.db.base import get_session_factory
+    from content_factory.infra.db.repositories import SegmentRepositoryImpl, VideoRepositoryImpl
+
+    factory: async_sessionmaker[AsyncSession] = get_session_factory(get_settings())
+    async with factory() as session:
+        seg = await SegmentRepositoryImpl(session).get_by_slug(segment_slug)
+        await VideoRepositoryImpl(session).upsert_candidates(seg.id, cand.platform, [cand])
+        await session.commit()
+
+
+@app.command("ingest")
+def ingest(
+    url: str = typer.Option(..., "--url", help="URL a baixar e enriquecer"),
+    segment: str | None = typer.Option(
+        None, "--segment", help="slug do segmento — se dado, faz upsert do candidato"
+    ),
+) -> None:
+    """Baixa uma URL, extrai título/descrição e grava (se --segment)."""
+    try:
+        cand = asyncio.run(_aingest(url, segment))
+    except SegmentNotFound as exc:
+        print(dumps(envelope_err("ingest", "segment_not_found", redact(str(exc)))))
+        raise typer.Exit(exit_code_for(ok=False)) from exc
+    except DomainError as exc:  # guarda SSRF (invalid_url) e erros de domínio
+        print(dumps(envelope_err("ingest", "invalid_url", redact(str(exc)))))
+        raise typer.Exit(exit_code_for(ok=False)) from exc
+    except Exception as exc:
+        print(dumps(envelope_err("ingest", "internal_error", redact(str(exc)))))
+        raise typer.Exit(exit_code_for(ok=False)) from exc
+    print(dumps(envelope_ok("ingest", url=cand.url, title=cand.title)))
+    raise typer.Exit(exit_code_for(ok=True))
 
 
 @app.command("ping")

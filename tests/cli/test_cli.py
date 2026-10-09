@@ -122,3 +122,50 @@ def test_collect_lock_held_exit_1(monkeypatch: pytest.MonkeyPatch) -> None:
     assert result.exit_code == 1
     assert '"ok": false' in result.stdout
     assert '"code": "ja_em_execucao"' in result.stdout
+
+
+def test_ingest_blocks_private_url_exit_1_envelope() -> None:
+    """Sem rede: guarda SSRF do caminho real rejeita 127.0.0.1 antes do fetch."""
+    result = runner.invoke(app, ["ingest", "--url", "http://127.0.0.1:9/x"])
+    assert result.exit_code == 1
+    assert '"ok": false' in result.stdout
+    assert '"code": "invalid_url"' in result.stdout
+
+
+def test_ingest_success_exit_0_envelope(monkeypatch: pytest.MonkeyPatch) -> None:
+    from content_factory.app import ingest as ingest_mod
+    from content_factory.domain.models import CandidateVideo
+
+    async def _fake(url: str, **kw: object) -> CandidateVideo:
+        return CandidateVideo(
+            platform="web", platform_video_id=url, url=url, creator_handle="", title="T"
+        )
+
+    monkeypatch.setattr(ingest_mod, "ingest_url", _fake)
+    result = runner.invoke(app, ["ingest", "--url", "https://ex.com/a"])
+    assert result.exit_code == 0
+    assert '"ok": true' in result.stdout
+    assert '"title": "T"' in result.stdout
+
+
+def test_ingest_with_segment_upserts(monkeypatch: pytest.MonkeyPatch) -> None:
+    from content_factory.app import ingest as ingest_mod
+    from content_factory.domain.models import CandidateVideo
+
+    async def _fake(url: str, **kw: object) -> CandidateVideo:
+        return CandidateVideo(
+            platform="web", platform_video_id=url, url=url, creator_handle="", title="T"
+        )
+
+    saved: list[tuple[str, CandidateVideo]] = []
+
+    async def _fake_save(slug: str, cand: CandidateVideo) -> None:
+        saved.append((slug, cand))
+
+    monkeypatch.setattr(ingest_mod, "ingest_url", _fake)
+    monkeypatch.setattr("content_factory.cli.main._ingest_save", _fake_save)
+    result = runner.invoke(app, ["ingest", "--url", "https://ex.com/a", "--segment", "candles"])
+    assert result.exit_code == 0
+    assert '"ok": true' in result.stdout
+    assert saved and saved[0][0] == "candles"
+    assert saved[0][1].platform == "web"
