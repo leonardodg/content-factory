@@ -3,6 +3,7 @@
 | Se você quer… | Vá para |
 |---|---|
 | Visão geral do sistema numa página | [index.md](index.md) |
+| Operar o serviço / manual completo | [manual/index.md](manual/index.md) |
 | Ler a ideia original do produto (verbatim da 1ª mensagem) | [produto/ideia-inicial.md](produto/ideia-inicial.md) |
 | Entender o QUE é o produto, frentes e não-objetivos | [produto/prd.md](produto/prd.md) |
 | Ver o design completo aprovado (arquitetura, schema, segurança) | [specs/2026-10-07-content-factory-design.md](specs/2026-10-07-content-factory-design.md) |
