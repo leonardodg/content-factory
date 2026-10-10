@@ -10,8 +10,8 @@
 
 | Camada | Arquivo | Versionado | Quem lê |
 |---|---|---|---|
-| Segredos do worker | `.devcontainer/secrets/secrets.env` | **não** (`*.example` sim) | só o serviço `worker` (`env_file`) |
-| Config do app | `.devcontainer/env/app.env` | **não** (`*.example` sim) | serviço `python` (devcontainer) |
+| Segredos do worker | `.devcontainer/secrets/secrets.env` | **não** (`*.example` sim) | só o serviço `worker` (Docker secret `app_secrets`, não `env_file`) |
+| Config do app | `.devcontainer/env/app.env` | **não** (`*.example` sim) | serviços `python` e `worker` (`env_file`) — a CLI manual (`cf-python`) lê **apenas** esta camada ([Manual §4](../manual/chaves-api.md#4-onde-colar)) |
 | Override local | `.env` (raiz) | **não** | `Settings` (pydantic-settings, 2 camadas) |
 
 - Em `.devcontainer/secrets/`, só `*.env` é gitignored
