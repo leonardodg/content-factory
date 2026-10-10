@@ -43,6 +43,9 @@ async def collect(
             "inserted": 0,
             "updated": 0,
             "failed": 0,
+            # candidatos revertidos pelo savepoint: semântica separada de
+            # "failed" (plataformas com erro) para a CLI não mentir
+            "skipped": 0,
         }
         runs: list[CollectRun] = []
         errors = 0
@@ -60,9 +63,13 @@ async def collect(
                 run.status = "ok"
                 run.found = len(found)
                 run.inserted, run.updated = stats.inserted, stats.updated
+                # candidatos revertidos pelo savepoint (REVISÃO §6 #1): visíveis
+                # no audit e no envelope, mesmo com a plataforma em ok
+                run.failed = stats.skipped
                 counts["found"] = int(counts["found"]) + len(found)
                 counts["inserted"] = int(counts["inserted"]) + stats.inserted
                 counts["updated"] = int(counts["updated"]) + stats.updated
+                counts["skipped"] = int(counts["skipped"]) + stats.skipped
             except CollectorError as exc:
                 run.status = "blocked" if exc.code == "blocked" else "failed"
                 run.error_code = exc.code

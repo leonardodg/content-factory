@@ -5,13 +5,17 @@
 
 ## 🔄 EM ANDAMENTO
 
-- **PR #1 fundação MERGED** (`2bf5755`, 2026-10-09) — branches
-  `update/fundacao-2026-10-07` local+remota podem ser apagadas
-- **PR de entrega**: [#2 — Manual de operação (8 capítulos)](https://github.com/leonardodg/content-factory/pull/2),
-  branch `docs/manual-operacao` → `main`; CI verde, `MERGEABLE`,
-  aguarda merge/review humana
+- **PR #3** [`fix/collect-upsert-savepoint` → `main`](https://github.com/leonardodg/content-factory/pull/3):
+  playtest worker — savepoint por candidato (REVISÃO §6 #1, `21ad56b`) +
+  **fix do collector Instagram** (`fc320bf`/`cb50ff9`: endpoint
+  `ig_hashtag_search`/`top_media` + fallback own-media no gate #10, TDD) +
+  tooling; reviews "With fixes" aplicados nos dois deltas; gates verde;
+  aguarda CI/merge humano.
+- **Pós-merge de PRs já entregues**: apagar branches merged local + remota
+  (`update/fundacao-2026-10-07` do PR #1, `docs/manual-operacao` do PR #2 —
+  ambos MERGED).
 
-## ✅ CONCLUÍDO (sessão 2026-10-07 → 2026-10-09)
+## ✅ CONCLUÍDO (sessão 2026-10-07 → 2026-10-10)
 
 - [x] Fase 0 (brain/spec/ADRs/PRD/plano 18 tasks): commits `5f9b4ef`,
   `2c80bde`, `4b81c65`, `2276254`
@@ -32,12 +36,27 @@
 - [x] **Bug real do playtest E2E corrigido** (decisão humana opção 1):
   `WebCollector` usava URL cheia como `platform_video_id` >
   `VARCHAR(64)` → abortava collect; agora `sha1(url)` (`f393674`, TDD)
+- [x] **REVISÃO §6 #1 corrigido** (2026-10-10, `21ad56b`, TDD): savepoint por
+  candidato no upsert (não mata mais a transação inteira; `skipped` visível em
+  `CollectRun.failed` e `counts["skipped"]`); review da branch "With fixes"
+  aplicado (2 Important + 1 Minor)
 - [x] Playtest E2E real (compose de pé): `cf collect` (web ok=3;
   multi-plataforma partial yt/tt/ig=failed com chaves vazias) →
   `cf score` `scored=7` → `cf status` — transcrição em
   `docs/PLANO_TESTE_E2E.md`
+- [x] **Bug 4 do playtest corrigido** (2026-10-10, `fc320bf`, TDD): collector
+  Instagram chamava `/{user}/hashtags` (endpoint inexistente, Graph #100 →
+  mascarado como `auth_expired`); agora `ig_hashtag_search`+`top_media` com
+  `user_id` e fallback automático para `/{uid}/media` (própria conta,
+  filtrado por keyword) quando o gate #10 (App Review) responde. Token IGAA
+  inutilizável trocado pelo EAA funcional (secrets.env, fora do git) +
+  `--build --force-recreate` no worker
+- [x] **Playtest com chaves válidas verde nas 3 plataformas** (runs 123–125:
+  youtube/instagram/web `ok`; IG 3 inserted, `viral_score` 16.5) +
+  `score_job scored=15` — evidência em `docs/PLANO_TESTE_E2E.md`
 - [x] Auditorias finais: `docs/SOLID_AUDIT.md` (GO) +
-  `docs/REVISAO_2026-10-07.md` (GO, 6 findings: 2 corrigidos, 4 backlog)
+  `docs/REVISAO_2026-10-07.md` (GO, 6 findings: 1 corrigido no branch de fix,
+  4 backlog, 1 deferido)
 - [x] Gates finais (2026-10-09, com evidência): pytest 119 passed (+
   TEST_DATABASE_URL), e2e 4 passed, ruff check/format 0, pyright strict 0,
   bandit exit 0, `alembic check` ok, pip-audit 0 vulns, privacy ok (142
@@ -57,19 +76,21 @@
 
 ## ⛔ O que falta (próximos passos aprovados)
 
-1. **Merge do PR #2 (manual)** → apagar branch local+remota do manual
-2. **Apagar branches do PR #1** já merged: `update/fundacao-2026-10-07`
-   local + remota
-3. **Issues pós-merge** (backlog da REVISAO §6): mascaramento de erro no
-   `finally` do collect (#1 alta), lock token (#2 alta), INCR+EXPIRE (#3),
-   detalhe de erro do score (#4)
-4. **Playtest com chaves reais**: preencher
-   `.devcontainer/secrets/secrets.env` **e** `.devcontainer/env/app.env`
-   (a verificação manual roda em `cf-python`, que lê só `app.env` — ver
-   Manual cap. 4) e rodar
-   `cf collect --platform youtube,tiktok,instagram,web` (ver
-   `docs/PLANO_TESTE_E2E.md`)
-5. Fase de IA (replication/production + renormalização de pesos) e spec de
+1. **CI verde no PR #3** → merge em `main` → apagar branches do PR #3
+   local+remota (as do PR #1/#2 já merged, ver "EM ANDAMENTO")
+2. **Issues pós-merge** (backlog da REVISÃO §6 — #1 mascaramento/finally já
+   corrigido pelo savepoint neste PR): lock token (#2 alta), INCR+EXPIRE
+   (#3), detalhe de erro do score (#4) + deferrals do review do collector
+   Instagram (media_type, simetria de `#`, paginação do fallback — ver
+   `docs/ai-plans/2026-10-10-fix-instagram-collector.md`)
+3. **Playtest worker COMPLETO** (2026-10-10): runs 123–140 `ok` nas 3
+   plataformas (youtube/instagram/web), `score_job scored=15`, sane checks
+   verdes; bugs 2–4 diagnosticados e corrigidos (imagem stale, savepoint/
+   `skipped`, collector Instagram). **Pendências do usuário**:
+   (a) submeter **App Review do Meta** (*Instagram Public Content Access*,
+   gate #10 — até lá o fallback own-media cobre a coleta; ver
+   `docs/PLANO_TESTE_E2E.md` §Bug 4); (b) `TIKTOK_MS_TOKEN` vazio (por design)
+4. Fase de IA (replication/production + renormalização de pesos) e spec de
    segurança TOCTOU — próximos planos, não desta entrega
 
 ## Pendências / cuidados

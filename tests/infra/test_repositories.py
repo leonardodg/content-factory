@@ -77,6 +77,75 @@ async def test_upsert_is_idempotent() -> None:
 
 
 @requires_infra
+async def test_upsert_candidates_skips_bad_candidate_keeps_txn_alive() -> None:
+    """SAVEPOINT por candidato: id > 64 chars não envenena a transação.
+
+    Reproduz o playtest real (2026-10-09, worker com chave de verdade):
+    uma URL cheia como `platform_video_id` estourou o VARCHAR(64), o
+    DataError abortava a transação inteira e o `runs.record` do `finally`
+    do collect falhava em cascata — o InFailedSqlTransaction do audit
+    mascarava o erro original (REVISÃO §6 #1). Com begin_nested por
+    candidato, só o candidato doente é revertido: os vizinhos persistem,
+    a transação segue viva e o audit do `finally` funciona.
+    """
+    engine = create_async_engine(os.environ["TEST_DATABASE_URL"])
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    async with factory() as s:
+        await s.rollback()
+        seg = await SegmentRepositoryImpl(s).upsert(
+            SegmentConfig(
+                slug=f"teste-skip-{uuid4().hex[:8]}",
+                name="Teste skip",
+                platforms=["youtube"],
+                keywords=["vela"],
+            )
+        )
+        repo = VideoRepositoryImpl(s)
+        c1, c3 = candidate(21), candidate(23)
+        # candidato doente no MEIO do lote: id de 100+ chars (o bug real)
+        bad = CandidateVideo(
+            platform="youtube",
+            platform_video_id="https://example.com/" + "a" * 100,
+            url="https://example.com/x",
+            creator_handle="u",
+        )
+        stats = await repo.upsert_candidates(seg.id, "youtube", [c1, bad, c3])
+        assert stats.skipped == 1 and stats.inserted == 2
+        # transação viva: uma query seguinte na mesma sessão não levanta
+        # InFailedSqlTransaction
+        alive = (
+            (
+                await s.execute(
+                    select(VideoRow.id).where(
+                        VideoRow.platform_video_id.in_([c1.platform_video_id, c3.platform_video_id])
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+        assert len(alive) == 2
+        await s.commit()
+        # os vizinhos saudáveis persistiram apesar do doente
+        async with factory() as check:
+            persisted = (
+                (
+                    await check.execute(
+                        select(VideoRow.id).where(
+                            VideoRow.platform_video_id.in_(
+                                [c1.platform_video_id, c3.platform_video_id]
+                            )
+                        )
+                    )
+                )
+                .scalars()
+                .all()
+            )
+            assert len(persisted) == 2
+    await engine.dispose()
+
+
+@requires_infra
 async def test_latest_for_segment_picks_newest_metric_and_zero_fills() -> None:
     """1 snapshot por vídeo do segmento; métrica mais recente vence (DISTINCT ON).
 

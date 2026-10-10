@@ -70,6 +70,10 @@ async def test_smoke_segment_collect_score() -> None:
             limiter=NoopLimiter(),
             lock=AlwaysLock(),
         )
+        # banco de dev é compartilhado com playtests reais E com o worker
+        # (cron 2x/dia): isola no run desta execução por id — imune a
+        # relógio e a coleta concorrente do worker
+        max_id = (await s.execute(select(func.max(CollectRunRow.id)))).scalar() or 0
         out = await collect("candles", ["youtube"], limit=5, deps=deps)
         assert out.ok and int(out.counts["inserted"]) >= 1
 
@@ -87,12 +91,19 @@ async def test_smoke_segment_collect_score() -> None:
         n_videos = (await s.execute(select(func.count()).select_from(VideoRow))).scalar()
         n_scores = (await s.execute(select(func.count()).select_from(VideoScoreRow))).scalar()
         runs = (
-            (await s.execute(select(CollectRunRow).where(CollectRunRow.collector == "youtube")))
+            (
+                await s.execute(
+                    select(CollectRunRow).where(
+                        CollectRunRow.collector == "youtube",
+                        CollectRunRow.id > max_id,
+                    )
+                )
+            )
             .scalars()
             .all()
         )
         assert n_videos and n_videos >= 1
         assert n_scores and n_scores >= 1
-        assert [r.status for r in runs][-1] == "ok"
+        assert [r.status for r in runs] == ["ok"]
         await s.rollback()
     await engine.dispose()

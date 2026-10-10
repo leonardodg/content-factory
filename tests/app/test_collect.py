@@ -90,3 +90,28 @@ async def test_limiter_blocked_marks_run_blocked_without_discover() -> None:
     run = out.runs[0]
     assert run.status == "blocked" and run.error_code == "blocked"
     assert run.finished_at is not None
+
+
+async def test_skipped_candidates_visible_in_run_failed_and_counts() -> None:
+    """Candidato descartado pelo savepoint (REVISÃO §6 #1) aparece no audit.
+
+    O repositório reverte só o candidato doente; o use-case precisa
+    refletir `UpsertStats.skipped` em `CollectRun.failed` e em
+    `counts["skipped"]` — senão o playtest viraria `ok` silencioso.
+    `counts["failed"]` fica só para falha de plataforma (mensagem da CLI).
+    """
+    repos = FakeRepos(skipped=2)
+    deps = CollectDeps(
+        collectors=[FakeCollector("youtube", n=3)],
+        videos=repos.videos,
+        segments=repos.segments,
+        runs=repos.runs,
+        limiter=FakeLimiter(),
+        lock=FakeLock(),
+    )
+    out = await collect("candles", ["youtube"], limit=5, deps=deps)
+    assert out.ok is True  # plataforma respondeu; só candidatos caíram
+    assert out.counts["skipped"] == 2
+    assert out.counts["failed"] == 0
+    assert out.runs[0].failed == 2
+    assert out.runs[0].status == "ok"

@@ -89,8 +89,9 @@ class FakeLock:
 
 
 class _FakeVideos:
-    def __init__(self, updates_only: bool = False) -> None:
+    def __init__(self, updates_only: bool = False, skipped: int = 0) -> None:
         self._updates_only = updates_only
+        self._skipped = skipped
         self.upserts: list[tuple[int, str, int]] = []
 
     async def upsert_candidates(
@@ -98,8 +99,10 @@ class _FakeVideos:
     ) -> UpsertStats:
         self.upserts.append((segment_id, source, len(candidates)))
         if self._updates_only:  # re-execução idempotente: tudo já existe
-            return UpsertStats(inserted=0, updated=len(candidates))
-        return UpsertStats(inserted=len(candidates))
+            return UpsertStats(
+                inserted=0, updated=len(candidates) - self._skipped, skipped=self._skipped
+            )
+        return UpsertStats(inserted=len(candidates) - self._skipped, skipped=self._skipped)
 
     async def latest_for_segment(self, segment_id: int) -> list[VideoSnapshot]:
         # collect não pontua — snapshots vazios (o use-case score usa fakes próprios)
@@ -147,9 +150,10 @@ class FakeRepos:
         segment_id: int = 1,
         *,
         updates_only: bool = False,
+        skipped: int = 0,
         status_counts: dict[str, int] | None = None,
     ) -> None:
-        self.videos: VideoRepository = _FakeVideos(updates_only)
+        self.videos: VideoRepository = _FakeVideos(updates_only, skipped)
         self.segments: SegmentRepository = _FakeSegments(segment_id)
         self.runs: CollectRunRepository = _FakeRuns(status_counts)
 

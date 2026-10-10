@@ -85,14 +85,134 @@ O 1º `cf collect --platform web` falhou com `internal_error`:
 
 - Correção (decisão humana, opção 1): `platform_video_id = sha1(url)` em
   `infra/collectors/web.py` — commit `f393674` (TDD).
-- Bug secundário de mascaramento: **backlog** (ver
-  `docs/REVISAO_2026-10-07.md` §6 e ledger).
+- Bug secundário de mascaramento: **corrigido** — savepoint por candidato no
+  upsert + `run.failed`/`counts["skipped"]` (commit `21ad56b`, TDD; ver
+  "Playtest via worker" abaixo e `docs/REVISAO_2026-10-07.md` §6 #1).
 
-## Com chaves reais (playtest completo — pendente do usuário)
+## Playtest via worker (2026-10-10 — caminho de produção)
 
-```bash
-# preencher .devcontainer/secrets/secrets.env FORA do git (nunca commitado)
-docker exec cf-python uv run cf collect --segment candles \
-  --platform youtube,tiktok,instagram,web --limit 10
-# esperado: exit 0 (sem partial) + runs status ok nas 4 plataformas
+Escopo aprovado: worker com `secrets.env` (não o CLI do host), enqueue via
+Redis (`collect_job`/`score_job`), `COLLECT_PLATFORMS=web,youtube,instagram`,
+`COLLECT_LIMIT=3` em `.devcontainer/env/app.env`.
+
+### Bug 2: imagem do worker stale (diagnóstico, não de código)
+
+- **Sintoma**: runs de `web` terminando `failed internal_error` mesmo depois
+  do fix `f393674` estar no worktree.
+- **Causa**: o serviço `worker` não tem bind-mount — o código vem da imagem,
+  buildada **antes** do fix (dentro do container `platform_video_id` ainda era
+  `r.get("href")`; no host já era `sha1`). Verificado com
+  `docker exec … grep platform_video_id` (×1 no container vs ×1 no host, com
+  implementações diferentes).
+- **Correção operacional**: `docker compose --profile worker build worker` +
+  `up -d worker`. Re-run: run de `web` → `ok`, 3 found/3 updated, id sha1.
+- **Lição documentada**: mudança de código exige rebuild da imagem do worker.
+
+### Bug 3 (o do plano): mascaramento reproduzido e corrigido
+
+O fix `21ad56b` fecha a REVISÃO §6 #1, que este playtest motivou:
+
+- `upsert_candidates` usa `begin_nested` por candidato (precedente T16/score):
+  candidato com dado doente é revertido **só ele** e vira `stats.skipped`;
+  `OperationalError`/erros não-de-dados seguem propagando (não são engolidos).
+- `app/collect.py` reflete `skipped` em `CollectRun.failed` (audit: linha
+  persiste com `status='ok'` **e** `failed=N`) e em `counts["skipped"]`
+  (chave nova — `counts["failed"]` continua sendo só falha de plataforma, a
+  mensagem da CLI em `cli/main.py:156` segue verdadeira).
+- TDD: `test_upsert_candidates_skips_bad_candidate_keeps_txn_alive` (reproduz
+  `StringDataRightTruncation` no meio do lote e prova transação viva) e
+  `test_skipped_candidates_visible_in_run_failed_and_counts`.
+
+### Resultado com as chaves atuais (inválidas — pendente do usuário)
+
+| Plataforma | Run | Resultado | Diagnóstico |
+|---|---|---|---|
+| web | 66 | `ok` (3 found, 3 updated, sha1) | caminho verde |
+| youtube | 64 | `failed` `upstream_changed` | key inválida (ver abaixo) |
+| instagram | 65 | `failed` `auth_expired` | token não parseável (ver abaixo) |
+
+- **YouTube** (`YOUTUBE_API_KEY`, 53 chars, prefixo `AQ.A`): Google recusa —
+  geocoding "provided API key is invalid"; YouTube/CustomSearch `401 API keys
+  are not supported by this API`. Formato esperado de key de navegador:
+  `AIzaSy…` (39 chars). **Ação**: criar key nova no Google Cloud Console
+  (habilitar YouTube Data API v3).
+- **Instagram** (`INSTAGRAM_ACCESS_TOKEN`, 32 chars): Graph API `400 Cannot
+  parse access token`. Token long-lived real tem ~180 chars. **Ação**: copiar
+  o token completo (Graph API Explorer / System User, escopo `instagram_basic`).
+- **TikTok**: pulado por design (sem `ms_token`, spec §8).
+
+### Scoring + sane checks (verdes)
+
+- `score_job` no worker → `{'ok': True, 'scored': 7}`; 7 linhas em
+  `video_scores` (títulos reais, `viral_score` 0–25).
+- `cf status --segment candles` → `{"ok": true, "runs": {"ok": 3, "failed": 5}}`.
+- Sane checks: 0 vazamento de chave/token nos logs do worker; nenhum lock
+  órfão (`collect:candles` liberado); `cf:rl:youtube` com TTL; 0 jobs failed
+  no container após o fix.
+
+## Playtest com chaves válidas (2026-10-10 — concluído)
+
+Credenciais novas fornecidas pelo usuário; YouTube já verde (run 111,
+`AIza…` 39 chars → ok, 3 inserted). O Instagram ainda falhava → Bug 4.
+
+### Bug 4: collector Instagram chamava endpoint inexistente
+
+- **Sintoma**: runs 112/113 `instagram failed auth_expired`.
+- **Causa raiz**: `discover` chamava `GET /{user_id}/hashtags?user_search=…` —
+  o Graph responde `(#100) Tried accessing nonexisting field (hashtags)`; como
+  qualquer 400 vira `AuthExpired`, a falha mascarava um erro de endpoint como
+  erro de token.
+- **Endpoint correto** (docs Meta v21.0): `GET /ig_hashtag_search?user_id&q` →
+  `GET /{tag_id}/top_media?user_id&fields&limit`.
+- **Gate #10**: `ig_hashtag_search` exige o produto *Instagram Public Content
+  Access* (App Review do Meta — ação do usuário). Sem review, o Graph responde
+  400 code 10.
+- **Correção** (commit `fc320bf`, TDD — 3 testes novos): endpoint novo;
+  code 10 deixou de virar `AuthExpired` e agora aciona fallback automático
+  para `GET /{user_id}/media` (mídia da própria conta vinculada), filtrada por
+  keyword casefold do segmento (a conta `ivana.lerea.br` publica conteúdo
+  misto: velas, sabonetes, macramê). Busca vazia de hashtag **não** aciona o
+  fallback. Plano: `docs/ai-plans/2026-10-10-fix-instagram-collector.md`.
+- **Token**: o `INSTAGRAM_ACCESS_TOKEN` antigo (`IGAA…`, 187 chars) era de
+  outro produto (Instagram API with Instagram Login) e o Graph respondia
+  `Cannot parse access token`. Promovido o token funcional
+  (`EAA…`, 302 chars, escopo Instagram Graph) de `INSTAGRAM_ACCESS_TOKEN_TEST`
+  para `INSTAGRAM_ACCESS_TOKEN` **fora do git** (secrets.env).
+- **Worker**: código + `env_file` mudaram → `up -d --build --force-recreate
+  worker` (o worker não tem bind-mount e `env_file` só aplica na criação).
+  Verificado dentro do container: `ig_hashtag_search` presente, token `EAA` 302.
+
+### Resultado (runs 123–125 + score_job)
+
+| Run | Plataforma | Status | found/inserted/updated | failed |
+|---|---|---|---|---|
+| 123 | youtube | `ok` | 3 / 1 / 2 | 0 |
+| 124 | instagram | `ok` | 3 / 3 / 0 | 0 |
+| 125 | web | `ok` | 3 / 0 / 3 | 0 |
+
+```console
+$ psql -c "SELECT id, platform_video_id, raw->>'username' AS username,
+                  raw->>'like_count' AS likes FROM videos
+           WHERE platform='instagram' ORDER BY id;"
+ id  | platform_video_id |   username    | likes
+-----+-------------------+---------------+-------
+ 277 | 18121941086477291 | ivana.lerea.br |    77
+ 278 | 18192084073402293 | ivana.lerea.br |    30
+ 279 | 18033025805848017 | ivana.lerea.br |    79
+
+# score_job → {'ok': True, 'scored': 15}; scores dos IG:
+ viral_score 16.5, relevance 12.5 (keywords), engagement 0
 ```
+
+- `engagement`/`performance` = 0 é **comportamento documentado**: a fórmula
+  exige `views` (`domain/scoring.py:15`) e o Graph API não expõe views de
+  terceiros (ADR-0003). `likes`/`comments` ficam em `raw`.
+- Critério de aceitação: **IG `status=ok` com `found > 0`** + linhas novas em
+  `videos`/`video_scores` — atendido.
+
+### Pendência (usuário): App Review do Meta
+
+O gate #10 bloqueia hashtag de terceiros até o app passar por *App Review*
+(Instagram Public Content Access). Enquanto isso o fallback own-media cobre a
+coleta. Quando o review aprovar, `ig_hashtag_search` volta a responder e o
+caminho de hashtags é usado automaticamente — nenhuma mudança de código.
