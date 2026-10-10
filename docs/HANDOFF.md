@@ -5,12 +5,16 @@
 
 ## 🔄 EM ANDAMENTO
 
-- **PR de entrega**: [#1 — Fundação + coletores + banco (frentes 1-2 do PRD)](https://github.com/leonardodg/content-factory/pull/1),
-  branch `update/fundacao-2026-10-07` → `main`.
-  CI (`ci.yml` + `docs.yml`) deve estar verde antes do merge; pós-merge:
-  apagar branch local + remota (contrato do plano Task 18).
+- **PR #2** `docs/manual-operacao` → `main`: manual de operação 8 capítulos
+  (CI verde, MERGEABLE, aprovado em review — aguarda merge humano; pós-merge:
+  apagar branches). *Obs.: este branch também edita HANDOFF/PLANO_TESTE_E2E —
+  resolver conflito de merge se os dois entrarem.*
+- **Branch `fix/collect-upsert-savepoint`** (parte do playtest worker):
+  fix REVISÃO §6 #1 (`21ad56b`) + bumps de tooling (`57bbc23`, `c7e6712`) +
+  ajustes de review (`skipped` separado de `failed`, smoke por `id`) —
+  review "With fixes" aplicado; gates verde; **pronto para PR/merge humano**.
 
-## ✅ CONCLUÍDO (sessão 2026-10-07 → 2026-10-09)
+## ✅ CONCLUÍDO (sessão 2026-10-07 → 2026-10-10)
 
 - [x] Fase 0 (brain/spec/ADRs/PRD/plano 18 tasks): commits `5f9b4ef`,
   `2c80bde`, `4b81c65`, `2276254`
@@ -31,12 +35,17 @@
 - [x] **Bug real do playtest E2E corrigido** (decisão humana opção 1):
   `WebCollector` usava URL cheia como `platform_video_id` >
   `VARCHAR(64)` → abortava collect; agora `sha1(url)` (`f393674`, TDD)
+- [x] **REVISÃO §6 #1 corrigido** (2026-10-10, `21ad56b`, TDD): savepoint por
+  candidato no upsert (não mata mais a transação inteira; `skipped` visível em
+  `CollectRun.failed` e `counts["skipped"]`); review da branch "With fixes"
+  aplicado (2 Important + 1 Minor)
 - [x] Playtest E2E real (compose de pé): `cf collect` (web ok=3;
   multi-plataforma partial yt/tt/ig=failed com chaves vazias) →
   `cf score` `scored=7` → `cf status` — transcrição em
   `docs/PLANO_TESTE_E2E.md`
 - [x] Auditorias finais: `docs/SOLID_AUDIT.md` (GO) +
-  `docs/REVISAO_2026-10-07.md` (GO, 6 findings: 2 corrigidos, 4 backlog)
+  `docs/REVISAO_2026-10-07.md` (GO, 6 findings: 1 corrigido no branch de fix,
+  4 backlog, 1 deferido)
 - [x] Gates finais (2026-10-09, com evidência): pytest 119 passed (+
   TEST_DATABASE_URL), e2e 4 passed, ruff check/format 0, pyright strict 0,
   bandit exit 0, `alembic check` ok, pip-audit 0 vulns, privacy ok (142
@@ -45,13 +54,16 @@
 ## ⛔ O que falta (próximos passos aprovados)
 
 1. **CI verde no PR** → merge em `main` → apagar branches local+remota
-2. **Issues pós-merge** (backlog da REVISAO §6): mascaramento de erro no
-   `finally` do collect (#1 alta), lock token (#2 alta), INCR+EXPIRE (#3),
-   detalhe de erro do score (#4)
-3. **Playtest com chaves reais**: preencher
-   `.devcontainer/secrets/secrets.env` (fora do git) e rodar
-   `cf collect --platform youtube,tiktok,instagram,web` (ver
-   `docs/PLANO_TESTE_E2E.md`)
+2. **Issues pós-merge** (backlog da REVISAO §6, exceto #1 — corrigido em
+   `21ad56b`): lock token (#2 alta), INCR+EXPIRE (#3), detalhe de erro do
+   score (#4)
+3. **Playtest worker (caminho de produção) executado 2026-10-10**: web
+   `ok` (sha1), scoring `scored=7`, sane checks verdes; **bug de imagem
+   stale** do worker diagnosticado (worker sem bind-mount → `--build`
+   obrigatório após mudança de código). **Pendente do usuário**: chaves
+   válidas — `YOUTUBE_API_KEY` atual inválida (53ch `AQ.A`; esperado
+   `AIzaSy…` 39ch) e `INSTAGRAM_ACCESS_TOKEN` não parseável (32ch; long-lived
+   ~180ch) → ver `docs/PLANO_TESTE_E2E.md` §"Playtest via worker"
 4. Fase de IA (replication/production + renormalização de pesos) e spec de
    segurança TOCTOU — próximos planos, não desta entrega
 

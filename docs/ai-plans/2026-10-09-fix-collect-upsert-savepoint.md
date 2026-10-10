@@ -88,3 +88,23 @@ pytest (com `TEST_DATABASE_URL`), `ruff check` + `ruff format --check`,
 3. Code review (skill requesting-code-review) antes de considerar pronto
 4. Evidência do playtest + este fix documentados em
    `docs/PLANO_TESTE_E2E.md`; HANDOFF/ledger atualizados
+
+## Code review (2026-10-10) — aplicações e deferrals
+
+**With fixes** → aplicados neste branch:
+- Important: `counts["failed"]` misturava plataforma+candidato e mentia em
+  `cli/main.py:156` → chave nova `counts["skipped"]` (testes atualizados)
+- Important: docs (REVISÃO §6/§8, HANDOFF, PLANO_TESTE_E2E) diziam "backlog"
+- Minor: smoke passou a isolar por `id > max(id)` (imune a relógio/worker
+  concorrente); formato PEP 758 + bump `ruff-pre-commit` v0.16.10 (skew
+  bloqueava o commit)
+
+**Deferrals (não bloqueiam merge):**
+- Testes de contrato: `OperationalError` propagando via fake; linha em
+  `collect_runs` com `status='ok'` e `failed=N` pós-collect (só unitário hoje)
+- `except IntegrityError` largo: violação sistêmica (FK) contaria como
+  skipped em vez de abortar — risco baixo (segmento validado antes); se
+  estreitar: só `DataError`
+- `tests/infra/test_repositories.py` deixa 2 vídeos + 1 segmento commitados
+  no banco dev compartilhado (ids uuid, sem colisão) — DELETE de limpeza
+  opcional
