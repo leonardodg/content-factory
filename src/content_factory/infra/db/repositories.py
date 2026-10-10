@@ -113,7 +113,7 @@ class VideoRepositoryImpl(VideoRepository):
                     stats.inserted += 1
                 else:
                     stats.updated += 1
-            except (DataError, IntegrityError):
+            except DataError, IntegrityError:
                 stats.skipped += 1
         return stats
 
