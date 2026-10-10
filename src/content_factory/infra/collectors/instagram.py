@@ -25,7 +25,7 @@ class InstagramCollector:
         self._client = httpx.AsyncClient(transport=transport, timeout=20)
         self.app_usage = 0
 
-    async def _get(self, path: str, params: dict[str, str]) -> dict[str, Any]:
+    async def _get(self, path: str, params: dict[str, str]) -> dict[str, Any] | None:
         try:
             r = await self._client.get(
                 f"{API}/{path}", params={**params, "access_token": self._token}
@@ -37,6 +37,9 @@ class InstagramCollector:
         if usage and "call_count" in usage:
             self.app_usage = int(json.loads(usage).get("call_count", 0))
         if r.status_code in (400, 401):
+            if self._is_public_content_gate(r):
+                # gate #10: App Review pendente — caller decide fallback (não é token)
+                return None
             raise AuthExpired(self.platform, f"HTTP {r.status_code}")
         if r.status_code >= 400:
             raise UpstreamChanged(self.platform, f"HTTP {r.status_code}")
@@ -48,18 +51,61 @@ class InstagramCollector:
             raise UpstreamChanged(self.platform, "JSON inesperado")
         return cast(dict[str, Any], raw)
 
+    @staticmethod
+    def _is_public_content_gate(r: httpx.Response) -> bool:
+        """Erro (#10) Instagram Public Content Access = feature não revisada, não token."""
+        try:
+            raw = r.json()
+        except ValueError:
+            return False
+        if not isinstance(raw, dict):
+            return False
+        err = cast(dict[str, Any], raw).get("error")
+        if not isinstance(err, dict):
+            return False
+        error = cast(dict[str, Any], err)
+        code = error.get("code")
+        message = str(error.get("message", ""))
+        return code == 10 or "(#10)" in message
+
     async def discover(self, segment: SegmentConfig, limit: int) -> list[CandidateVideo]:
         q = segment.keywords[0].replace("#", "") if segment.keywords else segment.slug
-        search = await self._get(f"{self._user}/hashtags", {"user_search": q, "limit": "1"})
+        search = await self._get("ig_hashtag_search", {"user_id": self._user, "q": q})
+        if search is None:
+            return await self._own_media(segment, limit)
         rows: Any = search.get("data") or []
         if not rows:
             return []
         tag_id = str(rows[0]["id"])
         top = await self._get(
-            f"{tag_id}/top_media", {"fields": FIELDS, "limit": str(min(limit, 25))}
+            f"{tag_id}/top_media",
+            {"user_id": self._user, "fields": FIELDS, "limit": str(min(limit, 25))},
         )
+        if top is None:
+            return await self._own_media(segment, limit)
         items: Any = top.get("data") or []
         return [self._map(cast(dict[str, Any], item)) for item in items[:limit]]
+
+    async def _own_media(self, segment: SegmentConfig, limit: int) -> list[CandidateVideo]:
+        """Fallback no gate #10: mídia pública da própria conta, filtrada por keyword.
+
+        A conta publica conteúdo misto (velas, sabonetes, macramê); sem filtro a
+        relevância do segmento seria violada. Busca vazia de hashtag não cai aqui.
+        """
+        rows = await self._get(f"{self._user}/media", {"fields": FIELDS, "limit": "50"})
+        if not rows:
+            return []
+        keywords = [k.casefold() for k in segment.keywords]
+        items: Any = rows.get("data") or []
+        out: list[CandidateVideo] = []
+        for raw_item in items:
+            item = cast(dict[str, Any], raw_item)
+            caption = str(item.get("caption") or "").casefold()
+            if not keywords or any(k in caption for k in keywords):
+                out.append(self._map(item))
+            if len(out) >= limit:
+                break
+        return out
 
     def _map(self, item: dict[str, Any]) -> CandidateVideo:
         return CandidateVideo(

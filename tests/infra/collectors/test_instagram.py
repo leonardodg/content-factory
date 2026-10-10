@@ -17,7 +17,7 @@ SEG = SegmentConfig(
 def _route(request: httpx.Request) -> httpx.Response:
     url = str(request.url)
     headers = {"X-App-Usage": '{"call_count":10,"total_cputime":5,"total_time":5}'}
-    if "hashtags" in url:
+    if "ig_hashtag_search" in url:
         return httpx.Response(
             200, headers=headers, content=(FIXDIR / "ig_hashtag_search.json").read_bytes()
         )
@@ -26,6 +26,99 @@ def _route(request: httpx.Request) -> httpx.Response:
             200, headers=headers, content=(FIXDIR / "ig_hashtag_top.json").read_bytes()
         )
     return httpx.Response(404, json={})
+
+
+_OWN_MEDIA = {
+    "data": [
+        {
+            "id": "18001",
+            "caption": "Passo a passo de Vela Artesanal com cera de soja ✨",
+            "timestamp": "2026-10-05T10:00:00+0000",
+            "like_count": 120,
+            "comments_count": 4,
+            "permalink": "https://www.instagram.com/p/AAA/",
+            "username": "atelie.velas",
+            "media_type": "CAROUSEL_ALBUM",
+        },
+        {
+            "id": "18002",
+            "caption": "Sabonete artesanal de lavanda 🧼",
+            "timestamp": "2026-10-04T10:00:00+0000",
+            "like_count": 60,
+            "comments_count": 1,
+            "permalink": "https://www.instagram.com/p/BBB/",
+            "username": "atelie.velas",
+            "media_type": "IMAGE",
+        },
+    ]
+}
+
+
+def _gate_route(request: httpx.Request) -> httpx.Response:
+    path = request.url.path
+    if path.endswith("/ig_hashtag_search"):
+        return httpx.Response(
+            400,
+            json={
+                "error": {
+                    "message": (
+                        "(#10) To use 'Instagram Public Content Access', "
+                        "your use of this endpoint must be reviewed"
+                    ),
+                    "type": "OAuthException",
+                    "code": 10,
+                }
+            },
+        )
+    if path.endswith("/media"):
+        return httpx.Response(200, json=_OWN_MEDIA)
+    return httpx.Response(404, json={})
+
+
+@pytest.mark.asyncio
+async def test_discover_uses_ig_hashtag_search_and_top_media() -> None:
+    """Endpoint correto: /ig_hashtag_search?user_id&q → /{tag}/top_media?user_id (docs v21.0)."""
+    calls: list[tuple[str, dict[str, str]]] = []
+
+    def _route(request: httpx.Request) -> httpx.Response:
+        calls.append((request.url.path, dict(request.url.params)))
+        if request.url.path.endswith("/ig_hashtag_search"):
+            return httpx.Response(200, json={"data": [{"id": "1784"}]})
+        if request.url.path.endswith("/top_media"):
+            return httpx.Response(200, content=(FIXDIR / "ig_hashtag_top.json").read_bytes())
+        return httpx.Response(404, json={})
+
+    c = InstagramCollector(access_token="t", ig_user_id="42", transport=httpx.MockTransport(_route))
+    out = await c.discover(SEG, limit=5)
+    assert out and out[0].platform == "instagram"
+    paths = [path for path, _ in calls]
+    assert len(paths) == 2
+    assert paths[0].endswith("/ig_hashtag_search")
+    assert paths[1].endswith("/1784/top_media")
+    search_params = calls[0][1]
+    assert search_params["user_id"] == "42" and search_params["q"] == "vela artesanal"
+    assert calls[1][1]["user_id"] == "42" and "fields" in calls[1][1]
+
+
+@pytest.mark.asyncio
+async def test_gate_falls_back_to_own_media() -> None:
+    """Gate #10 (App Review pendente) não vira AuthExpired: cai para /{uid}/media."""
+    c = InstagramCollector(
+        access_token="t", ig_user_id="42", transport=httpx.MockTransport(_gate_route)
+    )
+    out = await c.discover(SEG, limit=5)
+    assert out and out[0].platform == "instagram"
+    assert out[0].platform_video_id == "18001"
+
+
+@pytest.mark.asyncio
+async def test_own_media_fallback_filters_by_keyword() -> None:
+    """Fallback devolve só legendas que batem com keyword do segmento (conta tem conteúdo misto)."""
+    c = InstagramCollector(
+        access_token="t", ig_user_id="42", transport=httpx.MockTransport(_gate_route)
+    )
+    out = await c.discover(SEG, limit=5)
+    assert [v.platform_video_id for v in out] == ["18001"]
 
 
 @pytest.mark.asyncio
