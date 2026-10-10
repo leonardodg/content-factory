@@ -4,6 +4,7 @@ from datetime import datetime
 from sqlalchemy import func, select, text
 from sqlalchemy.dialects.postgresql import distinct_on
 from sqlalchemy.dialects.postgresql import insert as pg_insert
+from sqlalchemy.exc import DataError, IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from content_factory.app.ports import (
@@ -64,43 +65,56 @@ class VideoRepositoryImpl(VideoRepository):
     ) -> UpsertStats:
         stats = UpsertStats()
         for c in candidates:
-            stmt = pg_insert(VideoRow).values(
-                platform=c.platform,
-                platform_video_id=c.platform_video_id,
-                url=c.url,
-                title=c.title,
-                description=c.description,
-                published_at=c.published_at,
-                duration_s=c.duration_s,
-                thumbnail_url=c.thumbnail_url,
-                raw=c.raw,
-            )
-            stmt = stmt.on_conflict_do_update(
-                index_elements=["platform", "platform_video_id"],
-                set_={
-                    "title": stmt.excluded.title,
-                    "last_collected_at": stmt.excluded.last_collected_at,
-                },
-            )
-            # xmax = 0 ⇔ linha inserida; ≠ 0 ⇔ conflito atualizou (rowcount é 1
-            # nos dois casos, então não dá pra contar por rowcount)
-            res = await self._s.execute(stmt.returning(VideoRow.id, text("(xmax = 0) AS inserted")))
-            row = res.one()
-            video_id: int = row[0]
-            if row[1]:
-                stats.inserted += 1
-            else:
-                stats.updated += 1
-            link = pg_insert(VideoSegmentRow).values(
-                video_id=video_id,
-                segment_id=segment_id,
-                discovery_source=source,
-            )
-            link = link.on_conflict_do_update(
-                index_elements=["video_id", "segment_id"],
-                set_={"discovery_source": link.excluded.discovery_source},
-            )
-            await self._s.execute(link)
+            # SAVEPOINT por candidato (precedente T16): um INSERT quebrado
+            # (ex.: id > VARCHAR(64) no playtest real) envenenaria a
+            # transação inteira e o runs.record do finally do collect
+            # mascararia o erro original (REVISÃO §6 #1). Só o candidato
+            # doente é revertido; erros que não são de dados do candidato
+            # (ex.: conexão) seguem propagando.
+            try:
+                async with self._s.begin_nested():
+                    stmt = pg_insert(VideoRow).values(
+                        platform=c.platform,
+                        platform_video_id=c.platform_video_id,
+                        url=c.url,
+                        title=c.title,
+                        description=c.description,
+                        published_at=c.published_at,
+                        duration_s=c.duration_s,
+                        thumbnail_url=c.thumbnail_url,
+                        raw=c.raw,
+                    )
+                    stmt = stmt.on_conflict_do_update(
+                        index_elements=["platform", "platform_video_id"],
+                        set_={
+                            "title": stmt.excluded.title,
+                            "last_collected_at": stmt.excluded.last_collected_at,
+                        },
+                    )
+                    # xmax = 0 ⇔ linha inserida; ≠ 0 ⇔ conflito atualizou (rowcount é 1
+                    # nos dois casos, então não dá pra contar por rowcount)
+                    res = await self._s.execute(
+                        stmt.returning(VideoRow.id, text("(xmax = 0) AS inserted"))
+                    )
+                    row = res.one()
+                    video_id: int = row[0]
+                    is_new = row[1]
+                    link = pg_insert(VideoSegmentRow).values(
+                        video_id=video_id,
+                        segment_id=segment_id,
+                        discovery_source=source,
+                    )
+                    link = link.on_conflict_do_update(
+                        index_elements=["video_id", "segment_id"],
+                        set_={"discovery_source": link.excluded.discovery_source},
+                    )
+                    await self._s.execute(link)
+                if is_new:
+                    stats.inserted += 1
+                else:
+                    stats.updated += 1
+            except (DataError, IntegrityError):
+                stats.skipped += 1
         return stats
 
     async def latest_for_segment(self, segment_id: int) -> list[VideoSnapshot]:

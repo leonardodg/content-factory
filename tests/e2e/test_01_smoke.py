@@ -1,4 +1,5 @@
 import os
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import ClassVar
 
@@ -70,6 +71,9 @@ async def test_smoke_segment_collect_score() -> None:
             limiter=NoopLimiter(),
             lock=AlwaysLock(),
         )
+        # banco de dev é compartilhado com playtests reais: isola a
+        # asserção no run desta execução (runs anteriores podem ser failed)
+        t0 = datetime.now(UTC)
         out = await collect("candles", ["youtube"], limit=5, deps=deps)
         assert out.ok and int(out.counts["inserted"]) >= 1
 
@@ -87,12 +91,19 @@ async def test_smoke_segment_collect_score() -> None:
         n_videos = (await s.execute(select(func.count()).select_from(VideoRow))).scalar()
         n_scores = (await s.execute(select(func.count()).select_from(VideoScoreRow))).scalar()
         runs = (
-            (await s.execute(select(CollectRunRow).where(CollectRunRow.collector == "youtube")))
+            (
+                await s.execute(
+                    select(CollectRunRow).where(
+                        CollectRunRow.collector == "youtube",
+                        CollectRunRow.started_at >= t0,
+                    )
+                )
+            )
             .scalars()
             .all()
         )
         assert n_videos and n_videos >= 1
         assert n_scores and n_scores >= 1
-        assert [r.status for r in runs][-1] == "ok"
+        assert [r.status for r in runs] == ["ok"]
         await s.rollback()
     await engine.dispose()

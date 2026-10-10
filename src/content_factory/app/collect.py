@@ -60,9 +60,13 @@ async def collect(
                 run.status = "ok"
                 run.found = len(found)
                 run.inserted, run.updated = stats.inserted, stats.updated
+                # candidatos revertidos pelo savepoint (REVISÃO §6 #1): visíveis
+                # no audit e no envelope, mesmo com a plataforma em ok
+                run.failed = stats.skipped
                 counts["found"] = int(counts["found"]) + len(found)
                 counts["inserted"] = int(counts["inserted"]) + stats.inserted
                 counts["updated"] = int(counts["updated"]) + stats.updated
+                counts["failed"] = int(counts["failed"]) + stats.skipped
             except CollectorError as exc:
                 run.status = "blocked" if exc.code == "blocked" else "failed"
                 run.error_code = exc.code
