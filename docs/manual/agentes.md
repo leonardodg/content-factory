@@ -112,8 +112,11 @@ Exemplo de parcial (do [Primeiro passo §9](guide-start.md#9-primeiras-falhas-o-
 
 1. **Nunca logar/imprimir valores de `secrets.env`** ou env vars de
    credencial — nem em relatório, nem em erro, nem em "debug".
-2. **Nunca retry forçado em `blocked`** — o circuit breaker já abriu por
-   15 min; insistir piora o bloqueio e o anti-bot.
+2. **Nunca retry forçado em `blocked`** — o `blocked` do TikTok já agotou as
+   5 tentativas do anti-bot; o circuit breaker do limiter **nem sequer está
+   ligado** no `collect` ([Anti-ban
+   §3](anti-ban.md#3-limitacoes-honestas-backlogs)) — não insista; pausa
+   recomendada de 15+ min antes de qualquer nova tentativa.
 3. **Nunca rodar 2 `cf collect` do mesmo segmento** — o lock Redis já
    bloqueia; ao ver `ja_em_execucao`, respeitar e não tentar contornar
    (nada de `--force`, apagar lock no Redis, etc.).

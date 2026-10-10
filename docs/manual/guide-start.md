@@ -18,7 +18,9 @@ operação](index.md).
 - **Chaves de API: não necessárias para este capítulo.** O caminho abaixo usa
   só a plataforma `web` (DuckDuckGo, sem chave). Para ligar YouTube,
   Instagram e TikTok depois, siga [Chaves de API](chaves-api.md) — os valores
-  entram apenas em `secrets.env`, fora do git.
+  entram em `secrets.env` (o que o worker lê) **e** em `app.env` (o que o CLI
+  manual `cf-python` lê; camadas em [Chaves de API
+  §4](chaves-api.md#4-onde-colar)), ambos fora do git.
 - Ambiente de **desenvolvedor/contribuidor** (uv, venv, testes): fora do
   escopo deste manual — ver [ambiente de
   dev](../dev/dev-environment.md).
@@ -44,8 +46,9 @@ docker compose -f .devcontainer/docker-compose.yml up -d postgres redis python
 docker compose -f .devcontainer/docker-compose.yml exec python uv run alembic upgrade head
 ```
 
-Esperado: os containers `cf-postgres`, `cf-redis` e `cf-python` em estado
-`Up`; o alembic termina com uma linha
+Esperado: os serviços `postgres`, `redis` e `python` (containers
+`content-factory-postgres-1`, `content-factory-redis-1` e `cf-python`) em
+estado `Up`; o alembic termina com uma linha
 `INFO [alembic...] Running upgrade <revisão> -> <head>` (em banco novo, todas
 as migrações; em banco já migrado, `Running upgrade ... -> ...` não aparece e
 o comando sai em silêncio, exit 0).

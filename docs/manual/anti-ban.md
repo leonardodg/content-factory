@@ -22,10 +22,10 @@ Nada abaixo exige configuração — é o comportamento padrão do `cf collect`:
 | Lock de execução única | lock Redis por segmento — uma coleta por vez; a segunda vira `ja_em_execucao` sem bater na API (TTL 30 min cobre processo morto) | `infra/lock.py` |
 | Retry anti-bot do TikTok | só `EmptyResponseException` é retried: `2**attempt + jitter(0..2 s)`, máx. 5 tentativas → `blocked` no fim | `infra/collectors/tiktok.py` |
 | Fail-fast de `auth_expired` | token ausente/expirado falha na hora, **sem retry cego** | coletores TikTok/Instagram |
-| Redação de tokens | todo envelope de erro da CLI passa por `redact` antes de imprimir — segredo não vaza em log/stdout | `cli/main.py` |
+| Redação de tokens | as mensagens de erro de `collect`/`ingest`/`score`/`status` passam por `redact` antes de imprimir — segredo não vaza em log/stdout | `cli/main.py` |
 
 Janelas por plataforma e vocabulário de erros (`rate_limited`, `blocked`,
-`auth_expired`…): [Fluxo de busca §2](fluxo-busca.md).
+`auth_expired`…): [Fluxo de busca §2](fluxo-busca.md#2-uma-secao-por-plataforma).
 
 ## 2. Regras do operador
 
@@ -43,9 +43,10 @@ As proteções da seção 1 limitam o *sistema*; estas regras limitam *você*:
    **teto** (`--limit` max), não o default. Suba devagar observando
    `collect_runs`.
 4. **YouTube: veja a cota antes de subir `COLLECT_LIMIT`** — cada descoberta
-   custa 100 unidades (search) e a cota padrão é 10.000/dia ≈ 100 descobertas
-   (é exatamente a janela do limiter). Dobrar o `--limit` não cria cota: só
-   esgota a janela diária duas vezes mais rápido.
+   custa 102 unidades (100 do `search` + 1 de `videos` + 1 de `channels`) e a
+   cota padrão é 10.000/dia ≈ 98 descobertas (**≈** a janela do limiter).
+   Dobrar o `--limit` não cria cota: só esgota a janela diária duas vezes
+   mais rápido.
 5. **Não rode coleta manual durante o cron do worker** — o lock evita
    duplicata (a segunda vira `ja_em_execucao`), mas o resultado confuso na
    saída só polui a leitura. Horários do cron:
@@ -65,9 +66,9 @@ O que **não** está implementado hoje — saiba disto antes de confiar demais:
    expira e a cota trava até alguém apagar). Backlog §6 da
    [REVISAO](../REVISAO_2026-10-07.md).
 3. **Pausa 2–8 s entre requests não existe** — o design
-   ([§7](../specs/2026-10-07-content-factory-design.md)) previa pausa
-   aleatória entre chamadas; hoje só há backoff **em falha**. Requests
-   dentro da janela saem em rajada.
+   ([§7](../specs/2026-10-07-content-factory-design.md#7-seguranca-e-anti-bloqueio-aprovado))
+   previa pausa aleatória entre chamadas; hoje só há backoff **em falha**.
+   Requests dentro da janela saem em rajada.
 4. **Mascaramento de erro no `finally` do collect** — um erro raiz (ex.:
    transação abortada) às vezes some sob o `runs.record` do `finally` e a
    CLI mostra `internal_error` sem a causa. Backlog #1 da

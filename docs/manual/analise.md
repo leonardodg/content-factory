@@ -19,9 +19,9 @@ docker compose -f .devcontainer/docker-compose.yml exec -it postgres psql -U con
 ```
 
 Convenção do manual: compose sempre com `-f .devcontainer/docker-compose.yml`
-([Operação §1](operacao.md#1-subir-a-stack)). O Postgres escuta só em
-`127.0.0.1` — banco acessível **apenas** por `docker compose exec`, nunca
-expondo a porta nem conectando de fora da stack (regra do
+([Operação §1](operacao.md#1-subir-a-stack)). Por convenção do manual, acesse
+o banco **apenas** via `docker compose exec` — a porta `5432` existe, mas o
+compose publica só em `127.0.0.1`: não conecte de fora da stack (regra do
 [Runbook do agente](agentes.md)).
 
 ## 2. Top 10 do segmento

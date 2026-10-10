@@ -14,7 +14,8 @@ operação](index.md).
 
 !!! danger "Regra de ouro"
     Nenhum valor real em arquivo rastreado. As chaves vão apenas em
-    `.devcontainer/secrets/secrets.env` (gitignored). O gate
+    arquivos gitignored: `secrets.env` (worker) **e** `app.env` (CLI manual
+    — camadas em [§4](#4-onde-colar)). O gate
     `scripts/check_privacy.py` falha o CI se um segredo real aparecer em
     arquivo versionado — rode-o antes de subir qualquer serviço (ver
     [Verificação final](#6-verificacao-final)).
@@ -31,14 +32,20 @@ operação](index.md).
    - *Application restrictions*: IP ou app que vai usá-la, se aplicável;
    - *API restrictions*: **só** YouTube Data API v3 — não habilite outras APIs.
 5. Copie o valor para `YOUTUBE_API_KEY` no
-   [lugar certo do ambiente](#4-onde-colar) (camada `secrets.env`).
-6. Verifique:
+   [lugar certo do ambiente](#4-onde-colar) (camada `secrets.env` **e**
+   também `.devcontainer/env/app.env` — é o único arquivo que a verificação
+   do passo 6 enxerga, ver [§4](#4-onde-colar)).
+6. Verifique — **o comando roda em `cf-python`, que lê apenas `app.env`**:
+   com a chave só em `secrets.env` o comando falha (YouTube devolve erro) e a
+   chave parece quebrada. Confirme o valor em `.devcontainer/env/app.env` e,
+   se acabou de editar o arquivo, recrie o container com
+   `docker compose -f .devcontainer/docker-compose.yml up -d python`.
 
    ```bash
    docker exec cf-python uv run cf collect --segment candles --platform youtube --limit 1
    ```
 
-   Esperado: exit `0` (ou `2` parcial se outras plataformas do lote falharem).
+   Esperado: exit `0`.
    `rate_limited` com 403 logo de cara = chave mal habilitada ou restrição
    errada (origem/IP), não cota de verdade.
 
@@ -63,7 +70,9 @@ vazamento ou 403 persistente: [Credenciais — rotação](../dev/credentials.md#
      primeiro `collect`.
 5. Preencha `INSTAGRAM_ACCESS_TOKEN` e `IG_USER_ID` no
    [lugar certo do ambiente](#4-onde-colar).
-6. Verifique:
+6. Verifique (mesma camada do passo 6 do YouTube: o `cf-python` lê só
+   `app.env` — confirme `INSTAGRAM_ACCESS_TOKEN` e `IG_USER_ID` também em
+   `.devcontainer/env/app.env` antes de rodar, [§4](#4-onde-colar)):
 
    ```bash
    docker exec cf-python uv run cf collect --segment candles --platform instagram --limit 1
@@ -90,7 +99,9 @@ O TikTok-Api usa a API privada com risco conhecido de anti-bot
    `ms_token`.
 4. Cole em `TIKTOK_MS_TOKEN` no [lugar certo do ambiente](#4-onde-colar).
 5. `TIKTOK_PROXY` é opcional (proxy http(s) se a rede local for bloqueada).
-6. Verifique:
+6. Verifique (idem: `cf-python` lê só `app.env` — confirme
+   `TIKTOK_MS_TOKEN` também em `.devcontainer/env/app.env` antes de rodar,
+   [§4](#4-onde-colar)):
 
    ```bash
    docker exec cf-python uv run cf collect --segment candles --platform tiktok --limit 1
@@ -114,18 +125,36 @@ e o que nunca commitar estão na tabela de
 [Credenciais — onde ficam os segredos](../dev/credentials.md#onde-ficam-os-segredos-spec-7)
 — não repita aqui.
 
+Camadas na prática (o que cada serviço lê, conforme
+`.devcontainer/docker-compose.yml`):
+
+- **Worker** lê `app.env` **+** `secrets.env` (Docker secret `app_secrets`);
+- **CLI manual (`cf-python`)** lê **apenas** `app.env` (`env_file`, sem
+  `secrets:`) — por isso as chaves usadas na verificação dos passos 6 dos
+  capítulos 1–3 **também** vão em `.devcontainer/env/app.env` (mesmo nome de
+  variável, arquivo igualmente gitignored; `app.env.example` já traz o
+  campo). Só em `secrets.env`, o `docker exec cf-python …` falha e a chave
+  parece quebrada;
+- `TIKTOK_PROXY` vive só em `app.env` (não é segredo e não consta de
+  `secrets.env.example`).
+
 Forma segura de preencher (placeholders nunca no git):
 
 ```bash
 cp .devcontainer/secrets/secrets.env.example .devcontainer/secrets/secrets.env
-# edite secrets.env com um editor local; valores tipo SUA_CHAVE_AQUI
+cp .devcontainer/env/app.env.example .devcontainer/env/app.env
+# edite os dois com um editor local; valores tipo SUA_CHAVE_AQUI
 # apenas como lembrete, nunca o valor real em arquivo rastreado
 docker compose -f .devcontainer/docker-compose.yml restart worker
+docker compose -f .devcontainer/docker-compose.yml up -d python
 ```
 
 O worker carrega os segredos via Docker secret `app_secrets`
 (`.devcontainer/docker-compose.yml`); após editar `secrets.env`, reinicie o
-worker para o novo valor valer.
+worker para o novo valor valer. O `cf-python` recebe as envs do `env_file`
+na **criação** do container: após editar `app.env`, recrie-o com
+`docker compose -f .devcontainer/docker-compose.yml up -d python` (um simples
+`restart` não re-lê o `env_file`).
 
 ## 5. Sintoma → ação
 

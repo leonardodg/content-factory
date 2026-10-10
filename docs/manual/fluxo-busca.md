@@ -46,9 +46,12 @@ Passo a passo (`app/collect.py`):
    - `collector.discover(segment, limit)` — busca remota (fonte, tabela da
      seção 2);
    - `videos.upsert_candidates(...)` — upsert idempotente (seção 3);
-   - `collect_runs` recebe **sempre** uma linha por plataforma, gravada no
+   - `collect_runs` recebe uma linha por plataforma **no sucesso e em
+     qualquer falha de plataforma (caminho `CollectorError`)**, gravada no
      `finally`: `status` `ok`/`failed`/`blocked`, `error_code`, `found`,
-     `inserted`, `updated`, `finished_at`.
+     `inserted`, `updated`, `finished_at`. Exceções não tratadas abortam o
+     lote **sem** linha de auditoria (o commit nunca acontece — ver
+     [Operação §3](operacao.md#3-logs)).
 4. **Desfecho.** Falha de uma plataforma não derruba as demais. Exit codes:
    `0` = tudo ok · `2` = **parcial** (alguma falhou, algo foi inserido ou
    atualizado) · `1` = erro total (tudo falhou ou lock ocupado).
@@ -87,8 +90,9 @@ rotação em [credentials](../dev/credentials.md).
 
 - **Fonte:** YouTube Data API v3 — `search` (custo **100** unidades) + `videos`
   e `channels` (custo **1** unidade cada) por descoberta. Cota padrão da API:
-  **10.000 unidades/dia** ≈ 100 descobertas/dia — é exatamente a janela do
-  limiter (100/24 h). A busca cobre os keywords do segmento (até 5, unidos
+  **10.000 unidades/dia** ≈ 100 descobertas/dia — **≈** a janela do limiter
+  (100/24 h; na prática ~98, 102 U por descoberta). A busca cobre os keywords
+  do segmento (até 5, unidos
   com `OR`), ordena por visualizações e restringe aos últimos 7 dias.
 - **Credencial:** `YOUTUBE_API_KEY`.
 - **Erros:** `403` → `rate_limited` (cota esgotada ou chave/origem bloqueada);
@@ -126,8 +130,8 @@ rotação em [credentials](../dev/credentials.md).
   `call_count`, não reage a ele).
 - **Segredo:** a Graph API recebe o token na query string; por isso o erro de
   rede do Instagram passa por `redact` antes de virar mensagem, e a CLI
-  redige **todo** envelope de erro antes de imprimir — o token nunca vaza em
-  log ou stdout.
+  redige as mensagens de erro de `collect`/`ingest`/`score`/`status` antes de
+  imprimir — o token nunca vaza em log ou stdout.
 
 ### Web
 
