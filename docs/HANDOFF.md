@@ -5,15 +5,8 @@
 
 ## 🔄 EM ANDAMENTO
 
-- **PR #3** [`fix/collect-upsert-savepoint` → `main`](https://github.com/leonardodg/content-factory/pull/3):
-  playtest worker — savepoint por candidato (REVISÃO §6 #1, `21ad56b`) +
-  **fix do collector Instagram** (`fc320bf`/`cb50ff9`: endpoint
-  `ig_hashtag_search`/`top_media` + fallback own-media no gate #10, TDD) +
-  tooling; reviews "With fixes" aplicados nos dois deltas; gates verde;
-  aguarda CI/merge humano.
-- **Pós-merge de PRs já entregues**: apagar branches merged local + remota
-  (`update/fundacao-2026-10-07` do PR #1, `docs/manual-operacao` do PR #2 —
-  ambos MERGED).
+_(vazio — PRs #1, #2 e #3 merged; branches merged apagadas local+remota;
+default branch do repositório corrigido para `main` em 2026-10-10)_
 
 ## ✅ CONCLUÍDO (sessão 2026-10-07 → 2026-10-10)
 
@@ -73,24 +66,26 @@
   ledger `.superpowers/sdd/2026-10-09-manual-operacao/progress.md`
 - [x] `credentials.md` corrigido (`ec05862`): worker lê `secrets.env` via
   Docker secret `app_secrets`, não `env_file`; `cf-python` lê só `app.env`
+- [x] **PR #3 MERGED** (`7d5d295`, 2026-10-10): savepoint por candidato +
+  collector Instagram (endpoint/gate #10) + tooling; 2 reviews "With fixes"
+  aplicados; CI verde; branches merged (#1/#2/#3) apagadas local+remota;
+  default branch do GitHub corrigido de `update/fundacao-2026-10-07` → `main`
 
 ## ⛔ O que falta (próximos passos aprovados)
 
-1. **CI verde no PR #3** → merge em `main` → apagar branches do PR #3
-   local+remota (as do PR #1/#2 já merged, ver "EM ANDAMENTO")
-2. **Issues pós-merge** (backlog da REVISÃO §6 — #1 mascaramento/finally já
-   corrigido pelo savepoint neste PR): lock token (#2 alta), INCR+EXPIRE
-   (#3), detalhe de erro do score (#4) + deferrals do review do collector
-   Instagram (media_type, simetria de `#`, paginação do fallback — ver
-   `docs/ai-plans/2026-10-10-fix-instagram-collector.md`)
-3. **Playtest worker COMPLETO** (2026-10-10): runs 123–140 `ok` nas 3
+1. **Issues pós-merge** (backlog da REVISÃO §6 — #1 mascaramento/finally já
+   corrigido pelo savepoint; PR #3 merged `7d5d295`): lock token (#2 alta),
+   INCR+EXPIRE (#3), detalhe de erro do score (#4) + deferrals do review do
+   collector Instagram (media_type, simetria de `#`, paginação do fallback —
+   ver `docs/ai-plans/2026-10-10-fix-instagram-collector.md`)
+2. **Playtest worker COMPLETO** (2026-10-10): runs 123–140 `ok` nas 3
    plataformas (youtube/instagram/web), `score_job scored=15`, sane checks
    verdes; bugs 2–4 diagnosticados e corrigidos (imagem stale, savepoint/
    `skipped`, collector Instagram). **Pendências do usuário**:
    (a) submeter **App Review do Meta** (*Instagram Public Content Access*,
    gate #10 — até lá o fallback own-media cobre a coleta; ver
    `docs/PLANO_TESTE_E2E.md` §Bug 4); (b) `TIKTOK_MS_TOKEN` vazio (por design)
-4. Fase de IA (replication/production + renormalização de pesos) e spec de
+3. Fase de IA (replication/production + renormalização de pesos) e spec de
    segurança TOCTOU — próximos planos, não desta entrega
 
 ## Pendências / cuidados

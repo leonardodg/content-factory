@@ -178,8 +178,9 @@ Credenciais novas fornecidas pelo usuário; YouTube já verde (run 111,
   `Cannot parse access token`. Promovido o token funcional
   (`EAA…`, 302 chars, escopo Instagram Graph) de `INSTAGRAM_ACCESS_TOKEN_TEST`
   para `INSTAGRAM_ACCESS_TOKEN` **fora do git** (secrets.env).
-- **Worker**: código + `env_file` mudaram → `up -d --build --force-recreate
-  worker` (o worker não tem bind-mount e `env_file` só aplica na criação).
+- **Worker**: código + `secrets.env` mudaram → `up -d --build --force-recreate
+  worker` (o worker não tem bind-mount; `secrets.env` chega como Docker secret
+  `app_secrets`, materializado na criação do container — restart não basta).
   Verificado dentro do container: `ig_hashtag_search` presente, token `EAA` 302.
 
 ### Resultado (runs 123–125 + score_job)
