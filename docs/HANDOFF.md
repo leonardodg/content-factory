@@ -5,10 +5,11 @@
 
 ## 🔄 EM ANDAMENTO
 
-- **PR de entrega**: [#1 — Fundação + coletores + banco (frentes 1-2 do PRD)](https://github.com/leonardodg/content-factory/pull/1),
-  branch `update/fundacao-2026-10-07` → `main`.
-  CI (`ci.yml` + `docs.yml`) deve estar verde antes do merge; pós-merge:
-  apagar branch local + remota (contrato do plano Task 18).
+- **PR #1 fundação MERGED** (`2bf5755`, 2026-10-09) — branches
+  `update/fundacao-2026-10-07` local+remota podem ser apagadas
+- **PR de entrega**: [#2 — Manual de operação (8 capítulos)](https://github.com/leonardodg/content-factory/pull/2),
+  branch `docs/manual-operacao` → `main`; CI verde, `MERGEABLE`,
+  aguarda merge/review humana
 
 ## ✅ CONCLUÍDO (sessão 2026-10-07 → 2026-10-09)
 
@@ -45,18 +46,30 @@
   diretório temporário de features como `additional_context`, permitindo ao
   Compose passar a leitura específica requerida pelo Buildx 0.38; build via
   Dev Containers CLI 0.89.0 concluído e container `cf-python` iniciado
+- [x] **Manual de operação** (`docs/manual/`, 8 capítulos pt-BR, humano +
+  agente): spec `docs/superpowers/specs/2026-10-09-manual-operacao-design.md`
+  + plano `docs/ai-plans/2026-10-09-manual-operacao.md` (8 tasks) executado
+  por SDD com review por task; review final da branch encontrou 2 Critical +
+  3 Important cross-chapter → fix `ea2542f` → re-review **APPROVED**;
+  ledger `.superpowers/sdd/2026-10-09-manual-operacao/progress.md`
+- [x] `credentials.md` corrigido (`ec05862`): worker lê `secrets.env` via
+  Docker secret `app_secrets`, não `env_file`; `cf-python` lê só `app.env`
 
 ## ⛔ O que falta (próximos passos aprovados)
 
-1. **CI verde no PR** → merge em `main` → apagar branches local+remota
-2. **Issues pós-merge** (backlog da REVISAO §6): mascaramento de erro no
+1. **Merge do PR #2 (manual)** → apagar branch local+remota do manual
+2. **Apagar branches do PR #1** já merged: `update/fundacao-2026-10-07`
+   local + remota
+3. **Issues pós-merge** (backlog da REVISAO §6): mascaramento de erro no
    `finally` do collect (#1 alta), lock token (#2 alta), INCR+EXPIRE (#3),
    detalhe de erro do score (#4)
-3. **Playtest com chaves reais**: preencher
-   `.devcontainer/secrets/secrets.env` (fora do git) e rodar
+4. **Playtest com chaves reais**: preencher
+   `.devcontainer/secrets/secrets.env` **e** `.devcontainer/env/app.env`
+   (a verificação manual roda em `cf-python`, que lê só `app.env` — ver
+   Manual cap. 4) e rodar
    `cf collect --platform youtube,tiktok,instagram,web` (ver
    `docs/PLANO_TESTE_E2E.md`)
-4. Fase de IA (replication/production + renormalização de pesos) e spec de
+5. Fase de IA (replication/production + renormalização de pesos) e spec de
    segurança TOCTOU — próximos planos, não desta entrega
 
 ## Pendências / cuidados
@@ -73,3 +86,5 @@
   primeira, playtest manual exporta a segunda (ledger T6/coord T18)
 - Deferreds de todas as tasks: ledger
   `.superpowers/sdd/2026-10-07-fundacao-coletores-banco/progress.md`
+- Deferreds do manual (~15 nits cosméticos): ledger
+  `.superpowers/sdd/2026-10-09-manual-operacao/progress.md`
