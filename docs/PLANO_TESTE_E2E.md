@@ -150,7 +150,7 @@ O fix `21ad56b` fecha a REVISÃO §6 #1, que este playtest motivou:
   órfão (`collect:candles` liberado); `cf:rl:youtube` com TTL; 0 jobs failed
   no container após o fix.
 
-## Playtest com chaves válidas (2026-10-10 — execute)
+## Playtest com chaves válidas (2026-10-10 — concluído)
 
 Credenciais novas fornecidas pelo usuário; YouTube já verde (run 111,
 `AIza…` 39 chars → ok, 3 inserted). O Instagram ainda falhava → Bug 4.

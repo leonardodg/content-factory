@@ -72,8 +72,28 @@ Playtest E2E via worker mostrou `collect_runs.instagram.status = failed` (runs 1
 ## Decisões registradas
 
 - Fallback **automático** no gate, sem flag de env: quando o App Review aprovar, o
-  caminho de hashtags volta sozinho (o gate deixa de existir).
+  caminho de hashtags volta a ser usado automaticamente (o gate deixa de existir).
 - Filtro por keyword no fallback porque a própria conta publica conteúdo misto
   (velas, sabonetes, macramê) — sem filtro, o fallback injetaria peça irrelevante.
 - Busca vazia (keyword inexistente) **não** cai no fallback: evita false-positive de
   relevância quando o caminho de hashtags está disponível.
+
+## Deferrals do code review (2026-10-10)
+
+Aplicados no delta: matcher do gate restrito a `code 10` **+** frase
+"public content access" (um `#10` genérico voltaria a ser `AuthExpired` —
+não pode mascarar); gate na própria mídia própria vira `AuthExpired` ruidoso
+(em vez de `[]` silencioso); testes do gate em `top_media` e da busca vazia
+reforçado (agora capaz de falhar); `logger.warning` quando o fallback dispara;
+docstring do `_get` explicando o `None`.
+
+Deferidos (não bloqueiam):
+
+1. Filtro de `media_type` (só vídeo/carrossel) no `_map` — pré-existente
+   (também afeta `top_media`); relevante para o analyzer de Reels, tratar em
+   issue do backlog.
+2. Assimetria de `#`: `q` remove `#` mas o filtro de keyword e o scoring não —
+   keyword cadastrada como `#vela` nunca casa legenda (pré-existente no
+   scoring, `app/score.py`).
+3. Paginação do fallback (uma página de 50; sem match nos recentes → `[]`
+   mesmo havendo match em posts antigos).

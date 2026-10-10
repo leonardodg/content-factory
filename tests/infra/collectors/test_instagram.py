@@ -122,6 +122,89 @@ async def test_own_media_fallback_filters_by_keyword() -> None:
 
 
 @pytest.mark.asyncio
+async def test_generic_code10_is_not_gate() -> None:
+    """#10 genérico ('does not have permission') NÃO é o gate do App Review: segue AuthExpired.
+
+    Matcher amplo (só code 10) reabriria o mascaramento que este fix eliminou:
+    falha de permissão viraria fallback silencioso com run ok.
+    """
+
+    def _route(request: httpx.Request) -> httpx.Response:
+        path = request.url.path
+        if path.endswith("/ig_hashtag_search"):
+            return httpx.Response(
+                400,
+                json={
+                    "error": {
+                        "message": "Application does not have permission for this action",
+                        "type": "OAuthException",
+                        "code": 10,
+                    }
+                },
+            )
+        if path.endswith("/media"):
+            return httpx.Response(200, json=_OWN_MEDIA)
+        return httpx.Response(404, json={})
+
+    c = InstagramCollector(access_token="t", ig_user_id="42", transport=httpx.MockTransport(_route))
+    with pytest.raises(AuthExpired):
+        await c.discover(SEG, limit=5)
+
+
+@pytest.mark.asyncio
+async def test_gate_on_top_media_falls_back_to_own_media() -> None:
+    """Gate #10 em top_media (plano, comportamento #3) também cai para mídia própria."""
+
+    def _route(request: httpx.Request) -> httpx.Response:
+        path = request.url.path
+        if path.endswith("/ig_hashtag_search"):
+            return httpx.Response(200, json={"data": [{"id": "1784"}]})
+        if path.endswith("/top_media"):
+            return httpx.Response(
+                400,
+                json={
+                    "error": {
+                        "message": (
+                            "(#10) To use 'Instagram Public Content Access', "
+                            "your use of this endpoint must be reviewed"
+                        ),
+                        "code": 10,
+                    }
+                },
+            )
+        if path.endswith("/media"):
+            return httpx.Response(200, json=_OWN_MEDIA)
+        return httpx.Response(404, json={})
+
+    c = InstagramCollector(access_token="t", ig_user_id="42", transport=httpx.MockTransport(_route))
+    out = await c.discover(SEG, limit=5)
+    assert [v.platform_video_id for v in out] == ["18001"]
+
+
+@pytest.mark.asyncio
+async def test_gate_on_own_media_raises_not_silent_empty() -> None:
+    """Gate também na mídia própria = nem hashtag nem fallback disponíveis: falha ruidosa."""
+
+    def _route(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            400,
+            json={
+                "error": {
+                    "message": (
+                        "(#10) To use 'Instagram Public Content Access', "
+                        "your use of this endpoint must be reviewed"
+                    ),
+                    "code": 10,
+                }
+            },
+        )
+
+    c = InstagramCollector(access_token="t", ig_user_id="42", transport=httpx.MockTransport(_route))
+    with pytest.raises(AuthExpired):
+        await c.discover(SEG, limit=5)
+
+
+@pytest.mark.asyncio
 async def test_discover_maps_fixture() -> None:
     c = InstagramCollector(access_token="t", ig_user_id="1", transport=httpx.MockTransport(_route))
     out = await c.discover(SEG, limit=5)
@@ -178,7 +261,11 @@ async def test_non_json_becomes_upstream_changed() -> None:
 
 @pytest.mark.asyncio
 async def test_empty_search_returns_no_candidates() -> None:
+    """Busca vazia NÃO aciona o fallback (só o gate #10); mídia própria real disponível."""
+
     def _empty(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/media"):
+            return httpx.Response(200, json=_OWN_MEDIA)
         return httpx.Response(200, json={"data": []})
 
     c = InstagramCollector(access_token="t", ig_user_id="1", transport=httpx.MockTransport(_empty))

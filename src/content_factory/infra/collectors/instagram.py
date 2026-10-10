@@ -1,4 +1,5 @@
 import json
+import logging
 from datetime import datetime
 from typing import Any, ClassVar, cast
 
@@ -8,6 +9,7 @@ from content_factory.domain.errors import AuthExpired, NetworkError, UpstreamCha
 from content_factory.domain.models import CandidateVideo, SegmentConfig
 from content_factory.infra.redact import redact
 
+logger = logging.getLogger(__name__)
 API = "https://graph.facebook.com/v21.0"
 FIELDS = (
     "id,caption,like_count,comments_count,timestamp,media_type,permalink,thumbnail_url,username"
@@ -26,6 +28,7 @@ class InstagramCollector:
         self.app_usage = 0
 
     async def _get(self, path: str, params: dict[str, str]) -> dict[str, Any] | None:
+        """GET no Graph. None = gate #10 (Instagram Public Content Access) — o caller decide."""
         try:
             r = await self._client.get(
                 f"{API}/{path}", params={**params, "access_token": self._token}
@@ -53,7 +56,7 @@ class InstagramCollector:
 
     @staticmethod
     def _is_public_content_gate(r: httpx.Response) -> bool:
-        """Erro (#10) Instagram Public Content Access = feature não revisada, não token."""
+        """Gate do App Review (#10 + 'public content access'), não qualquer #10 genérico."""
         try:
             raw = r.json()
         except ValueError:
@@ -64,9 +67,8 @@ class InstagramCollector:
         if not isinstance(err, dict):
             return False
         error = cast(dict[str, Any], err)
-        code = error.get("code")
-        message = str(error.get("message", ""))
-        return code == 10 or "(#10)" in message
+        message = str(error.get("message", "")).casefold()
+        return error.get("code") == 10 and "public content access" in message
 
     async def discover(self, segment: SegmentConfig, limit: int) -> list[CandidateVideo]:
         q = segment.keywords[0].replace("#", "") if segment.keywords else segment.slug
@@ -92,7 +94,11 @@ class InstagramCollector:
         A conta publica conteúdo misto (velas, sabonetes, macramê); sem filtro a
         relevância do segmento seria violada. Busca vazia de hashtag não cai aqui.
         """
+        logger.warning("instagram: gate #10 (App Review pendente) — usando mídia própria")
         rows = await self._get(f"{self._user}/media", {"fields": FIELDS, "limit": "50"})
+        if rows is None:
+            # gate também na mídia própria: sem hashtag e sem fallback — falha ruidosa
+            raise AuthExpired(self.platform, "HTTP 400 gate #10 na mídia própria")
         if not rows:
             return []
         keywords = [k.casefold() for k in segment.keywords]
