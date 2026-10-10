@@ -9,10 +9,12 @@
   (CI verde, MERGEABLE, aprovado em review — aguarda merge humano; pós-merge:
   apagar branches). *Obs.: este branch também edita HANDOFF/PLANO_TESTE_E2E —
   resolver conflito de merge se os dois entrarem.*
-- **Branch `fix/collect-upsert-savepoint`** (parte do playtest worker):
-  fix REVISÃO §6 #1 (`21ad56b`) + bumps de tooling (`57bbc23`, `c7e6712`) +
-  ajustes de review (`skipped` separado de `failed`, smoke por `id`) —
-  review "With fixes" aplicado; gates verde; **pronto para PR/merge humano**.
+- **Branch `fix/collect-upsert-savepoint`** (playtest worker → 3 bugs fechados):
+  fix REVISÃO §6 #1 (`21ad56b`) + tooling (`57bbc23`, `c7e6712`) + ajustes de
+  review (`8347dcc`, `e79d36d`) + **fix do collector Instagram** (`fc320bf`:
+  endpoint `ig_hashtag_search`/`top_media` + fallback own-media no gate #10,
+  TDD 3 testes) — review "With fixes" aplicado; gates verde; **pronto para
+  PR/merge humano**.
 
 ## ✅ CONCLUÍDO (sessão 2026-10-07 → 2026-10-10)
 
@@ -43,6 +45,16 @@
   multi-plataforma partial yt/tt/ig=failed com chaves vazias) →
   `cf score` `scored=7` → `cf status` — transcrição em
   `docs/PLANO_TESTE_E2E.md`
+- [x] **Bug 4 do playtest corrigido** (2026-10-10, `fc320bf`, TDD): collector
+  Instagram chamava `/{user}/hashtags` (endpoint inexistente, Graph #100 →
+  mascarado como `auth_expired`); agora `ig_hashtag_search`+`top_media` com
+  `user_id` e fallback automático para `/{uid}/media` (própria conta,
+  filtrado por keyword) quando o gate #10 (App Review) responde. Token IGAA
+  inutilizável trocado pelo EAA funcional (secrets.env, fora do git) +
+  `--build --force-recreate` no worker
+- [x] **Playtest com chaves válidas verde nas 3 plataformas** (runs 123–125:
+  youtube/instagram/web `ok`; IG 3 inserted, `viral_score` 16.5) +
+  `score_job scored=15` — evidência em `docs/PLANO_TESTE_E2E.md`
 - [x] Auditorias finais: `docs/SOLID_AUDIT.md` (GO) +
   `docs/REVISAO_2026-10-07.md` (GO, 6 findings: 1 corrigido no branch de fix,
   4 backlog, 1 deferido)
@@ -57,13 +69,13 @@
 2. **Issues pós-merge** (backlog da REVISAO §6, exceto #1 — corrigido em
    `21ad56b`): lock token (#2 alta), INCR+EXPIRE (#3), detalhe de erro do
    score (#4)
-3. **Playtest worker (caminho de produção) executado 2026-10-10**: web
-   `ok` (sha1), scoring `scored=7`, sane checks verdes; **bug de imagem
-   stale** do worker diagnosticado (worker sem bind-mount → `--build`
-   obrigatório após mudança de código). **Pendente do usuário**: chaves
-   válidas — `YOUTUBE_API_KEY` atual inválida (53ch `AQ.A`; esperado
-   `AIzaSy…` 39ch) e `INSTAGRAM_ACCESS_TOKEN` não parseável (32ch; long-lived
-   ~180ch) → ver `docs/PLANO_TESTE_E2E.md` §"Playtest via worker"
+3. **Playtest worker COMPLETO** (2026-10-10): runs 123–125 `ok` nas 3
+   plataformas (youtube/instagram/web), `score_job scored=15`, sane checks
+   verdes; bugs 2–4 diagnosticados e corrigidos (imagem stale, savepoint/
+   `skipped`, collector Instagram). **Pendências do usuário**:
+   (a) submeter **App Review do Meta** (*Instagram Public Content Access*,
+   gate #10 — até lá o fallback own-media cobre a coleta; ver
+   `docs/PLANO_TESTE_E2E.md` §Bug 4); (b) `TIKTOK_MS_TOKEN` vazio (por design)
 4. Fase de IA (replication/production + renormalização de pesos) e spec de
    segurança TOCTOU — próximos planos, não desta entrega
 

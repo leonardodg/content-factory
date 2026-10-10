@@ -150,21 +150,69 @@ O fix `21ad56b` fecha a REVISÃO §6 #1, que este playtest motivou:
   órfão (`collect:candles` liberado); `cf:rl:youtube` com TTL; 0 jobs failed
   no container após o fix.
 
-## Com chaves válidas (playtest completo — pendente do usuário)
+## Playtest com chaves válidas (2026-10-10 — execute)
 
-```bash
-# 1) corrigir secrets.env FORA do git: YOUTUBE_API_KEY (AIzaSy…) e
-#    INSTAGRAM_ACCESS_TOKEN (long-lived ~180 chars) + IG_USER_ID
-# 2) rebuild caso o código tenha mudado (worker não tem bind-mount!):
-docker compose -f .devcontainer/docker-compose.yml --profile worker build worker
-docker compose -f .devcontainer/docker-compose.yml --profile worker up -d worker
-# 3) re-rodar collect (via worker, caminho de produção):
-docker exec -i cf-python uv run python - <<'PY'
-from arq.connections import ArqRedis
-async def main():
-    r = ArqRedis.from_url("redis://redis:6379/0")
-    print(await r.enqueue_job("collect_job", "candles", ["web", "youtube", "instagram"], 3))
-import asyncio; asyncio.run(main())
-PY
-# esperado: runs status ok nas 3 plataformas; depois score_job scored >= 7
+Credenciais novas fornecidas pelo usuário; YouTube já verde (run 111,
+`AIza…` 39 chars → ok, 3 inserted). O Instagram ainda falhava → Bug 4.
+
+### Bug 4: collector Instagram chamava endpoint inexistente
+
+- **Sintoma**: runs 112/113 `instagram failed auth_expired`.
+- **Causa raiz**: `discover` chamava `GET /{user_id}/hashtags?user_search=…` —
+  o Graph responde `(#100) Tried accessing nonexisting field (hashtags)`; como
+  qualquer 400 vira `AuthExpired`, a falha mascarava um erro de endpoint como
+  erro de token.
+- **Endpoint correto** (docs Meta v21.0): `GET /ig_hashtag_search?user_id&q` →
+  `GET /{tag_id}/top_media?user_id&fields&limit`.
+- **Gate #10**: `ig_hashtag_search` exige o produto *Instagram Public Content
+  Access* (App Review do Meta — ação do usuário). Sem review, o Graph responde
+  400 code 10.
+- **Correção** (commit `fc320bf`, TDD — 3 testes novos): endpoint novo;
+  code 10 deixou de virar `AuthExpired` e agora aciona fallback automático
+  para `GET /{user_id}/media` (mídia da própria conta vinculada), filtrada por
+  keyword casefold do segmento (a conta `ivana.lerea.br` publica conteúdo
+  misto: velas, sabonetes, macramê). Busca vazia de hashtag **não** aciona o
+  fallback. Plano: `docs/ai-plans/2026-10-10-fix-instagram-collector.md`.
+- **Token**: o `INSTAGRAM_ACCESS_TOKEN` antigo (`IGAA…`, 187 chars) era de
+  outro produto (Instagram API with Instagram Login) e o Graph respondia
+  `Cannot parse access token`. Promovido o token funcional
+  (`EAA…`, 302 chars, escopo Instagram Graph) de `INSTAGRAM_ACCESS_TOKEN_TEST`
+  para `INSTAGRAM_ACCESS_TOKEN` **fora do git** (secrets.env).
+- **Worker**: código + `env_file` mudaram → `up -d --build --force-recreate
+  worker` (o worker não tem bind-mount e `env_file` só aplica na criação).
+  Verificado dentro do container: `ig_hashtag_search` presente, token `EAA` 302.
+
+### Resultado (runs 123–125 + score_job)
+
+| Run | Plataforma | Status | found/inserted/updated | failed |
+|---|---|---|---|---|
+| 123 | youtube | `ok` | 3 / 1 / 2 | 0 |
+| 124 | instagram | `ok` | 3 / 3 / 0 | 0 |
+| 125 | web | `ok` | 3 / 0 / 3 | 0 |
+
+```console
+$ psql -c "SELECT id, platform_video_id, raw->>'username' AS username,
+                  raw->>'like_count' AS likes FROM videos
+           WHERE platform='instagram' ORDER BY id;"
+ id  | platform_video_id |   username    | likes
+-----+-------------------+---------------+-------
+ 277 | 18121941086477291 | ivana.lerea.br |    77
+ 278 | 18192084073402293 | ivana.lerea.br |    30
+ 279 | 18033025805848017 | ivana.lerea.br |    79
+
+# score_job → {'ok': True, 'scored': 15}; scores dos IG:
+ viral_score 16.5, relevance 12.5 (keywords), engagement 0
 ```
+
+- `engagement`/`performance` = 0 é **comportamento documentado**: a fórmula
+  exige `views` (`domain/scoring.py:15`) e o Graph API não expõe views de
+  terceiros (ADR-0003). `likes`/`comments` ficam em `raw`.
+- Critério de aceitação: **IG `status=ok` com `found > 0`** + linhas novas em
+  `videos`/`video_scores` — atendido.
+
+### Pendência (usuário): App Review do Meta
+
+O gate #10 bloqueia hashtag de terceiros até o app passar por *App Review*
+(Instagram Public Content Access). Enquanto isso o fallback own-media cobre a
+coleta. Quando o review aprovar, `ig_hashtag_search` volta a responder e o
+caminho de hashtags é usado automaticamente — nenhuma mudança de código.
