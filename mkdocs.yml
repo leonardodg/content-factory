@@ -10,6 +10,15 @@ markdown_extensions:
 nav:
   - Início: index.md
   - Roteamento: roteamento.md
+  - Manual:
+      - manual/index.md
+      - manual/guide-start.md
+      - manual/fluxo-busca.md
+      - manual/operacao.md
+      - manual/agentes.md
+      - manual/analise.md
+      - manual/anti-ban.md
+      - manual/chaves-api.md
   - Produto:
       - Ideia inicial (verbatim): produto/ideia-inicial.md
       - PRD: produto/prd.md

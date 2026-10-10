@@ -5,16 +5,15 @@
 
 ## 🔄 EM ANDAMENTO
 
-- **PR #2** `docs/manual-operacao` → `main`: manual de operação 8 capítulos
-  (CI verde, MERGEABLE, aprovado em review — aguarda merge humano; pós-merge:
-  apagar branches). *Obs.: este branch também edita HANDOFF/PLANO_TESTE_E2E —
-  resolver conflito de merge se os dois entrarem.*
-- **Branch `fix/collect-upsert-savepoint`** (playtest worker → 3 bugs fechados):
-  fix REVISÃO §6 #1 (`21ad56b`) + tooling (`57bbc23`, `c7e6712`) + ajustes de
-  review (`8347dcc`, `e79d36d`) + **fix do collector Instagram** (`fc320bf`:
-  endpoint `ig_hashtag_search`/`top_media` + fallback own-media no gate #10,
-  TDD 3 testes) — review "With fixes" aplicado; gates verde; **pronto para
-  PR/merge humano**.
+- **PR #3** [`fix/collect-upsert-savepoint` → `main`](https://github.com/leonardodg/content-factory/pull/3):
+  playtest worker — savepoint por candidato (REVISÃO §6 #1, `21ad56b`) +
+  **fix do collector Instagram** (`fc320bf`/`cb50ff9`: endpoint
+  `ig_hashtag_search`/`top_media` + fallback own-media no gate #10, TDD) +
+  tooling; reviews "With fixes" aplicados nos dois deltas; gates verde;
+  aguarda CI/merge humano.
+- **Pós-merge de PRs já entregues**: apagar branches merged local + remota
+  (`update/fundacao-2026-10-07` do PR #1, `docs/manual-operacao` do PR #2 —
+  ambos MERGED).
 
 ## ✅ CONCLUÍDO (sessão 2026-10-07 → 2026-10-10)
 
@@ -62,14 +61,29 @@
   TEST_DATABASE_URL), e2e 4 passed, ruff check/format 0, pyright strict 0,
   bandit exit 0, `alembic check` ok, pip-audit 0 vulns, privacy ok (142
   arquivos), `mkdocs build --strict` ok
+- [x] **Build do Dev Container corrigido**: serviço `python` declara o
+  diretório temporário de features como `additional_context`, permitindo ao
+  Compose passar a leitura específica requerida pelo Buildx 0.38; build via
+  Dev Containers CLI 0.89.0 concluído e container `cf-python` iniciado
+- [x] **Manual de operação** (`docs/manual/`, 8 capítulos pt-BR, humano +
+  agente): spec `docs/superpowers/specs/2026-10-09-manual-operacao-design.md`
+  + plano `docs/ai-plans/2026-10-09-manual-operacao.md` (8 tasks) executado
+  por SDD com review por task; review final da branch encontrou 2 Critical +
+  3 Important cross-chapter → fix `ea2542f` → re-review **APPROVED**;
+  ledger `.superpowers/sdd/2026-10-09-manual-operacao/progress.md`
+- [x] `credentials.md` corrigido (`ec05862`): worker lê `secrets.env` via
+  Docker secret `app_secrets`, não `env_file`; `cf-python` lê só `app.env`
 
 ## ⛔ O que falta (próximos passos aprovados)
 
-1. **CI verde no PR** → merge em `main` → apagar branches local+remota
-2. **Issues pós-merge** (backlog da REVISAO §6, exceto #1 — corrigido em
-   `21ad56b`): lock token (#2 alta), INCR+EXPIRE (#3), detalhe de erro do
-   score (#4)
-3. **Playtest worker COMPLETO** (2026-10-10): runs 123–125 `ok` nas 3
+1. **CI verde no PR #3** → merge em `main` → apagar branches do PR #3
+   local+remota (as do PR #1/#2 já merged, ver "EM ANDAMENTO")
+2. **Issues pós-merge** (backlog da REVISÃO §6 — #1 mascaramento/finally já
+   corrigido pelo savepoint neste PR): lock token (#2 alta), INCR+EXPIRE
+   (#3), detalhe de erro do score (#4) + deferrals do review do collector
+   Instagram (media_type, simetria de `#`, paginação do fallback — ver
+   `docs/ai-plans/2026-10-10-fix-instagram-collector.md`)
+3. **Playtest worker COMPLETO** (2026-10-10): runs 123–140 `ok` nas 3
    plataformas (youtube/instagram/web), `score_job scored=15`, sane checks
    verdes; bugs 2–4 diagnosticados e corrigidos (imagem stale, savepoint/
    `skipped`, collector Instagram). **Pendências do usuário**:
@@ -93,3 +107,5 @@
   primeira, playtest manual exporta a segunda (ledger T6/coord T18)
 - Deferreds de todas as tasks: ledger
   `.superpowers/sdd/2026-10-07-fundacao-coletores-banco/progress.md`
+- Deferreds do manual (~15 nits cosméticos): ledger
+  `.superpowers/sdd/2026-10-09-manual-operacao/progress.md`

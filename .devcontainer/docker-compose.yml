@@ -7,6 +7,8 @@ services:
       context: ..
       dockerfile: .devcontainer/Dockerfile
       target: dev
+      additional_contexts:
+        devcontainer_features: ${TMPDIR:-/tmp}/devcontainercli-${USER}/container-features
     volumes:
       - ..:/app
       - ${HOME}/.gitconfig:/home/appuser/.gitconfig:ro
@@ -25,15 +27,16 @@ services:
     build:
       context: ..
       dockerfile: .devcontainer/Dockerfile
-      target: worker
-    env_file: [./env/app.env, ./secrets/secrets.env]
+      target: worker 
+    env_file: [./env/app.env]
+    secrets: [app_secrets]
     environment:
       DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-contentfactory}:${POSTGRES_PASSWORD:-localdev}@postgres:5432/${POSTGRES_DB:-contentfactory}
       REDIS_URL: redis://redis:6379/0
     depends_on: [postgres, redis]
     networks: [content-factory-net]
     profiles: ["worker"]
-    command: uv run arq content_factory.infra.queue.worker.WorkerSettings
+    command: ["sh", "-c", "set -a; . /run/secrets/app_secrets; set +a; exec uv run arq content_factory.infra.queue.worker.WorkerSettings"]
 
   postgres:
     image: pgvector/pgvector:pg16
@@ -50,3 +53,7 @@ services:
     networks: [content-factory-net]
 
 volumes: { pgdata: {} }
+
+secrets:
+  app_secrets:
+    file: ./secrets/secrets.env

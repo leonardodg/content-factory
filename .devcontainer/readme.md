@@ -41,6 +41,11 @@ cp .devcontainer/env/app.env.example .devcontainer/env/app.env
 cp .devcontainer/secrets/secrets.env.example .devcontainer/secrets/secrets.env
 ```
 
+O build do serviço `python` declara o diretório temporário de features do
+Dev Containers como contexto adicional. O CLI gera `Dockerfile-with-features`
+fora do contexto principal; o Compose usa o caminho do contexto adicional para
+autorizar a leitura estritamente desse diretório no Buildx.
+
 ## Subir a stack
 
 ```bash
