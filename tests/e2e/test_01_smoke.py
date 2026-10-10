@@ -1,5 +1,4 @@
 import os
-from datetime import UTC, datetime
 from pathlib import Path
 from typing import ClassVar
 
@@ -71,9 +70,10 @@ async def test_smoke_segment_collect_score() -> None:
             limiter=NoopLimiter(),
             lock=AlwaysLock(),
         )
-        # banco de dev é compartilhado com playtests reais: isola a
-        # asserção no run desta execução (runs anteriores podem ser failed)
-        t0 = datetime.now(UTC)
+        # banco de dev é compartilhado com playtests reais E com o worker
+        # (cron 2x/dia): isola no run desta execução por id — imune a
+        # relógio e a coleta concorrente do worker
+        max_id = (await s.execute(select(func.max(CollectRunRow.id)))).scalar() or 0
         out = await collect("candles", ["youtube"], limit=5, deps=deps)
         assert out.ok and int(out.counts["inserted"]) >= 1
 
@@ -95,7 +95,7 @@ async def test_smoke_segment_collect_score() -> None:
                 await s.execute(
                     select(CollectRunRow).where(
                         CollectRunRow.collector == "youtube",
-                        CollectRunRow.started_at >= t0,
+                        CollectRunRow.id > max_id,
                     )
                 )
             )
