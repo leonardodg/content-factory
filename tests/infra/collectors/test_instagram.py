@@ -290,6 +290,43 @@ async def test_network_error_redacts_access_token() -> None:
     assert "YOUR_TOKEN_HERE" not in str(ei.value)
 
 
+@pytest.mark.asyncio
+async def test_discover_skips_image_media_type() -> None:
+    """Reels analyzer: post IMAGE (sem vídeo) não deve virar CandidateVideo."""
+
+    def _route(request: httpx.Request) -> httpx.Response:
+        path = request.url.path
+        if path.endswith("/ig_hashtag_search"):
+            return httpx.Response(200, json={"data": [{"id": "1784"}]})
+        if path.endswith("/top_media"):
+            return httpx.Response(
+                200,
+                json={
+                    "data": [
+                        {
+                            "id": "900",
+                            "caption": "vela artesanal foto",
+                            "media_type": "IMAGE",
+                            "permalink": "https://www.instagram.com/p/IMG/",
+                            "username": "velaslab",
+                        },
+                        {
+                            "id": "901",
+                            "caption": "vela artesanal video",
+                            "media_type": "VIDEO",
+                            "permalink": "https://www.instagram.com/p/VID/",
+                            "username": "velaslab",
+                        },
+                    ]
+                },
+            )
+        return httpx.Response(404, json={})
+
+    c = InstagramCollector(access_token="t", ig_user_id="42", transport=httpx.MockTransport(_route))
+    out = await c.discover(SEG, limit=5)
+    assert [v.platform_video_id for v in out] == ["901"]
+
+
 def test_register_defaults_registers_instagram() -> None:
     from content_factory.config import Settings
     from content_factory.infra.collectors import register_defaults, registry

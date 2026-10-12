@@ -15,6 +15,12 @@ FIELDS = (
     "id,caption,like_count,comments_count,timestamp,media_type,permalink,thumbnail_url,username"
 )
 
+_SKIP_MEDIA_TYPES = {"IMAGE"}
+
+
+def _is_video_like(item: dict[str, Any]) -> bool:
+    return str(item.get("media_type", "")).upper() not in _SKIP_MEDIA_TYPES
+
 
 class InstagramCollector:
     platform: ClassVar[str] = "instagram"
@@ -86,7 +92,8 @@ class InstagramCollector:
         if top is None:
             return await self._own_media(segment, limit)
         items: Any = top.get("data") or []
-        return [self._map(cast(dict[str, Any], item)) for item in items[:limit]]
+        videos = [cast(dict[str, Any], item) for item in items if _is_video_like(item)]
+        return [self._map(item) for item in videos[:limit]]
 
     async def _own_media(self, segment: SegmentConfig, limit: int) -> list[CandidateVideo]:
         """Fallback no gate #10: mídia pública da própria conta, filtrada por keyword.
@@ -106,6 +113,8 @@ class InstagramCollector:
         out: list[CandidateVideo] = []
         for raw_item in items:
             item = cast(dict[str, Any], raw_item)
+            if not _is_video_like(item):
+                continue
             caption = str(item.get("caption") or "").casefold()
             if not keywords or any(k in caption for k in keywords):
                 out.append(self._map(item))
