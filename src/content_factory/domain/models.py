@@ -115,3 +115,14 @@ class CollectRun(BaseModel):
     error_code: str | None = None
     started_at: datetime
     finished_at: datetime | None = None
+
+
+class ResearchCampaign(BaseModel):
+    """Campanha de pesquisa "rodar diariamente por N semanas" — estado de
+    fim-de-campanha persistido, porque o arq só tem cron recorrente sem fim."""
+
+    id: int
+    segment_id: int
+    started_at: datetime
+    ends_at: datetime
+    active: bool = True

@@ -1,6 +1,12 @@
 from datetime import UTC, datetime
 
-from content_factory.domain.models import DepthConfig, KeywordSignal, SegmentConfig, TrendPoint
+from content_factory.domain.models import (
+    DepthConfig,
+    KeywordSignal,
+    ResearchCampaign,
+    SegmentConfig,
+    TrendPoint,
+)
 
 
 def test_keyword_signal_defaults() -> None:
@@ -38,3 +44,9 @@ def test_segment_config_research_is_optional() -> None:
         research=DepthConfig(max_depth=3),
     )
     assert seg2.research is not None and seg2.research.max_depth == 3
+
+
+def test_research_campaign_defaults() -> None:
+    now = datetime.now(UTC)
+    c = ResearchCampaign(id=1, segment_id=2, started_at=now, ends_at=now)
+    assert c.active is True

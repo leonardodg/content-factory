@@ -1,7 +1,7 @@
 from collections.abc import Sequence
 from datetime import UTC, datetime
 
-from sqlalchemy import func, select, text
+from sqlalchemy import func, select, text, update
 from sqlalchemy.dialects.postgresql import distinct_on
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.exc import DataError, IntegrityError
@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from content_factory.app.ports import (
     CollectRunRepository,
     KeywordSignalRepository,
+    ResearchCampaignRepository,
     ScoreRepository,
     SegmentRepository,
     VideoRepository,
@@ -19,6 +20,7 @@ from content_factory.domain.models import (
     CandidateVideo,
     CollectRun,
     KeywordSignal,
+    ResearchCampaign,
     ScoreResult,
     Segment,
     SegmentConfig,
@@ -29,6 +31,7 @@ from content_factory.domain.models import (
 from content_factory.infra.db.orm import (
     CollectRunRow,
     KeywordSignalRow,
+    ResearchCampaignRow,
     SegmentRow,
     VideoMetricsRow,
     VideoRow,
@@ -251,3 +254,51 @@ class KeywordSignalRepositoryImpl(KeywordSignalRepository):
             KeywordSignal(keyword=r.keyword, source=r.source, weight=r.weight, depth=r.depth)
             for r in rows
         ]
+
+
+def _campaign_model(row: ResearchCampaignRow) -> ResearchCampaign:
+    return ResearchCampaign(
+        id=row.id,
+        segment_id=row.segment_id,
+        started_at=row.started_at,
+        ends_at=row.ends_at,
+        active=row.active,
+    )
+
+
+class ResearchCampaignRepositoryImpl(ResearchCampaignRepository):
+    def __init__(self, session: AsyncSession) -> None:
+        self._s = session
+
+    async def start(self, segment_id: int, ends_at: datetime) -> ResearchCampaign:
+        row = ResearchCampaignRow(
+            segment_id=segment_id,
+            started_at=datetime.now(UTC),
+            ends_at=ends_at,
+            active=True,
+        )
+        self._s.add(row)
+        await self._s.flush()
+        return _campaign_model(row)
+
+    async def stop(self, segment_id: int) -> None:
+        stmt = (
+            update(ResearchCampaignRow)
+            .where(ResearchCampaignRow.segment_id == segment_id, ResearchCampaignRow.active)
+            .values(active=False)
+        )
+        await self._s.execute(stmt)
+
+    async def active_for_segment(self, segment_id: int) -> ResearchCampaign | None:
+        stmt = (
+            select(ResearchCampaignRow)
+            .where(
+                ResearchCampaignRow.segment_id == segment_id,
+                ResearchCampaignRow.active,
+                ResearchCampaignRow.ends_at > datetime.now(UTC),
+            )
+            .order_by(ResearchCampaignRow.started_at.desc())
+            .limit(1)
+        )
+        row = (await self._s.execute(stmt)).scalar_one_or_none()
+        return _campaign_model(row) if row is not None else None

@@ -6,6 +6,7 @@ from content_factory.domain.models import (
     CandidateVideo,
     CollectRun,
     KeywordSignal,
+    ResearchCampaign,
     ScoreResult,
     Segment,
     SegmentConfig,
@@ -81,6 +82,14 @@ class CollectRunRepository(Protocol):
     async def record(self, run: CollectRun) -> int: ...
     async def status_counts(self, segment_id: int, since: datetime) -> dict[str, int]:
         """Contagem de runs por status a partir de `since` (janela do `cf status`)."""
+        ...
+
+
+class ResearchCampaignRepository(Protocol):
+    async def start(self, segment_id: int, ends_at: datetime) -> ResearchCampaign: ...
+    async def stop(self, segment_id: int) -> None: ...
+    async def active_for_segment(self, segment_id: int) -> ResearchCampaign | None:
+        """Campanha ativa e não vencida (ends_at > now) do segmento, se houver."""
         ...
 
 

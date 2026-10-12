@@ -3,6 +3,7 @@ from typing import Any
 
 from pgvector.sqlalchemy import Vector
 from sqlalchemy import (
+    Boolean,
     DateTime,
     Float,
     ForeignKey,
@@ -232,3 +233,13 @@ class KeywordSignalRow(Base):
     weight: Mapped[float] = mapped_column(Float, default=0.0)
     depth: Mapped[int] = mapped_column(Integer, default=0)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class ResearchCampaignRow(Base):
+    __tablename__ = "research_campaigns"
+    __table_args__ = (Index("ix_research_campaigns_segment_id_active", "segment_id", "active"),)
+    id: Mapped[int] = mapped_column(primary_key=True)
+    segment_id: Mapped[int] = mapped_column(ForeignKey("segments.id"))
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    ends_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    active: Mapped[bool] = mapped_column(Boolean, default=True)

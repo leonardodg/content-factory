@@ -25,6 +25,7 @@ from content_factory.infra.db.orm import (
 from content_factory.infra.db.repositories import (
     CollectRunRepositoryImpl,
     KeywordSignalRepositoryImpl,
+    ResearchCampaignRepositoryImpl,
     ScoreRepositoryImpl,
     SegmentRepositoryImpl,
     VideoRepositoryImpl,
@@ -449,3 +450,70 @@ async def test_keyword_signal_top_for_segment_orders_by_weight_desc() -> None:
         )
         top = await repo.top_for_segment(seg.id, source=None, limit=10)
         assert [s.keyword for s in top] == ["b", "a"]
+
+
+@requires_infra
+async def test_research_campaign_start_and_active_for_segment() -> None:
+    engine = create_async_engine(os.environ["TEST_DATABASE_URL"])
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    async with factory() as s:
+        await s.rollback()
+        seg = await SegmentRepositoryImpl(s).upsert(
+            SegmentConfig(
+                slug=f"teste-rc-{uuid4().hex[:8]}",
+                name="Teste RC",
+                platforms=["web"],
+                keywords=["k"],
+            )
+        )
+        repo = ResearchCampaignRepositoryImpl(s)
+        ends = datetime.now(UTC) + timedelta(weeks=4)
+        campaign = await repo.start(seg.id, ends)
+        assert campaign.id > 0 and campaign.active is True
+        active = await repo.active_for_segment(seg.id)
+        assert active is not None and active.id == campaign.id
+    await engine.dispose()
+
+
+@requires_infra
+async def test_research_campaign_expired_not_active() -> None:
+    engine = create_async_engine(os.environ["TEST_DATABASE_URL"])
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    async with factory() as s:
+        await s.rollback()
+        seg = await SegmentRepositoryImpl(s).upsert(
+            SegmentConfig(
+                slug=f"teste-rc-{uuid4().hex[:8]}",
+                name="Teste RC",
+                platforms=["web"],
+                keywords=["k"],
+            )
+        )
+        repo = ResearchCampaignRepositoryImpl(s)
+        past = datetime.now(UTC) - timedelta(weeks=1)
+        await repo.start(seg.id, past)  # vencida já na criação
+        assert await repo.active_for_segment(seg.id) is None
+    await engine.dispose()
+
+
+@requires_infra
+async def test_research_campaign_stop_removes_from_active() -> None:
+    engine = create_async_engine(os.environ["TEST_DATABASE_URL"])
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    async with factory() as s:
+        await s.rollback()
+        seg = await SegmentRepositoryImpl(s).upsert(
+            SegmentConfig(
+                slug=f"teste-rc-{uuid4().hex[:8]}",
+                name="Teste RC",
+                platforms=["web"],
+                keywords=["k"],
+            )
+        )
+        repo = ResearchCampaignRepositoryImpl(s)
+        ends = datetime.now(UTC) + timedelta(weeks=4)
+        await repo.start(seg.id, ends)
+        assert await repo.active_for_segment(seg.id) is not None
+        await repo.stop(seg.id)
+        assert await repo.active_for_segment(seg.id) is None
+    await engine.dispose()
