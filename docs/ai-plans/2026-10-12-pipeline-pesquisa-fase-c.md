@@ -19,7 +19,7 @@ vindas do pipeline de pesquisa, não só `segment.keywords` estáticas.
   dois Protocols (`Collector` E `SocialDiscoverer`) — sem herança, Python
   estrutural já resolve, só precisa dos dois métodos presentes na classe.
 
-- [ ] **Step 1: Escrever o teste falhando**
+- [x] **Step 1: Escrever o teste falhando**
 
 ```python
 @pytest.mark.asyncio
@@ -34,12 +34,12 @@ async def test_discover_by_keywords_uses_union_of_keywords_and_hashtags() -> Non
     assert ids == {"18001", "18002"}  # ambos batem: "vela" (hashtag sem #) + "sabonete" (keyword)
 ```
 
-- [ ] **Step 2: Rodar e confirmar falha**
+- [x] **Step 2: Rodar e confirmar falha**
 
 Run: `uv run pytest tests/infra/collectors/test_instagram.py::test_discover_by_keywords_uses_union_of_keywords_and_hashtags -v`
 Expected: FAIL — `AttributeError: 'InstagramCollector' object has no attribute 'discover_by_keywords'`.
 
-- [ ] **Step 3: Implementar**
+- [x] **Step 3: Implementar**
 
 Extrair a lógica de paginação+filtro de `_own_media` (Fase 0, Task 4) para
 um helper privado parametrizado por lista de termos, e reescrever
@@ -103,18 +103,18 @@ exato de `_own_media` pode ter pequenas diferenças da Task 4 original;
 preservar `gate_hits`/filtro/paginação já existentes, só generalizar o
 parâmetro de filtro de "keywords do segmento" pra "lista de termos".)
 
-- [ ] **Step 4: Rodar e confirmar sucesso**
+- [x] **Step 4: Rodar e confirmar sucesso**
 
 Run: `uv run pytest tests/infra/collectors/test_instagram.py -v`
 Expected: PASS em todos (os testes antigos de `_own_media`/`discover`
 continuam valendo via `discover` → `_own_media` → `_own_media_by_terms`).
 
-- [ ] **Step 5: `pyright strict`**
+- [x] **Step 5: `pyright strict`**
 
 Run: `uv run pyright src/content_factory/infra/collectors/instagram.py`
 Expected: 0 erros.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add src/content_factory/infra/collectors/instagram.py tests/infra/collectors/test_instagram.py
@@ -123,10 +123,10 @@ git commit -m "feat(instagram): discover_by_keywords reusa _own_media com termos
 
 ### Task C2: Gates + docs
 
-- [ ] Gates completos (pytest, ruff, pyright, bandit, pip-audit, mkdocs
+- [x] Gates completos (pytest, ruff, pyright, bandit, pip-audit, mkdocs
   --strict, check_privacy.py).
-- [ ] Atualizar `docs/HANDOFF.md` (Fase C concluída).
-- [ ] Copiar plano para `docs/ai-plans/<data>-pipeline-pesquisa-fase-c.md`.
-- [ ] Commit final.
+- [x] Atualizar `docs/HANDOFF.md` (Fase C concluída).
+- [x] Copiar plano para `docs/ai-plans/<data>-pipeline-pesquisa-fase-c.md`.
+- [x] Commit final.
 
 > **Nota**: plano de intenção detalhada (não SDD travado como a Fase A) — leia os arquivos reais citados antes de executar e ajuste os detalhes finos; a arquitetura (Protocols, nomes, pontos de integração) é o que está fixado aqui.

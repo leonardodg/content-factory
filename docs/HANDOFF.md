@@ -5,16 +5,21 @@
 
 ## 🔄 EM ANDAMENTO
 
-Branch `feat/pipeline-pesquisa-fase-a` — Fase A do pipeline de pesquisa
-multi-plataforma (ver `docs/ai-plans/2026-10-12-pipeline-pesquisa-fase-a.md`).
-Tasks 1–6 concluídas e gates verdes (ver seção "Fase A" abaixo); falta:
-PR + merge. Próximas fases (C→D→E→B) são planos futuros em
-`docs/ai-plans/2026-10-12-pipeline-pesquisa-fase-{c,d,e,b}.md` — nenhum
-provider real existe ainda.
+Branch `feat/pipeline-pesquisa-fase-c` — Fase C do pipeline de pesquisa
+(Instagram orientado a keyword, ver
+`docs/ai-plans/2026-10-12-pipeline-pesquisa-fase-c.md`). Tasks C1–C2
+concluídas e gates verdes; falta: PR + merge. Próximas fases
+(D→E→B) são planos futuros em
+`docs/ai-plans/2026-10-12-pipeline-pesquisa-fase-{d,e,b}.md` — nenhum
+provider real existe ainda (Fase C só liga o SocialDiscoverer do
+Instagram ao pipeline).
 
 ## ✅ CONCLUÍDO
 
 ### Fase A — fundação do pipeline de pesquisa (2026-10-12)
+
+**PR #4 MERGED** (`a6f60f5`): fundação + Fase 0 (fix Instagram) num único
+PR (main local já estava 8 commits à frente do remoto).
 
 Executada via executing-plans na branch `feat/pipeline-pesquisa-fase-a`
 (plano split e copiado para `docs/ai-plans/2026-10-12-pipeline-pesquisa-fase-a.md`
