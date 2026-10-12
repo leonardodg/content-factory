@@ -5,10 +5,30 @@
 
 ## 🔄 EM ANDAMENTO
 
-_(nenhuma branch de feature aberta — próxima fase: B, quando o usuário decidir
-executar; plano pronto em `docs/ai-plans/2026-10-12-pipeline-pesquisa-fase-b.md`.)_
+_(nenhuma branch de feature aberta — roadmap A→C→D→E→B COMPLETO. Pipeline
+de pesquisa multi-plataforma funcional: IG/YT/TikTok discover_by_keywords,
+research_job com cron 07:00, CLI cf research start/stop/status, Google
+Trends real via pytrends com circuit breaker. `web` (web-suggest) continua
+noop — decisão pendente do usuário.)_
 
 ## ✅ CONCLUÍDO
+
+### Fase B — Google Trends real via pytrends (2026-10-12)
+
+Branch `feat/pipeline-pesquisa-fase-b` (4 commits, 175 passed + pyright 0).
+Executada via executing-plans, plano
+`docs/ai-plans/2026-10-12-pipeline-pesquisa-fase-b.md` (TDD, RED verificado).
+
+- [x] **Task B1** (`e7ec12b`): dependência `pytrends` 4.9.2 (Apache 2.0,
+  pip-audit limpo; puxa numpy+pandas).
+- [x] **Task B2** (`dd16ad1`): `TrendsGoogleProvider` — `asyncio.to_thread`
+  (precedente web.py), mapeamento de erros, circuit breaker 5 falhas →
+  cooldown 3 ciclos (5 testes).
+- [x] **Task B3** (`263c26f`): worker `create_app_deps` usa
+  `TrendsGoogleProvider` real (substitui `_NoopTrendsProvider`).
+- [x] **Task B4**: gates completos (pytest 175 passed, ruff/format 0,
+  pyright 0, alembic ok, bandit 0, mkdocs strict ok, privacy 178) +
+  ADR-0005 (risco não-oficial do pytrends).
 
 ### Fase E — YouTube/TikTok discover_by_keywords (2026-10-12)
 

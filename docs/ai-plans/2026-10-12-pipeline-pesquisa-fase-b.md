@@ -11,10 +11,10 @@ faz sentido ter o resto do pipeline (C/D/E) validado e estável primeiro.
 
 ### Task B1: Adicionar dependência `pytrends`
 
-- [ ] `uv add pytrends`, conferir licença/CVEs conhecidos
+- [x] `uv add pytrends`, conferir licença/CVEs conhecidos
   (`uv run pip-audit` já pega isso no gate, mas checar manualmente antes
   de commitar o lockfile).
-- [ ] Commit: `chore: adiciona dependencia pytrends`
+- [x] Commit: `chore: adiciona dependencia pytrends`
 
 ### Task B2: `infra/collectors/trends_google.py`
 
@@ -49,8 +49,8 @@ TDD: fixture de resposta gravada do pytrends (gravar uma resposta real
 uma vez, versionar como fixture — não bater na rede real nos testes),
 teste de mapeamento de erro, teste do circuit breaker.
 
-- [ ] Steps de TDD completos.
-- [ ] Commit: `feat(trends): TrendsGoogleProvider via pytrends com circuit breaker`
+- [x] Steps de TDD completos.
+- [x] Commit: `feat(trends): TrendsGoogleProvider via pytrends com circuit breaker`
 
 ### Task B3: Registrar no composition root
 
@@ -61,13 +61,13 @@ teste de mapeamento de erro, teste do circuit breaker.
 Trocar o provider "noop" temporário (Task D2) pelo `TrendsGoogleProvider`
 real agora que existe.
 
-- [ ] Commit: `feat(worker): research_job usa TrendsGoogleProvider real`
+- [x] Commit: `feat(worker): research_job usa TrendsGoogleProvider real`
 
 ### Task B4: Gates + docs
 
-- [ ] Gates completos (pip-audit cobre a dependência nova).
-- [ ] ADR novo ou seção em ADR existente documentando o risco "não-oficial"
+- [x] Gates completos (pip-audit cobre a dependência nova).
+- [x] ADR novo ou seção em ADR existente documentando o risco "não-oficial"
   do pytrends, igual ao que já existe para TikTok-Api (`ADR-0003`).
-- [ ] `docs/HANDOFF.md` atualizado, plano copiado, commit final.
+- [x] `docs/HANDOFF.md` atualizado, plano copiado, commit final.
 
 > **Nota**: plano de intenção detalhada (não SDD travado como a Fase A) — leia os arquivos reais citados antes de executar e ajuste os detalhes finos; a arquitetura (Protocols, nomes, pontos de integração) é o que está fixado aqui.
