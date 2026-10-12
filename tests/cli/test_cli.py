@@ -304,3 +304,125 @@ def test_status_unknown_segment_exit_1(monkeypatch: pytest.MonkeyPatch) -> None:
     assert result.exit_code == 1
     assert '"ok": false' in result.stdout
     assert '"code": "segment_not_found"' in result.stdout
+
+
+def _fake_segment_id(_slug: str) -> int:
+    return 42
+
+
+def test_research_start_success(monkeypatch: pytest.MonkeyPatch) -> None:
+    from datetime import UTC, datetime, timedelta
+
+    from content_factory.domain.models import ResearchCampaign
+
+    calls: list[tuple[int, datetime]] = []
+
+    class _Campaigns:
+        async def start(self, segment_id: int, ends_at: datetime) -> ResearchCampaign:
+            calls.append((segment_id, ends_at))
+            return ResearchCampaign(
+                id=1, segment_id=segment_id, started_at=datetime.now(UTC), ends_at=ends_at
+            )
+
+        async def stop(self, segment_id: int) -> None:
+            raise NotImplementedError
+
+        async def active_for_segment(self, segment_id: int) -> ResearchCampaign | None:
+            raise NotImplementedError
+
+    monkeypatch.setattr("content_factory.cli.main._research_campaigns", lambda: _Campaigns())
+    monkeypatch.setattr("content_factory.cli.main._segment_id", _fake_segment_id)
+    result = runner.invoke(app, ["research", "start", "--segment", "candles", "--weeks", "6"])
+    assert result.exit_code == 0
+    assert '"ok": true' in result.stdout
+    assert '"command": "research.start"' in result.stdout
+    assert calls and calls[0][0] == 42
+    delta = calls[0][1] - datetime.now(UTC)
+    assert timedelta(days=40) < delta < timedelta(days=44)  # ~6 semanas
+
+
+def test_research_stop_success(monkeypatch: pytest.MonkeyPatch) -> None:
+    stopped: list[int] = []
+
+    class _Campaigns:
+        async def start(self, segment_id: int, ends_at: object) -> object:
+            raise NotImplementedError
+
+        async def stop(self, segment_id: int) -> None:
+            stopped.append(segment_id)
+
+        async def active_for_segment(self, segment_id: int) -> object:
+            raise NotImplementedError
+
+    monkeypatch.setattr("content_factory.cli.main._research_campaigns", lambda: _Campaigns())
+    monkeypatch.setattr("content_factory.cli.main._segment_id", _fake_segment_id)
+    result = runner.invoke(app, ["research", "stop", "--segment", "candles"])
+    assert result.exit_code == 0
+    assert '"ok": true' in result.stdout
+    assert stopped == [42]
+
+
+def test_research_status_active(monkeypatch: pytest.MonkeyPatch) -> None:
+    from datetime import UTC, datetime, timedelta
+
+    from content_factory.domain.models import ResearchCampaign
+
+    campaign = ResearchCampaign(
+        id=1,
+        segment_id=42,
+        started_at=datetime.now(UTC),
+        ends_at=datetime.now(UTC) + timedelta(weeks=4),
+    )
+
+    class _Campaigns:
+        async def start(self, segment_id: int, ends_at: datetime) -> ResearchCampaign:
+            raise NotImplementedError
+
+        async def stop(self, segment_id: int) -> None:
+            raise NotImplementedError
+
+        async def active_for_segment(self, segment_id: int) -> ResearchCampaign | None:
+            return campaign
+
+    monkeypatch.setattr("content_factory.cli.main._research_campaigns", lambda: _Campaigns())
+    monkeypatch.setattr("content_factory.cli.main._segment_id", _fake_segment_id)
+    result = runner.invoke(app, ["research", "status", "--segment", "candles"])
+    assert result.exit_code == 0
+    assert '"ok": true' in result.stdout
+    assert '"active": true' in result.stdout
+
+
+def test_research_status_inactive(monkeypatch: pytest.MonkeyPatch) -> None:
+    class _Campaigns:
+        async def start(self, segment_id: int, ends_at: object) -> object:
+            raise NotImplementedError
+
+        async def stop(self, segment_id: int) -> None:
+            raise NotImplementedError
+
+        async def active_for_segment(self, segment_id: int) -> object:
+            return None
+
+    monkeypatch.setattr("content_factory.cli.main._research_campaigns", lambda: _Campaigns())
+    monkeypatch.setattr("content_factory.cli.main._segment_id", _fake_segment_id)
+    result = runner.invoke(app, ["research", "status", "--segment", "candles"])
+    assert result.exit_code == 0
+    assert '"ok": true' in result.stdout
+    assert '"active": false' in result.stdout
+
+
+def test_research_unknown_segment_exit_1(monkeypatch: pytest.MonkeyPatch) -> None:
+    def _missing(slug: str) -> int:
+        raise SegmentNotFound(slug)
+
+    monkeypatch.setattr("content_factory.cli.main._segment_id", _missing)
+    result = runner.invoke(app, ["research", "status", "--segment", "nao-existe"])
+    assert result.exit_code == 1
+    assert '"ok": false' in result.stdout
+    assert '"code": "segment_not_found"' in result.stdout
+
+
+def test_research_invalid_action_exit_1() -> None:
+    """Subcomando inválido é rejeitado pelo typer (exit 2 = usage error padrão)."""
+    result = runner.invoke(app, ["research", "nope", "--segment", "candles"])
+    assert result.exit_code == 2  # typer padrão p/ subcomando desconhecido via CliRunner

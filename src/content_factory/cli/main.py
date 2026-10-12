@@ -9,16 +9,22 @@ import typer
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from content_factory.app.collect import CollectDeps, CollectOutcome, collect
-from content_factory.app.ports import CollectRunRepository, SegmentRepository
+from content_factory.app.ports import (
+    CollectRunRepository,
+    ResearchCampaignRepository,
+    SegmentRepository,
+)
 from content_factory.app.score import ScoreDeps, ScoreOutcome, score
 from content_factory.cli.output import dumps, envelope_err, envelope_ok, exit_code_for
 from content_factory.domain.errors import CollectorError, DomainError, SegmentNotFound
-from content_factory.domain.models import CandidateVideo
+from content_factory.domain.models import CandidateVideo, ResearchCampaign
 from content_factory.infra.redact import redact
 
 app = typer.Typer(no_args_is_help=True)
 segment_app = typer.Typer()
 app.add_typer(segment_app, name="segment")
+research_app = typer.Typer(no_args_is_help=True)
+app.add_typer(research_app, name="research")
 
 
 def _usage_command(exc: typer.TyperException) -> str:
@@ -304,6 +310,111 @@ def status_cmd(segment: str = typer.Option(..., "--segment", help="slug do segme
         print(dumps(envelope_err("status", "internal_error", redact(str(exc)))))
         raise typer.Exit(exit_code_for(ok=False)) from exc
     print(dumps(envelope_ok("status", runs=counts)))
+    raise typer.Exit(exit_code_for(ok=True))
+
+
+# --- research campaign commands (Fase D) ---
+
+
+def _segment_id(slug: str) -> int:
+    """Resolve slug → id para os comandos research (reusa o padrão existente)."""
+    from content_factory.config import get_settings
+    from content_factory.infra.db.base import get_session_factory
+    from content_factory.infra.db.repositories import SegmentRepositoryImpl
+
+    factory: async_sessionmaker[AsyncSession] = get_session_factory(get_settings())
+
+    async def _get() -> int:
+        async with factory() as session:
+            return (await SegmentRepositoryImpl(session).get_by_slug(slug)).id
+
+    return asyncio.run(_get())
+
+
+def _research_campaigns() -> ResearchCampaignRepository:
+    """Composition root: repositório real de campanhas (seam monkeypatchável)."""
+    from content_factory.config import get_settings
+    from content_factory.infra.db.base import get_session_factory
+    from content_factory.infra.db.repositories import ResearchCampaignRepositoryImpl
+
+    factory: async_sessionmaker[AsyncSession] = get_session_factory(get_settings())
+
+    class _Repo:
+        async def start(self, segment_id: int, ends_at: datetime) -> ResearchCampaign:
+            async with factory() as session:
+                result = await ResearchCampaignRepositoryImpl(session).start(segment_id, ends_at)
+                await session.commit()
+                return result
+
+        async def stop(self, segment_id: int) -> None:
+            async with factory() as session:
+                await ResearchCampaignRepositoryImpl(session).stop(segment_id)
+                await session.commit()
+
+        async def active_for_segment(self, segment_id: int) -> ResearchCampaign | None:
+            async with factory() as session:
+                return await ResearchCampaignRepositoryImpl(session).active_for_segment(segment_id)
+
+    return _Repo()
+
+
+@research_app.command("start")
+def research_start(
+    segment: str = typer.Option(..., "--segment", help="slug do segmento"),
+    weeks: int = typer.Option(4, "--weeks", min=1, max=52, help="duração da campanha em semanas"),
+) -> None:
+    """Inicia uma campanha de pesquisa (o worker só roda com campanha ativa)."""
+    try:
+        seg_id = _segment_id(segment)
+        ends_at = datetime.now(UTC) + timedelta(weeks=weeks)
+        campaigns = _research_campaigns()
+        result = asyncio.run(campaigns.start(seg_id, ends_at))
+    except SegmentNotFound as exc:
+        print(dumps(envelope_err("research.start", "segment_not_found", redact(str(exc)))))
+        raise typer.Exit(exit_code_for(ok=False)) from exc
+    except Exception as exc:
+        print(dumps(envelope_err("research.start", "internal_error", redact(str(exc)))))
+        raise typer.Exit(exit_code_for(ok=False)) from exc
+    print(dumps(envelope_ok("research.start", ends_at=result.ends_at.isoformat())))
+    raise typer.Exit(exit_code_for(ok=True))
+
+
+@research_app.command("stop")
+def research_stop(segment: str = typer.Option(..., "--segment", help="slug do segmento")) -> None:
+    """Para a campanha de pesquisa do segmento (ativas → inativas)."""
+    try:
+        seg_id = _segment_id(segment)
+        campaigns = _research_campaigns()
+        asyncio.run(campaigns.stop(seg_id))
+    except SegmentNotFound as exc:
+        print(dumps(envelope_err("research.stop", "segment_not_found", redact(str(exc)))))
+        raise typer.Exit(exit_code_for(ok=False)) from exc
+    except Exception as exc:
+        print(dumps(envelope_err("research.stop", "internal_error", redact(str(exc)))))
+        raise typer.Exit(exit_code_for(ok=False)) from exc
+    print(dumps(envelope_ok("research.stop", segment=segment)))
+    raise typer.Exit(exit_code_for(ok=True))
+
+
+@research_app.command("status")
+def research_status(segment: str = typer.Option(..., "--segment", help="slug do segmento")) -> None:
+    """Mostra se há campanha ativa para o segmento."""
+    try:
+        seg_id = _segment_id(segment)
+        campaigns = _research_campaigns()
+        campaign = asyncio.run(campaigns.active_for_segment(seg_id))
+    except SegmentNotFound as exc:
+        print(dumps(envelope_err("research.status", "segment_not_found", redact(str(exc)))))
+        raise typer.Exit(exit_code_for(ok=False)) from exc
+    except Exception as exc:
+        print(dumps(envelope_err("research.status", "internal_error", redact(str(exc)))))
+        raise typer.Exit(exit_code_for(ok=False)) from exc
+    if campaign is not None:
+        print(
+            dumps(envelope_ok("research.status", active=True, ends_at=campaign.ends_at.isoformat()))
+        )
+    else:
+        print(dumps(envelope_ok("research.status", active=False)))
     raise typer.Exit(exit_code_for(ok=True))
 
 
