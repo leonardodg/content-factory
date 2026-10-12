@@ -56,6 +56,7 @@ async def collect(
             run = CollectRun(
                 collector=collector.platform, segment_id=segment.id, started_at=started
             )
+            gate_hits_before = getattr(collector, "gate_hits", 0)
             try:
                 await deps.limiter.acquire(collector.platform)
                 found = await collector.discover(segment, limit)
@@ -70,15 +71,21 @@ async def collect(
                 counts["inserted"] = int(counts["inserted"]) + stats.inserted
                 counts["updated"] = int(counts["updated"]) + stats.updated
                 counts["skipped"] = int(counts["skipped"]) + stats.skipped
-                gate_hits = getattr(collector, "gate_hits", 0)
-                if gate_hits:
-                    counts[f"{collector.platform}_gate_hits"] = gate_hits
             except CollectorError as exc:
                 run.status = "blocked" if exc.code == "blocked" else "failed"
                 run.error_code = exc.code
                 errors += 1
                 counts["failed"] = int(counts["failed"]) + 1
             finally:
+                # Lido no finally (não só no caminho de sucesso) para não
+                # perder o contador quando discover() levanta exceção DEPOIS
+                # de já ter incrementado gate_hits (REVISÃO: Important #1).
+                # Delta before/after porque o collector é singleton no
+                # registry — self.gate_hits acumula entre runs (Important #2).
+                gate_hits_after = getattr(collector, "gate_hits", 0)
+                gate_hits_delta = gate_hits_after - gate_hits_before
+                if gate_hits_delta:
+                    counts[f"{collector.platform}_gate_hits"] = gate_hits_delta
                 run.finished_at = datetime.now(UTC)
                 await deps.runs.record(run)
                 runs.append(run)
