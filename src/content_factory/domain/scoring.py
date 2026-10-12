@@ -11,10 +11,13 @@ WEIGHTS = {
 }
 
 
-def engagement_rate(m: VideoMetrics) -> float:
+def engagement_rate(m: VideoMetrics) -> float | None:
+    """Taxa de engajamento ponderada. `None` se views ausente (não zero)."""
+    if m.views is None:
+        return None  # métrica ausente — não é zero
     if m.views <= 0:
         return 0.0
-    weighted = m.likes * 1 + m.comments * 2 + m.shares * 3 + m.saves * 4
+    weighted = (m.likes or 0) * 1 + (m.comments or 0) * 2 + (m.shares or 0) * 3 + (m.saves or 0) * 4
     return round(weighted / m.views * 100, 2)
 
 
@@ -32,32 +35,44 @@ def trend_decay(published_at: datetime | None, now: datetime) -> str:
 def viral_score(
     m: VideoMetrics, relevance: float, now: datetime, published_at: datetime | None
 ) -> ScoreResult:
-    performance = min(m.views / 1_000_000 * 100, 100.0)
-    eng = min(engagement_rate(m) * 10, 100.0)  # 10%+ = 100
+    # Fase G: métrica None = ausente → excluída da média (renormaliza pesos),
+    # métrica 0 = reportada como zero → conta como zero de verdade.
+    components: dict[str, float | None] = {}
+
+    if m.views is not None:
+        components["performance"] = min(m.views / 1_000_000 * 100, 100.0)
+    else:
+        components["performance"] = None
+
+    eng = engagement_rate(m)
+    components["engagement"] = min(eng * 10, 100.0) if eng is not None else None
+
     decay = trend_decay(published_at, now)
     age_days = (now - published_at).days if published_at else 999
-    velocity = (
+    components["velocity"] = (
         100.0 if age_days <= 1 else 80.0 if age_days <= 3 else 50.0 if age_days <= 7 else 20.0
     )
-    recency = {"none": 50.0, "low": 100.0, "medium": 50.0, "high": 15.0}[decay]
-    rel = min(max(relevance, 0.0), 1.0) * 100
+    components["recency"] = {"none": 50.0, "low": 100.0, "medium": 50.0, "high": 15.0}[decay]
+    components["relevance"] = min(max(relevance, 0.0), 1.0) * 100
 
-    total = round(
-        performance * WEIGHTS["performance"]
-        + velocity * WEIGHTS["velocity"]
-        + eng * WEIGHTS["engagement"]
-        + rel * WEIGHTS["relevance"]
-        + recency * WEIGHTS["recency"],
-        2,
-    )
+    # média ponderada SÓ dos componentes disponíveis (None excluído)
+    available = {k: v for k, v in components.items() if v is not None}
+    if available:
+        weight_sum = sum(WEIGHTS[k] for k in available)
+        total = round(sum(available[k] * WEIGHTS[k] for k in available) / weight_sum, 2)
+    else:
+        total = 0.0
+
+    # zero reportado (não ausente) em todas as métricas E relevância zero → 0.0
     if m.views == 0 and m.likes == 0 and relevance == 0:
         total = 0.0
+
     return ScoreResult(
         total=total,
-        performance=round(performance, 2),
-        velocity=velocity,
-        engagement=round(eng, 2),
-        relevance=round(rel, 2),
-        recency=recency,
+        performance=components["performance"],
+        velocity=components["velocity"] or 0.0,
+        engagement=components["engagement"],
+        relevance=components["relevance"] or 0.0,
+        recency=components["recency"] or 0.0,
         trend_decay=decay,
     )

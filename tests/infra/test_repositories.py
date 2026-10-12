@@ -157,8 +157,9 @@ async def test_upsert_candidates_skips_bad_candidate_keeps_txn_alive() -> None:
 async def test_latest_for_segment_picks_newest_metric_and_zero_fills() -> None:
     """1 snapshot por vídeo do segmento; métrica mais recente vence (DISTINCT ON).
 
-    Vídeo sem captura em video_metrics entra zerado — `cf score` precisa
-    pontuar tudo que o `cf collect` vinculou ao segmento.
+    Vídeo sem captura em video_metrics entra com métricas None (Fase G:
+    ausência ≠ zero) — `cf score` precisa pontuar tudo que o `cf collect`
+    vinculou ao segmento, sem penalizar ausência como desempenho zero.
     """
     engine = create_async_engine(os.environ["TEST_DATABASE_URL"])
     factory = async_sessionmaker(engine, expire_on_commit=False)
@@ -189,7 +190,7 @@ async def test_latest_for_segment_picks_newest_metric_and_zero_fills() -> None:
         assert set(snaps) == {vid, vid_vazio}  # 1 linha por vídeo, inclusive sem métrica
         assert snaps[vid].metrics.views == 9_999  # captura mais recente vence a antiga
         assert snaps[vid].metrics.likes == 50
-        assert snaps[vid_vazio].metrics.views == 0
+        assert snaps[vid_vazio].metrics.views is None  # Fase G: ausente ≠ zero
     await engine.dispose()
 
 

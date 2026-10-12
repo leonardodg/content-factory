@@ -42,11 +42,14 @@ class CandidateVideo(BaseModel):
 
 
 class VideoMetrics(BaseModel):
-    views: int = 0
-    likes: int = 0
-    comments: int = 0
-    shares: int = 0
-    saves: int = 0
+    """Métricas de um vídeo — `None` = métrica AUSENTE (não reportada),
+    `0` = métrica reportada como zero. Fase G: scoring não penaliza ausência."""
+
+    views: int | None = None
+    likes: int | None = None
+    comments: int | None = None
+    shares: int | None = None
+    saves: int | None = None
 
 
 class VideoSnapshot(BaseModel):
@@ -60,10 +63,12 @@ class VideoSnapshot(BaseModel):
 
 
 class ScoreResult(BaseModel):
+    """Resultado do scoring — `None` em performance/engagement = métrica ausente."""
+
     total: float
-    performance: float
+    performance: float | None = None
     velocity: float
-    engagement: float
+    engagement: float | None = None
     relevance: float
     recency: float
     trend_decay: str

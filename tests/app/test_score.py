@@ -83,13 +83,45 @@ async def test_score_writes_one_result_per_video() -> None:
 
 
 async def test_zero_metrics_totals_zero() -> None:
-    zero = VideoSnapshot(video_id=9, title="x", published_at=None, metrics=VideoMetrics())
+    """Métricas reportadas como ZERO (não ausentes) + relevância zero → total 0.0."""
+    zero = VideoSnapshot(
+        video_id=9,
+        title="x",
+        published_at=None,
+        metrics=VideoMetrics(views=0, likes=0, comments=0, shares=0, saves=0),
+    )
     scores = FakeScores()
     deps = ScoreDeps(
         videos=FakeVideos([zero]), scores=scores, segment=SEG, keywords=["vela"], clock=lambda: NOW
     )
     await score(deps)
     assert scores.saved[0][1].total == 0.0
+
+
+async def test_none_metrics_not_penalized_as_zero() -> None:
+    """Fase G: métricas AUSENTES (None) não são penalizadas como zero."""
+    from content_factory.domain.models import VideoMetrics as VM
+
+    none_metrics = VideoSnapshot(
+        video_id=10,
+        title="x",
+        published_at=None,
+        metrics=VM(views=None, likes=None, comments=None, shares=None, saves=None),
+    )
+    scores = FakeScores()
+    deps = ScoreDeps(
+        videos=FakeVideos([none_metrics]),
+        scores=scores,
+        segment=SEG,
+        keywords=["vela"],
+        clock=lambda: NOW,
+    )
+    await score(deps)
+    r = scores.saved[0][1]
+    # relevância zero, mas velocity/recency ainda pontuam (não colapsa em 0)
+    assert r.total > 0.0
+    assert r.performance is None  # ausente, não zero
+    assert r.engagement is None
 
 
 async def test_relevance_counts_keyword_hits() -> None:

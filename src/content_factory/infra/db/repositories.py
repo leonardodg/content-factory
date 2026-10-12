@@ -44,14 +44,17 @@ from content_factory.infra.db.orm import (
 
 
 def _snapshot(video: VideoRow, m: VideoMetricsRow | None) -> VideoSnapshot:
-    """LEFT JOIN sem match vira `None` ⇒ métricas zeradas (vídeo ainda não capturado)."""
+    """LEFT JOIN sem match vira `None` ⇒ métricas None (vídeo ainda não capturado).
+
+    Fase G: `None` ≠ `0` — métrica ausente não é penalizada como zero.
+    """
     metrics = (
         VideoMetrics(
-            views=m.views or 0,
-            likes=m.likes or 0,
-            comments=m.comments or 0,
-            shares=m.shares or 0,
-            saves=m.saves or 0,
+            views=m.views,
+            likes=m.likes,
+            comments=m.comments,
+            shares=m.shares,
+            saves=m.saves,
         )
         if m is not None
         else VideoMetrics()
