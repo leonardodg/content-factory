@@ -290,6 +290,117 @@ async def test_network_error_redacts_access_token() -> None:
     assert "YOUR_TOKEN_HERE" not in str(ei.value)
 
 
+@pytest.mark.asyncio
+async def test_discover_skips_image_media_type() -> None:
+    """Reels analyzer: post IMAGE (sem vídeo) não deve virar CandidateVideo."""
+
+    def _route(request: httpx.Request) -> httpx.Response:
+        path = request.url.path
+        if path.endswith("/ig_hashtag_search"):
+            return httpx.Response(200, json={"data": [{"id": "1784"}]})
+        if path.endswith("/top_media"):
+            return httpx.Response(
+                200,
+                json={
+                    "data": [
+                        {
+                            "id": "900",
+                            "caption": "vela artesanal foto",
+                            "media_type": "IMAGE",
+                            "permalink": "https://www.instagram.com/p/IMG/",
+                            "username": "velaslab",
+                        },
+                        {
+                            "id": "901",
+                            "caption": "vela artesanal video",
+                            "media_type": "VIDEO",
+                            "permalink": "https://www.instagram.com/p/VID/",
+                            "username": "velaslab",
+                        },
+                    ]
+                },
+            )
+        return httpx.Response(404, json={})
+
+    c = InstagramCollector(access_token="t", ig_user_id="42", transport=httpx.MockTransport(_route))
+    out = await c.discover(SEG, limit=5)
+    assert [v.platform_video_id for v in out] == ["901"]
+
+
+@pytest.mark.asyncio
+async def test_own_media_fallback_keyword_with_hash_matches_caption_without_hash() -> None:
+    """Keyword cadastrada como '#vela' deve casar legenda 'Vela artesanal' (sem #)."""
+    seg = SegmentConfig(slug="candles", name="Velas", platforms=["instagram"], keywords=["#vela"])
+    c = InstagramCollector(
+        access_token="t", ig_user_id="42", transport=httpx.MockTransport(_gate_route)
+    )
+    out = await c.discover(seg, limit=5)
+    assert [v.platform_video_id for v in out] == ["18001"]
+
+
+@pytest.mark.asyncio
+async def test_own_media_fallback_paginates_until_match() -> None:
+    """Sem match na página 1 (tem cursor 'after'), busca a página 2 e acha."""
+    calls = {"n": 0}
+
+    def _route(request: httpx.Request) -> httpx.Response:
+        path = request.url.path
+        if path.endswith("/ig_hashtag_search"):
+            return httpx.Response(
+                400,
+                json={"error": {"message": "(#10) ... public content access ...", "code": 10}},
+            )
+        if path.endswith("/media"):
+            calls["n"] += 1
+            if calls["n"] == 1:
+                return httpx.Response(
+                    200,
+                    json={
+                        "data": [
+                            {
+                                "id": "1",
+                                "caption": "sabonete",
+                                "media_type": "VIDEO",
+                                "permalink": "https://x/1",
+                                "username": "u",
+                            }
+                        ],
+                        "paging": {"cursors": {"after": "CURSOR2"}},
+                    },
+                )
+            return httpx.Response(
+                200,
+                json={
+                    "data": [
+                        {
+                            "id": "2",
+                            "caption": "vela artesanal",
+                            "media_type": "VIDEO",
+                            "permalink": "https://x/2",
+                            "username": "u",
+                        }
+                    ],
+                    "paging": {},
+                },
+            )
+        return httpx.Response(404, json={})
+
+    c = InstagramCollector(access_token="t", ig_user_id="42", transport=httpx.MockTransport(_route))
+    out = await c.discover(SEG, limit=5)
+    assert [v.platform_video_id for v in out] == ["2"]
+    assert calls["n"] == 2
+
+
+@pytest.mark.asyncio
+async def test_gate_increments_gate_hits_counter() -> None:
+    c = InstagramCollector(
+        access_token="t", ig_user_id="42", transport=httpx.MockTransport(_gate_route)
+    )
+    assert c.gate_hits == 0
+    await c.discover(SEG, limit=5)
+    assert c.gate_hits == 1
+
+
 def test_register_defaults_registers_instagram() -> None:
     from content_factory.config import Settings
     from content_factory.infra.collectors import register_defaults, registry

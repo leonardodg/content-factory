@@ -1,5 +1,5 @@
 from collections.abc import Sequence
-from datetime import datetime
+from datetime import UTC, datetime
 
 from sqlalchemy import func, select, text
 from sqlalchemy.dialects.postgresql import distinct_on
@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from content_factory.app.ports import (
     CollectRunRepository,
+    KeywordSignalRepository,
     ScoreRepository,
     SegmentRepository,
     VideoRepository,
@@ -17,6 +18,7 @@ from content_factory.domain.errors import SegmentNotFound
 from content_factory.domain.models import (
     CandidateVideo,
     CollectRun,
+    KeywordSignal,
     ScoreResult,
     Segment,
     SegmentConfig,
@@ -26,6 +28,7 @@ from content_factory.domain.models import (
 )
 from content_factory.infra.db.orm import (
     CollectRunRow,
+    KeywordSignalRow,
     SegmentRow,
     VideoMetricsRow,
     VideoRow,
@@ -211,3 +214,40 @@ class ScoreRepositoryImpl(ScoreRepository):
                 )
             )
             await self._s.flush()
+
+
+class KeywordSignalRepositoryImpl(KeywordSignalRepository):
+    def __init__(self, session: AsyncSession) -> None:
+        self._s = session
+
+    async def upsert_many(self, segment_id: int, signals: Sequence[KeywordSignal]) -> int:
+        saved = 0
+        for sig in signals:
+            stmt = pg_insert(KeywordSignalRow).values(
+                segment_id=segment_id,
+                keyword=sig.keyword,
+                source=sig.source,
+                weight=sig.weight,
+                depth=sig.depth,
+                created_at=datetime.now(UTC),
+            )
+            stmt = stmt.on_conflict_do_update(
+                index_elements=["segment_id", "keyword", "source"],
+                set_={"weight": stmt.excluded.weight, "depth": stmt.excluded.depth},
+            )
+            await self._s.execute(stmt)
+            saved += 1
+        return saved
+
+    async def top_for_segment(
+        self, segment_id: int, source: str | None, limit: int
+    ) -> list[KeywordSignal]:
+        stmt = select(KeywordSignalRow).where(KeywordSignalRow.segment_id == segment_id)
+        if source is not None:
+            stmt = stmt.where(KeywordSignalRow.source == source)
+        stmt = stmt.order_by(KeywordSignalRow.weight.desc()).limit(limit)
+        rows = (await self._s.execute(stmt)).scalars().all()
+        return [
+            KeywordSignal(keyword=r.keyword, source=r.source, weight=r.weight, depth=r.depth)
+            for r in rows
+        ]

@@ -1,7 +1,41 @@
+from typing import ClassVar
+
 from tests.stubs import FakeCollector, FakeLimiter, FakeLock, FakeRepos
 
 from content_factory.app.collect import CollectDeps, collect
 from content_factory.domain.errors import CollectorError
+from content_factory.domain.models import CandidateVideo, SegmentConfig
+
+
+class _FakeGatedCollector:
+    """Incrementa gate_hits durante discover() (como instagram.py faz ao
+    cair no fallback do gate #10) — necessário para o teste de delta
+    por-run (Important #2): valor pré-existente no __init__ não conta
+    como hit "deste run"."""
+
+    platform: ClassVar[str] = "instagram"
+
+    def __init__(self) -> None:
+        self.gate_hits = 0
+
+    async def discover(self, segment: SegmentConfig, limit: int) -> list[CandidateVideo]:
+        self.gate_hits += 2
+        return []
+
+
+class _FakeGatedThenFailingCollector:
+    """Incrementa gate_hits (como instagram.py faz antes do fallback) e,
+    em seguida, levanta CollectorError — reproduz o caso em que o gate #10
+    acontece também na própria mídia (REVISÃO Important #1)."""
+
+    platform: ClassVar[str] = "instagram"
+
+    def __init__(self) -> None:
+        self.gate_hits = 0
+
+    async def discover(self, segment: SegmentConfig, limit: int) -> list[CandidateVideo]:
+        self.gate_hits += 1
+        raise CollectorError("failed", "instagram")
 
 
 async def test_collect_partial_failure_marks_partial() -> None:
@@ -115,3 +149,63 @@ async def test_skipped_candidates_visible_in_run_failed_and_counts() -> None:
     assert out.counts["failed"] == 0
     assert out.runs[0].failed == 2
     assert out.runs[0].status == "ok"
+
+
+async def test_collect_exposes_gate_hits_counter() -> None:
+    """Contador do gate #10 (REVISÃO/telemetria): duck-typed, só aparece se > 0."""
+    deps = CollectDeps(
+        collectors=[_FakeGatedCollector()],
+        videos=FakeRepos().videos,
+        segments=FakeRepos().segments,
+        runs=FakeRepos().runs,
+        limiter=FakeLimiter(),
+        lock=FakeLock(),
+    )
+    out = await collect("candles", ["instagram"], limit=5, deps=deps)
+    assert out.counts["instagram_gate_hits"] == 2
+
+
+async def test_collect_exposes_gate_hits_even_when_discover_fails() -> None:
+    """Important #1: gate_hits incrementado e DEPOIS discover() levanta erro.
+
+    O contador não pode se perder só porque o try pulou pro except — a
+    leitura precisa acontecer no finally, não só no caminho de sucesso.
+    """
+    deps = CollectDeps(
+        collectors=[_FakeGatedThenFailingCollector()],
+        videos=FakeRepos().videos,
+        segments=FakeRepos().segments,
+        runs=FakeRepos().runs,
+        limiter=FakeLimiter(),
+        lock=FakeLock(),
+    )
+    out = await collect("candles", ["instagram"], limit=5, deps=deps)
+    assert out.ok is False
+    assert out.counts["instagram_gate_hits"] == 1
+
+
+async def test_collect_gate_hits_is_per_run_delta_not_cumulative() -> None:
+    """Important #2: collector é singleton no registry — self.gate_hits
+
+    acumula entre runs (vida do worker). O envelope de cada run deve
+    reportar só o delta daquele run, não o total acumulado desde o boot.
+    """
+    collector = _FakeGatedCollector()  # incrementa +2 a cada discover()
+    deps = CollectDeps(
+        collectors=[collector],
+        videos=FakeRepos().videos,
+        segments=FakeRepos().segments,
+        runs=FakeRepos().runs,
+        limiter=FakeLimiter(),
+        lock=FakeLock(),
+    )
+    # 1ª run (mesma instância, como no worker singleton): +2 → total 2.
+    first = await collect("candles", ["instagram"], limit=5, deps=deps)
+    assert first.counts["instagram_gate_hits"] == 2
+
+    # 2ª run na MESMA instância: discover() soma +2 de novo (total acumulado
+    # vai a 4), mas o envelope precisa reportar só o delta deste run (2),
+    # não o acumulado (4) nem o total absoluto do atributo.
+    second = await collect("candles", ["instagram"], limit=5, deps=deps)
+    assert second.counts["instagram_gate_hits"] == 2
+    assert collector.gate_hits == 4  # atributo do singleton continua acumulando

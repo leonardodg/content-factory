@@ -5,9 +5,11 @@ from typing import ClassVar, Protocol
 from content_factory.domain.models import (
     CandidateVideo,
     CollectRun,
+    KeywordSignal,
     ScoreResult,
     Segment,
     SegmentConfig,
+    TrendPoint,
     UpsertStats,
     VideoSnapshot,
 )
@@ -20,6 +22,30 @@ class Collector(Protocol):
 
     # aceita SegmentConfig (e não Segment): coletores não precisam do id —
     # o id só entra no upsert, via VideoRepository.upsert_candidates
+
+
+class KeywordExpander(Protocol):
+    """Stage de descoberta de keywords relacionadas (ex. web search suggest)."""
+
+    platform: ClassVar[str]
+
+    async def expand(self, seeds: list[str], depth: int) -> list[KeywordSignal]: ...
+
+
+class TrendsProvider(Protocol):
+    """Métrica de série temporal por keyword (ex. Google Trends)."""
+
+    async def interest_over_time(self, keywords: list[str], timeframe: str) -> list[TrendPoint]: ...
+
+
+class SocialDiscoverer(Protocol):
+    """Descoberta orientada a keyword/hashtag numa rede social (IG/YT/TikTok)."""
+
+    platform: ClassVar[str]
+
+    async def discover_by_keywords(
+        self, keywords: list[str], hashtags: list[str], depth: int
+    ) -> list[CandidateVideo]: ...
 
 
 class VideoRepository(Protocol):
@@ -41,6 +67,14 @@ class ScoreRepository(Protocol):
 class SegmentRepository(Protocol):
     async def get_by_slug(self, slug: str) -> Segment: ...
     async def upsert(self, cfg: SegmentConfig) -> Segment: ...
+
+
+class KeywordSignalRepository(Protocol):
+    async def upsert_many(self, segment_id: int, signals: Sequence[KeywordSignal]) -> int: ...
+
+    async def top_for_segment(
+        self, segment_id: int, source: str | None, limit: int
+    ) -> list[KeywordSignal]: ...
 
 
 class CollectRunRepository(Protocol):

@@ -33,7 +33,7 @@ def relevance_of(snap: VideoSnapshot, keywords: list[str]) -> float:
     if not keywords:
         return 0.0
     text = f"{snap.title} {snap.description}".lower()
-    hits = sum(1 for k in keywords if k.lower() in text)
+    hits = sum(1 for k in keywords if k.lower().removeprefix("#") in text)
     return hits / len(keywords)
 
 

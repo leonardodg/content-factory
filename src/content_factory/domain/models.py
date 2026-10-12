@@ -13,6 +13,7 @@ class SegmentConfig(BaseModel):
     keywords: list[str]
     subnichos: dict[str, list[str]] = Field(default_factory=dict)
     audience: list[str] = Field(default_factory=list)  # vai p/ segments.config JSONB
+    research: DepthConfig | None = None  # guard-rail do pipeline de pesquisa
 
 
 class Segment(SegmentConfig):
@@ -72,6 +73,33 @@ class UpsertStats(BaseModel):
     inserted: int = 0
     updated: int = 0
     skipped: int = 0
+
+
+class KeywordSignal(BaseModel):
+    """Descoberta de keyword/hashtag de uma etapa do pipeline de pesquisa."""
+
+    keyword: str
+    source: str  # "web_suggest" | "trends" | "instagram_hashtag" | ...
+    weight: float = 0.0
+    depth: int = 0
+
+
+class TrendPoint(BaseModel):
+    """Métrica de série temporal de uma keyword (Google Trends ou equivalente)."""
+
+    keyword: str
+    period_start: datetime
+    period_granularity: str  # "week" | "month"
+    interest: float
+
+
+class DepthConfig(BaseModel):
+    """Guard-rail de profundidade/fan-out do ciclo de pesquisa."""
+
+    max_depth: int = 2
+    fanout_per_stage: dict[str, int] = Field(default_factory=dict)
+    max_nodes_per_cycle: int = 200
+    recursion_speed_factor: float = 1.0
 
 
 class CollectRun(BaseModel):

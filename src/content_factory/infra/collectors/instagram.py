@@ -15,6 +15,13 @@ FIELDS = (
     "id,caption,like_count,comments_count,timestamp,media_type,permalink,thumbnail_url,username"
 )
 
+_SKIP_MEDIA_TYPES = {"IMAGE"}
+_MAX_OWN_MEDIA_PAGES = 3
+
+
+def _is_video_like(item: dict[str, Any]) -> bool:
+    return str(item.get("media_type", "")).upper() not in _SKIP_MEDIA_TYPES
+
 
 class InstagramCollector:
     platform: ClassVar[str] = "instagram"
@@ -26,6 +33,7 @@ class InstagramCollector:
         self._user = ig_user_id
         self._client = httpx.AsyncClient(transport=transport, timeout=20)
         self.app_usage = 0
+        self.gate_hits = 0
 
     async def _get(self, path: str, params: dict[str, str]) -> dict[str, Any] | None:
         """GET no Graph. None = gate #10 (Instagram Public Content Access) — o caller decide."""
@@ -86,30 +94,47 @@ class InstagramCollector:
         if top is None:
             return await self._own_media(segment, limit)
         items: Any = top.get("data") or []
-        return [self._map(cast(dict[str, Any], item)) for item in items[:limit]]
+        videos = [cast(dict[str, Any], item) for item in items if _is_video_like(item)]
+        return [self._map(item) for item in videos[:limit]]
 
     async def _own_media(self, segment: SegmentConfig, limit: int) -> list[CandidateVideo]:
         """Fallback no gate #10: mídia pública da própria conta, filtrada por keyword.
 
         A conta publica conteúdo misto (velas, sabonetes, macramê); sem filtro a
         relevância do segmento seria violada. Busca vazia de hashtag não cai aqui.
+        Pagina até _MAX_OWN_MEDIA_PAGES para achar `limit` matches.
         """
+        self.gate_hits += 1
         logger.warning("instagram: gate #10 (App Review pendente) — usando mídia própria")
-        rows = await self._get(f"{self._user}/media", {"fields": FIELDS, "limit": "50"})
-        if rows is None:
-            # gate também na mídia própria: sem hashtag e sem fallback — falha ruidosa
-            raise AuthExpired(self.platform, "HTTP 400 gate #10 na mídia própria")
-        if not rows:
-            return []
-        keywords = [k.casefold() for k in segment.keywords]
-        items: Any = rows.get("data") or []
+        keywords = [k.casefold().removeprefix("#") for k in segment.keywords]
         out: list[CandidateVideo] = []
-        for raw_item in items:
-            item = cast(dict[str, Any], raw_item)
-            caption = str(item.get("caption") or "").casefold()
-            if not keywords or any(k in caption for k in keywords):
-                out.append(self._map(item))
-            if len(out) >= limit:
+        after: str | None = None
+        for page in range(_MAX_OWN_MEDIA_PAGES):
+            params = {"fields": FIELDS, "limit": "50"}
+            if after:
+                params["after"] = after
+            rows = await self._get(f"{self._user}/media", params)
+            if rows is None:
+                if not out and page == 0:
+                    # gate também na mídia própria: sem hashtag e sem fallback — falha ruidosa
+                    raise AuthExpired(self.platform, "HTTP 400 gate #10 na mídia própria")
+                break
+            items: Any = rows.get("data") or []
+            if not items:
+                break
+            for raw_item in items:
+                item = cast(dict[str, Any], raw_item)
+                if not _is_video_like(item):
+                    continue
+                caption = str(item.get("caption") or "").casefold()
+                if not keywords or any(k in caption for k in keywords):
+                    out.append(self._map(item))
+                if len(out) >= limit:
+                    return out
+            paging = cast(dict[str, Any], rows.get("paging") or {})
+            cursors = cast(dict[str, Any], paging.get("cursors") or {})
+            after = cast(str | None, cursors.get("after"))
+            if not after:
                 break
         return out
 

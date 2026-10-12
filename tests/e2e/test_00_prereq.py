@@ -4,6 +4,8 @@ import socket
 
 import pytest
 
+from tests.conftest import requires_infra
+
 pytestmark = pytest.mark.e2e
 
 
@@ -14,6 +16,7 @@ def test_ram_minima() -> None:
     assert available_kb > 1_500_000, f"RAM disponível {available_kb} kB < 1.5 GB"
 
 
+@requires_infra
 def test_postgres_up() -> None:
     assert os.getenv("TEST_DATABASE_URL"), "TEST_DATABASE_URL ausente"
     host = os.getenv("TEST_DB_HOST", "127.0.0.1")

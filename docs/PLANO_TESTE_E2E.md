@@ -217,3 +217,50 @@ O gate #10 bloqueia hashtag de terceiros até o app passar por *App Review*
 (Instagram Public Content Access). Enquanto isso o fallback own-media cobre a
 coleta. Quando o review aprovar, `ig_hashtag_search` volta a responder e o
 caminho de hashtags é usado automaticamente — nenhuma mudança de código.
+
+### Bug 5 (2026-10-12): token do produto errado, mascarado como "igual ao gate #10"
+
+- **Sintoma**: playtest real (`cf collect --platform instagram`) voltou
+  `auth_expired` e depois `upstream_changed` — não mais `ok` com fallback
+  como nos runs 123-140 documentados acima. `INSTAGRAM_ACCESS_TOKEN` e
+  `IG_USER_ID` estavam preenchidos nos dois arquivos de env.
+- **Diagnóstico** (probe direto na Graph API, fora do coletor, para isolar
+  token de código): `GET /ig_hashtag_search` devolvia
+  `403 "(#10) Requires instagram_basic permission to manage the object"` —
+  **code 10, mas sem a frase "public content access"**, logo
+  `_is_public_content_gate` corretamente NÃO tratava como o gate documentado
+  (comportamento certo, `test_generic_code10_is_not_gate` existe exatamente
+  pra isso). `GET /{IG_USER_ID}` também falhava: `"does not exist, cannot be
+  loaded due to missing permissions"`.
+- **Causa raiz**: o `INSTAGRAM_ACCESS_TOKEN` em uso tinha sido gerado pelo
+  produto **"API do Instagram com login do Instagram"**
+  (`instagram_business_basic`) em vez de **"API do Instagram com login do
+  Facebook"** (`instagram_basic`) — são dois fluxos OAuth/escopo diferentes
+  no mesmo app Meta, e só o segundo é compatível com
+  `infra/collectors/instagram.py` (`graph.facebook.com/v21.0`,
+  `ig_hashtag_search`). Confirmado ao vivo no app
+  **Automation-IvanaLereaBR** (developers.facebook.com): a feature
+  "Instagram Public Content Access" nunca tinha sido submetida para App
+  Review (botão "Adicionar à análise do app", não "aguardando aprovação");
+  "Ações necessárias" do app vazio — não era bloqueio da Meta.
+- **Não é bug de código**: nenhuma das Tasks 2-5 da Fase 0 mudou esse
+  comportamento, e os testes existentes (`test_generic_code10_is_not_gate`)
+  já cobriam exatamente essa distinção corretamente.
+- **Correção operacional**: gerado token novo pelo produto certo (passo a
+  passo agora documentado em
+  [`docs/manual/chaves-api.md` §2](manual/chaves-api.md#2-instagram-graph-api-instagram_access_token-ig_user_id),
+  com o aviso de qual produto usar). Verificado antes de colar
+  (`GET /{IG_USER_ID}?fields=id,username` → `200`), colado em
+  `secrets.env` **e** `app.env`, containers recriados.
+- **Resultado pós-fix**: `cf collect` real → `{"ok": true, "found": 5,
+  "inserted": 2, "updated": 3, "instagram_gate_hits": 1}` (run 153); worker
+  real (`docker compose --profile worker up`, job enfileirado manualmente
+  via arq para não esperar o cron) → `collect_job` runs 154-156 `ok` nas 3
+  plataformas, `score_job scored=23`.
+- **Token estendido para 60 dias** logo em seguida (Access Token Debugger →
+  "Estender token de acesso", expira 2026-12-11) e revalidado:
+  `{"ok": true, "found": 3, "inserted": 0, "updated": 3, "instagram_gate_hits": 1}`.
+  Passo a passo de extensão/renovação em
+  `docs/manual/chaves-api.md` §2 passos 9-10. Pendência: repetir antes de
+  2026-12-11 ou migrar para System User token (sem expiração) para
+  produção.
