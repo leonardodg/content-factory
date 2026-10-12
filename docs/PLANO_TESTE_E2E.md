@@ -257,7 +257,10 @@ caminho de hashtags é usado automaticamente — nenhuma mudança de código.
   real (`docker compose --profile worker up`, job enfileirado manualmente
   via arq para não esperar o cron) → `collect_job` runs 154-156 `ok` nas 3
   plataformas, `score_job scored=23`.
-- **Pendência**: o token gerado é de curta duração (User Access Token do
-  Graph Explorer, ~1-2h) — trocar por token de longa duração antes do cron
-  de produção confiar nele; revogar o token de teste desta sessão após o
-  uso.
+- **Token estendido para 60 dias** logo em seguida (Access Token Debugger →
+  "Estender token de acesso", expira 2026-12-11) e revalidado:
+  `{"ok": true, "found": 3, "inserted": 0, "updated": 3, "instagram_gate_hits": 1}`.
+  Passo a passo de extensão/renovação em
+  `docs/manual/chaves-api.md` §2 passos 9-10. Pendência: repetir antes de
+  2026-12-11 ou migrar para System User token (sem expiração) para
+  produção.

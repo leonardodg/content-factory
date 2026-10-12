@@ -653,8 +653,7 @@ plano-mãe desta sessão) como pendência externa do usuário.
 - [ ] **Step 6: Copiar este plano para `docs/ai-plans/`**
 
 ```bash
-cp /home/leodg/.claude/plans/vamos-atualizar-este-projeto-virtual-kernighan.md \
-   docs/ai-plans/2026-10-12-fix-instagram-collector-fase0.md
+cp <plan-file> docs/ai-plans/2026-10-12-fix-instagram-collector-fase0.md
 ```
 
 - [ ] **Step 7: Commit final**

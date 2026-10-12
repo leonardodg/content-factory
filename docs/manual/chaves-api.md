@@ -122,9 +122,34 @@ vazamento ou 403 persistente: [Credenciais — rotação](../dev/credentials.md#
    **não é o mesmo bug do passo 6**: aqui o token está correto, só falta a
    aprovação da Meta para hashtag de terceiros.
 
-!!! warning "Token de teste expira em 1-2 h (User Access Token) ou 24 h"
-    Para rodar de verdade (worker/cron) o token precisa ser duradouro e entrar
-    na rotina de rotação — tabela e procedimento em
+9. **Estenda para token de longa duração (60 dias)** antes de usar no
+   worker/cron — o token do passo 5 (`Usuário`) expira em 1-2h:
+   - vá em [Access Token Debugger](https://developers.facebook.com/tools/debug/accesstoken/)
+     (ou, no Graph API Explorer, clique no ícone **ⓘ** ao lado do campo
+     "Token de acesso" → **"Abrir na ferramenta Token de Acesso"**);
+   - cole o token (ou deixe pré-preenchido pelo link acima) e clique
+     **Depurar**;
+   - clique **Estender token de acesso** — a Meta pode pedir sua senha de
+     novo para confirmar (só você digita, nunca cole a senha em
+     automação/terceiros);
+   - o token novo (60 dias) aparece em destaque na própria página, com a
+     data de expiração. Cole esse valor em `INSTAGRAM_ACCESS_TOKEN`, nos
+     dois arquivos de novo ([§4](#4-onde-colar)), e recrie `python` e
+     `worker` para o valor valer.
+10. **Renovação**: 60 dias é o máximo que um *User Access Token* aceita essa
+    extensão — repita o passo 9 antes de vencer (`debug_token` mostra
+    `Expira` com a data). Para não depender de repetir isso a cada ~2 meses
+    em produção, o caminho correto é um **System User token** (Business
+    Settings → System Users → gerar token **sem expiração**, com as mesmas
+    4 permissões do passo 4) — fica fora do escopo de "destravar a primeira
+    coleta" deste capítulo; procedimento completo em
+    [Credenciais — rotação](../dev/credentials.md#rotacao-sintoma-acao).
+
+!!! warning "Token de teste expira em 1-2 h (User Access Token), 24 h, ou 60 dias (estendido)"
+    Token de usuário comum dura 1-2h; estendido (passo 9) dura 60 dias;
+    token de teste de app dura 24h. Para rodar de verdade (worker/cron) sem
+    repetir a extensão manual, use System User token (passo 10) e entre na
+    rotina de rotação — tabela e procedimento em
     [Credenciais](../dev/credentials.md). Escopo mínimo (leitura de
     hashtag/mídia, sem publicação): idem.
 

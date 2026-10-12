@@ -145,11 +145,15 @@ plano `docs/ai-plans/2026-10-12-fix-instagram-collector-fase0.md`.
   `libatomic.so.1` para o node do pyright-python, ambiente, não bloqueante),
   bandit 0, pip-audit 0 vulns, `alembic check` ok, privacidade ok (162
   arquivos).
-- ⚠️ **Pendência do usuário**: o token gerado nesta sessão é de curta duração
-  (User Access Token do Graph Explorer) — trocar por token de longa duração
-  (System User / `pages_show_list`+troca `fb_exchange_token`) antes de
-  confiar no cron de produção; token de teste desta sessão deve ser revogado
-  após o uso (ver `docs/manual/chaves-api.md`).
+- [x] **Token estendido para 60 dias** (2026-10-12, via Access Token
+  Debugger — "Estender token de acesso", expira 2026-12-11): substituído em
+  `secrets.env` e `app.env`, revalidado com `cf collect` real (`ok=true,
+  found=3, instagram_gate_hits=1`). Procedimento de extensão/renovação
+  documentado em `docs/manual/chaves-api.md` §2 passos 9-10.
+- ⚠️ **Pendência do usuário**: 60 dias é o máximo de um *User Access Token*
+  — antes de 2026-12-11, repetir a extensão (passo 9 do manual) ou migrar
+  para **System User token sem expiração** (passo 10) para não depender de
+  renovação manual recorrente no cron de produção.
 - Minors deferidos (não bloqueiam): condição redundante `not out and page == 0`
   em `_own_media` (Task 4); relatório da Task 4 sem evidência explícita do
   RED do TDD.
