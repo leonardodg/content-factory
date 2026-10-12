@@ -5,10 +5,26 @@
 
 ## 🔄 EM ANDAMENTO
 
-_(nenhuma branch de feature aberta — próxima fase: D, quando o usuário decidir
-executar; planos prontos em `docs/ai-plans/2026-10-12-pipeline-pesquisa-fase-{d,e,b}.md`.)_
+_(nenhuma branch de feature aberta — próxima fase: E, quando o usuário decidir
+executar; planos prontos em `docs/ai-plans/2026-10-12-pipeline-pesquisa-fase-{e,b}.md`.)_
 
 ## ✅ CONCLUÍDO
+
+### Fase D — research_job + CLI + campanhas (2026-10-12)
+
+Branch `feat/pipeline-pesquisa-fase-d` (4 commits, 166 passed + pyright 0).
+Executada via executing-plans, plano
+`docs/ai-plans/2026-10-12-pipeline-pesquisa-fase-d.md` (TDD, RED verificado).
+
+- [x] **Task D1** (`5fa1c70`): `ResearchCampaign` (model + migração 0003 +
+  ORM + repo, 4 testes).
+- [x] **Task D2** (`2644b55`): `research_job` no worker (cron 07:00 BRT,
+  skip sem campanha ativa, noop KeywordExpander/TrendsProvider até Fase B,
+  socials reais do registry; 3 testes novos).
+- [x] **Task D3** (`68afbf4`): CLI `cf research start/stop/status`
+  (envelope padrão, 6 testes).
+- [x] **Task D4**: gates completos + docs (seção §5 em `operacao.md`) +
+  HANDOFF + checkboxes do plano.
 
 ### Fase C — Instagram orientado a keyword (2026-10-12)
 

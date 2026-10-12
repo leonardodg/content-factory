@@ -31,13 +31,13 @@ docker compose -f .devcontainer/docker-compose.yml --profile worker up -d worker
 Pré-condições do worker: `app.env` e `secrets.env` já criados (passo 2 do
 [Primeiro passo](guide-start.md)) e o segmento de `COLLECT_SEGMENT` (default
 `candles`) já carregado no banco — senão o container morre no startup
-([§5](#5-limitacoes-conhecidas)).
+([§6](#6-limitacoes-conhecidas)).
 
 Detalhe que muda a rotina de atualização: o serviço `python` roda com o
 repositório montado (`bind-mount` → código novo aparece sem rebuild), mas o
 `worker` **não tem bind-mount** — o `src/` entra na imagem (target `worker`
 do Dockerfile). Mudou código que o worker executa? Rebuild obrigatório
-([§6](#6-parada-restart-e-atualizacao)).
+([§7](#7-parada-restart-e-atualizacao)).
 
 ## 2. Status dos serviços
 
@@ -88,8 +88,8 @@ docker compose -f .devcontainer/docker-compose.yml --profile worker logs -f work
 
 O que procurar:
 
-- `Starting worker for 2 functions: collect_job, score_job` — o worker subiu,
-  conectou no Redis e registrou os 2 jobs. Atenção: essa linha é emitida
+- `Starting worker for 3 functions: collect_job, score_job, research_job` — o worker subiu,
+  conectou no Redis e registrou os 3 jobs. Atenção: essa linha é emitida
   **antes** do `on_startup`; para confirmar que o startup terminou, procure a
   **ausência** de traceback logo abaixo (o fail-fast `SegmentNotFound` vem
   depois desta linha) ou confirme o estado via `cf status`;
@@ -102,10 +102,10 @@ O que procurar:
   sobra é o traceback no log do worker;
 - `SegmentNotFound` no startup (fail-fast): o segmento de `COLLECT_SEGMENT`
   não existe no banco; o container morre com exit ≠ 0. Corrigir com
-  `cf segment load` e subir de novo ([§5](#5-limitacoes-conhecidas));
+  `cf segment load` e subir de novo ([§6](#6-limitacoes-conhecidas));
 - `shutdown on SIGTERM ◆ … jobs complete …` — desligamento limpo via
   `stop`/`down`; sem essa linha, o processo foi morto e o lock Redis pode
-  sobrar até o TTL de 30 min ([§5](#5-limitacoes-conhecidas)).
+  sobrar até o TTL de 30 min ([§6](#6-limitacoes-conhecidas)).
 
 **CLI / coleta manual:** o erro aparece no envelope da própria saída
 (`{"ok": false, …}`, ou exit `2` com `"partial": true`) — a CLI não escreve
@@ -126,6 +126,7 @@ a CLI manual); cron no fuso do projeto:
 
 | Job | Horário (BRT) | Origem |
 |---|---|---|
+| `research_job` | 07:00 | fixo no código (`hour={7}`, `minute=0`) — só roda com campanha ativa ([§5](#5-campanhas-de-pesquisa-cf-research)) |
 | `collect_job` | 08:00 e 20:00 | horas via `COLLECT_CRON_HOURS` (default `08,20`), minuto `0` |
 | `score_job` | 08:30 e 21:30 | fixo no código (`hour={8, 21}`, `minute=30`) |
 
@@ -146,14 +147,44 @@ job; `COLLECT_CRON_HOURS` vale do carregamento do processo):
 Onde mudar: bloco `environment:` do serviço `worker` em
 `.devcontainer/docker-compose.yml` (ou `.devcontainer/env/app.env`, que os
 dois serviços leem via `env_file`) — depois, recrie o container:
-`… --profile worker up -d worker`. Ver também [§5](#5-limitacoes-conhecidas)
+`… --profile worker up -d worker`. Ver também [§6](#6-limitacoes-conhecidas)
 sobre o `defaults.env`.
 
-**`max_jobs=1` não é bug:** os 2 jobs compartilham uma única sessão Postgres
+**`max_jobs=1` não é bug:** os jobs compartilham uma única sessão Postgres
 montada no startup do worker; mais de um job em paralelo quebraria a sessão
 (`IllegalStateChangeError`). Um job por vez, em série.
 
-## 5. Limitações conhecidas
+## 5. Campanhas de pesquisa (`cf research`)
+
+O worker roda um `research_job` diário às 07:00 BRT, mas **só executa o
+ciclo se houver campanha ativa** para o segmento. Sem campanha, o job
+retorna `{"ok": true, "skipped": "sem campanha ativa"}` e não faz nada.
+
+| Comando | O que faz |
+|---|---|
+| `cf research start --segment candles --weeks 4` | Inicia campanha de 4 semanas (default) |
+| `cf research stop --segment candles` | Para a campanha (ativas → inativas) |
+| `cf research status --segment candles` | Mostra se há campanha ativa + `ends_at` |
+
+Exemplos:
+
+```bash
+# iniciar campanha de 6 semanas
+docker exec cf-python uv run cf research start --segment candles --weeks 6
+
+# conferir status
+docker exec cf-python uv run cf research status --segment candles
+# {"ok": true, "command": "research.status", "active": true, "ends_at": "2026-11-23T10:00:00+00:00"}
+
+# parar antes do fim
+docker exec cf-python uv run cf research stop --segment candles
+```
+
+A campanha expira sozinha quando `ends_at` passa — não é preciso `stop`
+manual no fim do período. O `research_job` no worker filtra
+`active == true AND ends_at > now()` ([§4](#4-worker-e-cron)).
+
+## 6. Limitações conhecidas
 
 - **`defaults.env` não é montado no compose.** O arquivo
   `.devcontainer/env/defaults.env` é versionado, mas nenhum serviço o lê (o
@@ -172,7 +203,7 @@ montada no startup do worker; mais de um job em paralelo quebraria a sessão
   container morre (visível em `logs worker`, [§3](#3-logs)). Antes de subir o
   worker: `docker exec cf-python uv run cf segment load segments/candles.yaml`.
 
-## 6. Parada, restart e atualização
+## 7. Parada, restart e atualização
 
 Manter `--profile worker` nos comandos: o perfil é necessário quando o
 serviço **não** é nomeado (ex.: um `up -d` geral sem argumentos); comandos

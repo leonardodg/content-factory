@@ -56,9 +56,9 @@ TDD: testes de domain model (defaults), testes de repositório real
 (`start` cria linha, `active_for_segment` devolve só se `ends_at` no
 futuro, `stop` marca `active=false` e para de aparecer).
 
-- [ ] Steps 1-7 seguindo o padrão exato da Task 4 da Fase A (migração →
+- [x] Steps 1-7 seguindo o padrão exato da Task 4 da Fase A (migração →
   ORM → repo → testes `@requires_infra` em `tests/infra/test_repositories.py`).
-- [ ] Commit: `feat(db): tabela research_campaigns + ResearchCampaignRepositoryImpl`
+- [x] Commit: `feat(db): tabela research_campaigns + ResearchCampaignRepositoryImpl`
 
 ### Task D2: `research_job` no worker arq
 
@@ -105,10 +105,10 @@ TDD: testes de `run_research_job` com `ctx` fake (mesmo padrão de
 `test_worker.py` se existir, ou criar `tests/infra/test_worker.py` seguindo
 o padrão de mock de `ctx`/ hooks trocáveis já estabelecido no módulo).
 
-- [ ] Steps de TDD completos (ler `infra/queue/worker.py` e o teste
+- [x] Steps de TDD completos (ler `infra/queue/worker.py` e o teste
   existente do worker antes de escrever, reaproveitando a estrutura de
   hooks `_collect_impl`/`_score_impl`).
-- [ ] Commit: `feat(worker): research_job + cron 07:00, campanha ativa consultada no startup do job`
+- [x] Commit: `feat(worker): research_job + cron 07:00, campanha ativa consultada no startup do job`
 
 ### Task D3: CLI `cf research start/stop/status`
 
@@ -131,10 +131,10 @@ def research_cmd(
 `status`: `campaigns.active_for_segment(segment.id)` → envelope com
 `active`/`ends_at` ou `active: false`.
 
-- [ ] Steps de TDD completos (ler `cli/main.py` pra reaproveitar o padrão
+- [x] Steps de TDD completos (ler `cli/main.py` pra reaproveitar o padrão
   exato de `segment_cmd`/`status_cmd` já existentes, envelope
   `envelope_ok`/`envelope_err`, exit codes).
-- [ ] Commit: `feat(cli): cf research start/stop/status`
+- [x] Commit: `feat(cli): cf research start/stop/status`
 
 ### Task D4: Gates + docs
 

@@ -130,7 +130,7 @@ Exemplo de parcial (do [Primeiro passo §9](guide-start.md#9-primeiras-falhas-o-
 5. **Não alterar `secrets.env`** (nem `app.env`) sem pedido humano
    explícito — troca de chave é decisão de quem tem a chave
    ([chaves-api.md](chaves-api.md)); alterações exigem restart do worker
-   ([Operação §6](operacao.md#6-parada-restart-e-atualizacao)).
+   ([Operação §7](operacao.md#7-parada-restart-e-atualizacao)).
 
 ## 5. Setup do agente — o que colocar no prompt
 
