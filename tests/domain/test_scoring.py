@@ -89,3 +89,18 @@ def test_viral_score_all_none_metrics_uses_only_relevance_recency() -> None:
     assert r.total > 0.0  # relevância pura ainda pontua
     assert r.performance is None
     assert r.engagement is None
+
+
+def test_viral_score_metrics_available_lists_present_metrics() -> None:
+    """G2: ScoreResult.metrics_available lista só as métricas com valor real."""
+    m = metrics(views=100_000, likes=5_000, comments=None, shares=None, saves=None)
+    r = viral_score(m, relevance=0.5, now=NOW, published_at=NOW - timedelta(hours=6))
+    assert r.metrics_available == ["views", "likes"]
+
+
+def test_viral_score_metrics_available_empty_when_all_none() -> None:
+    from content_factory.domain.models import VideoMetrics
+
+    m = VideoMetrics(views=None, likes=None, comments=None, shares=None, saves=None)
+    r = viral_score(m, relevance=0.5, now=NOW, published_at=NOW - timedelta(hours=6))
+    assert r.metrics_available == []

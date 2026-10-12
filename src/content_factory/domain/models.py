@@ -72,6 +72,7 @@ class ScoreResult(BaseModel):
     relevance: float
     recency: float
     trend_decay: str
+    metrics_available: list[str] = Field(default_factory=list[str])
 
 
 class UpsertStats(BaseModel):

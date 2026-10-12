@@ -67,6 +67,19 @@ def viral_score(
     if m.views == 0 and m.likes == 0 and relevance == 0:
         total = 0.0
 
+    # cobertura: quais métricas o snapshot tinha de verdade (auditável)
+    metrics_available = [
+        name
+        for name, val in (
+            ("views", m.views),
+            ("likes", m.likes),
+            ("comments", m.comments),
+            ("shares", m.shares),
+            ("saves", m.saves),
+        )
+        if val is not None
+    ]
+
     return ScoreResult(
         total=total,
         performance=components["performance"],
@@ -75,4 +88,5 @@ def viral_score(
         relevance=components["relevance"] or 0.0,
         recency=components["recency"] or 0.0,
         trend_decay=decay,
+        metrics_available=metrics_available,
     )
