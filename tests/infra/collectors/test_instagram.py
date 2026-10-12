@@ -391,6 +391,16 @@ async def test_own_media_fallback_paginates_until_match() -> None:
     assert calls["n"] == 2
 
 
+@pytest.mark.asyncio
+async def test_gate_increments_gate_hits_counter() -> None:
+    c = InstagramCollector(
+        access_token="t", ig_user_id="42", transport=httpx.MockTransport(_gate_route)
+    )
+    assert c.gate_hits == 0
+    await c.discover(SEG, limit=5)
+    assert c.gate_hits == 1
+
+
 def test_register_defaults_registers_instagram() -> None:
     from content_factory.config import Settings
     from content_factory.infra.collectors import register_defaults, registry

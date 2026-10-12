@@ -1,7 +1,20 @@
+from typing import ClassVar
+
 from tests.stubs import FakeCollector, FakeLimiter, FakeLock, FakeRepos
 
 from content_factory.app.collect import CollectDeps, collect
 from content_factory.domain.errors import CollectorError
+from content_factory.domain.models import CandidateVideo, SegmentConfig
+
+
+class _FakeGatedCollector:
+    platform: ClassVar[str] = "instagram"
+
+    def __init__(self) -> None:
+        self.gate_hits = 2
+
+    async def discover(self, segment: SegmentConfig, limit: int) -> list[CandidateVideo]:
+        return []
 
 
 async def test_collect_partial_failure_marks_partial() -> None:
@@ -115,3 +128,17 @@ async def test_skipped_candidates_visible_in_run_failed_and_counts() -> None:
     assert out.counts["failed"] == 0
     assert out.runs[0].failed == 2
     assert out.runs[0].status == "ok"
+
+
+async def test_collect_exposes_gate_hits_counter() -> None:
+    """Contador do gate #10 (REVISÃO/telemetria): duck-typed, só aparece se > 0."""
+    deps = CollectDeps(
+        collectors=[_FakeGatedCollector()],
+        videos=FakeRepos().videos,
+        segments=FakeRepos().segments,
+        runs=FakeRepos().runs,
+        limiter=FakeLimiter(),
+        lock=FakeLock(),
+    )
+    out = await collect("candles", ["instagram"], limit=5, deps=deps)
+    assert out.counts["instagram_gate_hits"] == 2

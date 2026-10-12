@@ -33,6 +33,7 @@ class InstagramCollector:
         self._user = ig_user_id
         self._client = httpx.AsyncClient(transport=transport, timeout=20)
         self.app_usage = 0
+        self.gate_hits = 0
 
     async def _get(self, path: str, params: dict[str, str]) -> dict[str, Any] | None:
         """GET no Graph. None = gate #10 (Instagram Public Content Access) — o caller decide."""
@@ -103,6 +104,7 @@ class InstagramCollector:
         relevância do segmento seria violada. Busca vazia de hashtag não cai aqui.
         Pagina até _MAX_OWN_MEDIA_PAGES para achar `limit` matches.
         """
+        self.gate_hits += 1
         logger.warning("instagram: gate #10 (App Review pendente) — usando mídia própria")
         keywords = [k.casefold().removeprefix("#") for k in segment.keywords]
         out: list[CandidateVideo] = []

@@ -70,6 +70,9 @@ async def collect(
                 counts["inserted"] = int(counts["inserted"]) + stats.inserted
                 counts["updated"] = int(counts["updated"]) + stats.updated
                 counts["skipped"] = int(counts["skipped"]) + stats.skipped
+                gate_hits = getattr(collector, "gate_hits", 0)
+                if gate_hits:
+                    counts[f"{collector.platform}_gate_hits"] = gate_hits
             except CollectorError as exc:
                 run.status = "blocked" if exc.code == "blocked" else "failed"
                 run.error_code = exc.code
