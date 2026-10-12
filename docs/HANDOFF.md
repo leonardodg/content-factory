@@ -5,8 +5,9 @@
 
 ## 🔄 EM ANDAMENTO
 
-_(vazio — PRs #1, #2 e #3 merged; branches merged apagadas local+remota;
-default branch do repositório corrigido para `main` em 2026-10-10)_
+Branch `fix/instagram-collector-fase0` — Fase 0 do plano de pipeline de
+pesquisa multi-plataforma (ver `docs/ai-plans/2026-10-12-fix-instagram-collector-fase0.md`).
+Tasks 1-5 concluídas (ver seção "Fase 0" abaixo); falta: PR + merge.
 
 ## ✅ CONCLUÍDO (sessão 2026-10-07 → 2026-10-10)
 
@@ -75,9 +76,9 @@ default branch do repositório corrigido para `main` em 2026-10-10)_
 
 1. **Issues pós-merge** (backlog da REVISÃO §6 — #1 mascaramento/finally já
    corrigido pelo savepoint; PR #3 merged `7d5d295`): lock token (#2 alta),
-   INCR+EXPIRE (#3), detalhe de erro do score (#4) + deferrals do review do
-   collector Instagram (media_type, simetria de `#`, paginação do fallback —
-   ver `docs/ai-plans/2026-10-10-fix-instagram-collector.md`)
+   INCR+EXPIRE (#3), detalhe de erro do score (#4) — **deferrals do collector
+   Instagram (media_type, simetria de `#`, paginação do fallback) corrigidos
+   em 2026-10-12, ver seção "Fase 0" abaixo**
 2. **Playtest worker COMPLETO** (2026-10-10): runs 123–140 `ok` nas 3
    plataformas (youtube/instagram/web), `score_job scored=15`, sane checks
    verdes; bugs 2–4 diagnosticados e corrigidos (imagem stale, savepoint/
@@ -104,3 +105,51 @@ default branch do repositório corrigido para `main` em 2026-10-10)_
   `.superpowers/sdd/2026-10-07-fundacao-coletores-banco/progress.md`
 - Deferreds do manual (~15 nits cosméticos): ledger
   `.superpowers/sdd/2026-10-09-manual-operacao/progress.md`
+
+## Fase 0 — fix do collector Instagram (2026-10-12)
+
+Executada via subagent-driven-development, branch `fix/instagram-collector-fase0`,
+ledger `.superpowers/sdd/vamos-atualizar-este-projeto-virtual-kernighan/progress.md`,
+plano `docs/ai-plans/2026-10-12-fix-instagram-collector-fase0.md`.
+
+- [x] **Task 2** (`bab58fa`): filtro `media_type` IMAGE — `discover`/`_own_media`
+  passam a descartar posts sem vídeo (Reels analyzer só quer vídeo/carrossel).
+- [x] **Task 3** (`7b6e79f`): simetria de `#` — keyword cadastrada como `#vela`
+  agora casa legenda sem `#` (fix em `_own_media` e em `app/score.py::relevance_of`).
+- [x] **Task 4** (`0b88d2c`): paginação do fallback `_own_media` — antes só
+  buscava 1 página de 50 posts; agora pagina até `_MAX_OWN_MEDIA_PAGES=3`.
+- [x] **Task 5** (`015927d`): telemetria `gate_hits` — `cf collect` expõe
+  `{platform}_gate_hits` no envelope quando o fallback do gate #10 é acionado.
+- [x] **Playtest real (Tasks 1+6)**: achado importante — o token
+  `INSTAGRAM_ACCESS_TOKEN` em uso não era "gate #10 pendente" como
+  documentado, era **token sem a permissão `instagram_basic`** (403 code 200,
+  gerado pelo fluxo errado — "API com login do Instagram" em vez de "API com
+  login do Facebook"). Investigado ao vivo no Meta for Developers (app
+  `Automation-IvanaLereaBR`, id `4160317280965017`): feature "Instagram
+  Public Content Access" nunca foi submetida para App Review ("Adicionar à
+  análise do app", não "aguardando aprovação"); "Ações necessárias" do app
+  vazio — sem bloqueio ativo da Meta. Token novo gerado (User Access Token,
+  escopos `instagram_basic,business_management,pages_read_engagement,pages_show_list`,
+  via OAuth direto — `Generate Access Token` do Graph Explorer estava com
+  popup bloqueado pelo Chrome) e validado: `ig_hashtag_search` agora cai
+  certinho no gate #10 documentado (não mais erro de permissão), `/media`
+  retorna 46 posts reais.
+- [x] **Worker real validado** (não só `cf collect`): subiu
+  `content-factory-worker-1` (`docker compose --profile worker up`),
+  enfileirou `collect_job`/`score_job` manualmente via arq (sem esperar o
+  cron 08:00/20:00) — runs 154-156 `ok` nas 3 plataformas (web/youtube/
+  instagram), `score_job scored=23`.
+- [x] Gates completos verdes: pytest 117 passed (2 failed são
+  `test_e2e/test_00_prereq.py` — ambiente, não relacionados), ruff
+  check/format 0, pyright strict 0 (local — dentro do `cf-python` falta
+  `libatomic.so.1` para o node do pyright-python, ambiente, não bloqueante),
+  bandit 0, pip-audit 0 vulns, `alembic check` ok, privacidade ok (162
+  arquivos).
+- ⚠️ **Pendência do usuário**: o token gerado nesta sessão é de curta duração
+  (User Access Token do Graph Explorer) — trocar por token de longa duração
+  (System User / `pages_show_list`+troca `fb_exchange_token`) antes de
+  confiar no cron de produção; token de teste desta sessão deve ser revogado
+  após o uso (ver `docs/manual/chaves-api.md`).
+- Minors deferidos (não bloqueiam): condição redundante `not out and page == 0`
+  em `_own_media` (Task 4); relatório da Task 4 sem evidência explícita do
+  RED do TDD.

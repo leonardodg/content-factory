@@ -56,32 +56,73 @@ vazamento ou 403 persistente: [Credenciais — rotação](../dev/credentials.md#
 
 ## 2. Instagram — Graph API (`INSTAGRAM_ACCESS_TOKEN` + `IG_USER_ID`)
 
+!!! danger "Existem DOIS produtos Instagram diferentes no app Meta — use o certo"
+    O painel do app em developers.facebook.com oferece dois fluxos com nomes
+    parecidos e permissões **incompatíveis**:
+
+    - **"API do Instagram com login do Instagram"** (`instagram_business_basic`,
+      `instagram_business_manage_*`) — produto novo, **não é o que o código
+      usa**, e o `IG_USER_ID` desse fluxo tem um namespace diferente.
+    - **"API do Instagram com login do Facebook"** (`instagram_basic`,
+      `pages_show_list`, `pages_read_engagement`, `business_management`) —
+      **é este** que `infra/collectors/instagram.py` espera
+      (`graph.facebook.com/v21.0`, `ig_hashtag_search`/`{user}/media`).
+
+    Gerar o token pelo produto errado é a causa real de um bug encontrado em
+    2026-10-12: o token tinha permissão, mas do produto errado — o Graph
+    devolvia `403 "(#10) Requires instagram_basic permission"`, sintoma
+    diferente do gate #10 documentado (ver `docs/PLANO_TESTE_E2E.md`, Bug 5).
+    **Siga os passos abaixo com o produto "login do Facebook", não o outro.**
+
 1. Em [developers.facebook.com](https://developers.facebook.com/), em **My
    Apps → Create App**, escolha o tipo **Business**.
-2. No app criado, adicione o produto **Instagram Graph API**.
+2. No app criado, em **Casos de uso → Gerenciar mensagens e conteúdo no
+   Instagram → Personalizar**, use a aba **"Configuração da API com login do
+   Facebook"** (não a aba "...com login do Instagram").
 3. A conta do Instagram precisa ser **Business ou Creator** e estar **vinculada
    a uma Page** do Facebook (configuração no app do Instagram: Conta →
    Profissional/Configurações de negócios).
-4. Obtenha os dois valores:
-   - `IG_USER_ID`: o id da conta Business/Creator (Graph API Explorer ou
-     painel da conta vinculada);
-   - access token de **longa duração**: via System User token com permissão
-     `instagram_basic` (produção) — ou token de teste de 24 h só para o
-     primeiro `collect`.
-5. Preencha `INSTAGRAM_ACCESS_TOKEN` e `IG_USER_ID` no
+4. Em **Permissões e recursos**, adicione (Advanced Access fica para depois —
+   em modo de desenvolvimento essas 4 já funcionam para admins/testers do app):
+   `instagram_basic`, `pages_show_list`, `pages_read_engagement`,
+   `business_management`.
+5. Gere o token no **Graph API Explorer**
+   (developers.facebook.com/tools/explorer, selecione o app certo):
+   - `Usuário ou Página` → **"Obter token de acesso do usuário"**;
+   - marque as 4 permissões do passo 4;
+   - clique **Generate Access Token** — se o popup do OAuth for bloqueado
+     pelo navegador, use a URL direta (substitua `APP_ID`):
+     `https://www.facebook.com/v21.0/dialog/oauth?client_id=APP_ID&redirect_uri=https://developers.facebook.com/tools/explorer/&response_type=token&scope=instagram_basic,business_management,pages_read_engagement,pages_show_list`;
+   - autorize, escolhendo a Page vinculada à conta do Instagram.
+   - `IG_USER_ID`: com o token gerado, no próprio Explorer rode
+     `GET /{page-id}?fields=instagram_business_account` (ou veja em
+     Configurações da Página → Instagram) para pegar o id da conta
+     Business/Creator vinculada.
+6. **Verifique o token ANTES de colar no projeto** — no Graph API Explorer,
+   rode `GET /{IG_USER_ID}?fields=id,username` com o token gerado. Resposta
+   `{"id": ..., "username": ...}` = token certo. Erro `403`/`"missing
+   permissions"` = token do produto errado (volte ao passo 2) ou sem a Page
+   selecionada no passo 5.
+7. Preencha `INSTAGRAM_ACCESS_TOKEN` e `IG_USER_ID` no
    [lugar certo do ambiente](#4-onde-colar).
-6. Verifique (mesma camada do passo 6 do YouTube: o `cf-python` lê só
-   `app.env` — confirme `INSTAGRAM_ACCESS_TOKEN` e `IG_USER_ID` também em
-   `.devcontainer/env/app.env` antes de rodar, [§4](#4-onde-colar)):
+8. Verifique de novo, agora via CLI (mesma camada do passo 6 do YouTube: o
+   `cf-python` lê só `app.env` — confirme `INSTAGRAM_ACCESS_TOKEN` e
+   `IG_USER_ID` também em `.devcontainer/env/app.env` antes de rodar,
+   [§4](#4-onde-colar)):
 
    ```bash
    docker exec cf-python uv run cf collect --segment candles --platform instagram --limit 1
    ```
 
-   Esperado: exit `0`. `auth_expired` = token errado, expirado ou sem
-   permissão — confira os dois valores e repita o passo 4.
+   Esperado: exit `0`. Com o token certo mas sem *App Review* da feature
+   "Instagram Public Content Access" aprovado, o log mostra `instagram: gate
+   #10 (App Review pendente) — usando mídia própria` e o `collect` ainda
+   assim retorna `ok` (fallback automático — ver
+   `docs/ai-plans/2026-10-10-fix-instagram-collector.md`). Isso é esperado,
+   **não é o mesmo bug do passo 6**: aqui o token está correto, só falta a
+   aprovação da Meta para hashtag de terceiros.
 
-!!! warning "Token de teste expira em 24 h"
+!!! warning "Token de teste expira em 1-2 h (User Access Token) ou 24 h"
     Para rodar de verdade (worker/cron) o token precisa ser duradouro e entrar
     na rotina de rotação — tabela e procedimento em
     [Credenciais](../dev/credentials.md). Escopo mínimo (leitura de
@@ -165,6 +206,7 @@ Resumo só do essencial; procedimento completo e tabela ampla em
 |---|---|---|
 | `YOUTUBE_API_KEY` | `rate_limited` (403 logo na primeira busca) | conferir se a API está habilitada e as restrições da chave; se vazou, criar nova e **revogar** a antiga no Cloud Console |
 | `INSTAGRAM_ACCESS_TOKEN` / `IG_USER_ID` | `auth_expired` (401/400) | token errado/expirado: gerar novo com escopo mínimo, **revogar** o anterior, atualizar env, reiniciar worker |
+| `INSTAGRAM_ACCESS_TOKEN` | `upstream_changed` (403 `"Requires instagram_basic permission"`) | token do produto **errado** ("login do Instagram" em vez de "login do Facebook") — gere de novo seguindo [§2](#2-instagram--graph-api-instagram_access_token--ig_user_id) passo a passo, **verificando no passo 6 antes de colar** |
 | `TIKTOK_MS_TOKEN` | `auth_expired` | logar na conta secundária, copiar `ms_token` novo, atualizar env, reiniciar worker |
 | `TIKTOK_MS_TOKEN` | `blocked` | anti-bot: pausar a coleta TikTok (não retry cego), esperar e rotacionar se necessário |
 
