@@ -1,4 +1,4 @@
-# ADR-0005 — Google Trends via pytrends (scraping não-oficial)
+# ADR-0005 — Google Trends e Suggest via scraping não-oficial (pytrends + httpx)
 
 **Situação:** Aceita · **Data:** 2026-10-12
 
@@ -25,6 +25,17 @@ Usar **`TrendsGoogleProvider`** atrás do Protocol `TrendsProvider`:
 - Provider é **descartável** — Strategy atrás do Protocol; se o Google
   mudar a endpoint, trocar a implementação sem tocar no domínio
 
+### WebSuggestProvider (KeywordExpander)
+
+Endpoint pública `suggestqueries.google.com/complete/search?client=firefox&q=...`
+devolve JSON: `["query", ["sug1", "sug2", ...]]`. Implementação:
+
+- `httpx` + `asyncio.to_thread` (mesmo padrão do TrendsProvider e web.py)
+- Mapeamento de erros idêntico: 429 → `RateLimited`, rede → `NetworkError`,
+  resto → `UpstreamChanged`
+- **Circuit breaker** idêntico: 5 falhas → cooldown 3 ciclos
+- Seam de teste: `transport` parametrizável (MockTransport-style)
+
 ## Riscos aceitos
 
 | Risco | Mitigação |
@@ -46,6 +57,6 @@ Usar **`TrendsGoogleProvider`** atrás do Protocol `TrendsProvider`:
 ## Referências
 
 - `pytrends` 4.9.2 (Apache 2.0): https://github.com/GeneralMills/pytrends
-- Protocol: `app/ports.py::TrendsProvider`
-- Implementação: `infra/collectors/trends_google.py`
-- Testes: `tests/infra/collectors/test_trends_google.py`
+- Protocol: `app/ports.py::TrendsProvider` e `app/ports.py::KeywordExpander`
+- Implementação: `infra/collectors/trends_google.py`, `infra/collectors/web_suggest.py`
+- Testes: `tests/infra/collectors/test_trends_google.py`, `tests/infra/collectors/test_web_suggest.py`

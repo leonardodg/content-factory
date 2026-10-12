@@ -103,23 +103,14 @@ class AppDeps:
     close: Callable[[], Awaitable[None]]
 
 
-class _NoopKeywordExpander:
-    """Stub até a Fase B (Google/web suggest) — devolve vazio p/ não quebrar o job."""
-
-    platform: ClassVar[str] = "web_suggest"
-
-    async def expand(self, seeds: list[str], depth: int) -> list[Any]:
-        return []
-
-
 async def create_app_deps(settings: Settings) -> AppDeps:
     """Fábrica do worker: `register_defaults` + repositórios + lock/rate-limit.
 
     Segmento precisa existir no banco (`cf segment load`) — senão o startup
     falha rápido. Testes nunca passam por aqui (monkeypatch nos hooks).
 
-    Decisão de composição (Fase D→B): `web` = stub noop (Fase B pendente
-    para web suggest); `trends` = TrendsGoogleProvider real (Fase B);
+    Decisão de composição (Fase D→B): `web` = WebSuggestProvider real
+    (Google Suggest, ADR-0005); `trends` = TrendsGoogleProvider real;
     `socials` = collectors reais que satisfazem
     SocialDiscoverer estruturalmente (Instagram desde a Fase C); `signals` =
     repositório real (tabela existe desde a Fase A).
@@ -127,6 +118,7 @@ async def create_app_deps(settings: Settings) -> AppDeps:
     from content_factory.app.ports import SocialDiscoverer
     from content_factory.infra.collectors import register_defaults, registry
     from content_factory.infra.collectors.trends_google import TrendsGoogleProvider
+    from content_factory.infra.collectors.web_suggest import WebSuggestProvider
     from content_factory.infra.db.base import get_session_factory
     from content_factory.infra.db.repositories import (
         CollectRunRepositoryImpl,
@@ -169,7 +161,7 @@ async def create_app_deps(settings: Settings) -> AppDeps:
                 keywords=segment.keywords,
             ),
             research=ResearchDeps(
-                web=_NoopKeywordExpander(),
+                web=WebSuggestProvider(),
                 trends=TrendsGoogleProvider(),
                 socials=socials,
                 signals=KeywordSignalRepositoryImpl(session),

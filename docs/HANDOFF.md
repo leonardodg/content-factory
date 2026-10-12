@@ -8,10 +8,21 @@
 _(nenhuma branch de feature aberta — roadmap A→C→D→E→B COMPLETO. Pipeline
 de pesquisa multi-plataforma funcional: IG/YT/TikTok discover_by_keywords,
 research_job com cron 07:00, CLI cf research start/stop/status, Google
-Trends real via pytrends com circuit breaker. `web` (web-suggest) continua
-noop — decisão pendente do usuário.)_
+Trends real via pytrends, web-suggest real via Google Suggest — ambos com
+circuit breaker. Nenhuma fonte restante como noop.)_
 
 ## ✅ CONCLUÍDO
+
+### Web Suggest real via Google Suggest (2026-10-12)
+
+Branch `feat/web-suggest` (2 commits, 181 passed + pyright 0).
+
+- [x] `WebSuggestProvider` — endpoint pública do Google Suggest, `httpx` +
+  `asyncio.to_thread`, circuit breaker idêntico ao TrendsProvider
+  (6 testes: signals, dedupe, network, rate-limit, breaker, empty).
+- [x] Worker `create_app_deps` usa `WebSuggestProvider` (substitui
+  `_NoopKeywordExpander`, classe removida).
+- [x] ADR-0005 expandido (web-suggest incluído).
 
 ### Fase B — Google Trends real via pytrends (2026-10-12)
 
