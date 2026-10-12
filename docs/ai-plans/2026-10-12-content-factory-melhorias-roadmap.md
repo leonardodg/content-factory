@@ -31,12 +31,12 @@ ajuste de fórmula é ajuste no vácuo.
 
 | Item | Status real | Evidência |
 |---|---|---|
-| Coleta YT/TikTok/IG/web, descoberta por keyword | **Implementado** | `infra/collectors/*.py`, 179 testes reais passando (ver code review desta sessão) |
-| Scoring determinístico (fórmula única) | **Implementado, porém roda sobre dados zerados** | `domain/scoring.py` + bug acima |
-| Persistência de métricas (`video_metrics`) | **Limitação concreta — não existe, não é "fase futura"** | nenhum writer no código |
-| Persistência de candidatos descobertos via pesquisa | **Limitação concreta** | `app/research_pipeline.py:74-86` conta mas não persiste |
-| Série temporal do Google Trends | **Limitação concreta** | `TrendPoint` é reduzido a peso único e descartado |
-| Contadores operacionais padronizados na pesquisa | **Limitação concreta** | `social_found` mistura descoberto/persistido |
+| Coleta YT/TikTok/IG/web, descoberta por keyword | **Implementado** | `infra/collectors/*.py`, 186 testes reais passando |
+| Scoring determinístico (fórmula única) | **Implementado, com dados reais (Fase F)** | `domain/scoring.py` + `video_metrics` agora é escrito |
+| Persistência de métricas (`video_metrics`) | **Implementado (Fase F)** | `upsert_candidates` grava snapshot |
+| Persistência de candidatos descobertos via pesquisa | **Implementado (Fase F)** | `research_pipeline` usa `upsert_candidates` |
+| Série temporal do Google Trends | **Implementado (Fase F)** | `trend_observations` append-only |
+| Contadores operacionais padronizados na pesquisa | **Implementado (Fase F)** | vocabulário collect() (found/inserted/updated/skipped) |
 | Diversidade de modos de descoberta (recentes/emergentes/semântica) | **Futuro** | só existe "top por views + janela" |
 | Expansão semântica de segmento (sinônimos, subnichos, exclusões) | **Futuro** | hoje só `segment.keywords` literal + Google Suggest |
 | Contrato de integração com `insta_kb` | **Futuro — decisão arquitetural não tomada** | nenhuma referência cruzada no código |
@@ -56,18 +56,18 @@ e validar se o schema existente ainda serve depois de usado de verdade.
 Mantida a lógica da revisão externa (corrigir dados antes de empilhar IA),
 com o achado novo elevado ao topo da Fase 01.
 
-### Fase F — Integridade do pipeline (P0, bloqueia tudo abaixo)
+### Fase F — Integridade do pipeline (P0, bloqueia tudo abaixo) ✅ CONCLUÍDA
 
 Plano detalhado: `docs/ai-plans/2026-10-12-content-factory-fase-f-integridade-pipeline.md`.
 
-- Gravar snapshot de métricas no upsert de candidatos (bug novo, mais
+- [x] Gravar snapshot de métricas no upsert de candidatos (bug novo, mais
   crítico que os da revisão externa — sem isso não existe dado para
   pontuar).
-- `research_pipeline` persiste candidatos sociais pelo mesmo contrato do
+- [x] `research_pipeline` persiste candidatos sociais pelo mesmo contrato do
   `collect()` — sem duplicar código.
-- Google Trends passa a ter observação histórica própria, separada do
+- [x] Google Trends passa a ter observação histórica própria, separada do
   sinal de descoberta (`keyword_signals`).
-- Contadores da pesquisa alinhados ao vocabulário já usado por
+- [x] Contadores da pesquisa alinhados ao vocabulário já usado por
   `CollectRun` (found/inserted/updated/skipped/failed), eliminando
   `social_found` ambíguo.
 

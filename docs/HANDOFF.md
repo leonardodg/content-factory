@@ -5,13 +5,33 @@
 
 ## 🔄 EM ANDAMENTO
 
-_(nenhuma branch de feature aberta — roadmap A→C→D→E→B COMPLETO. Pipeline
-de pesquisa multi-plataforma funcional: IG/YT/TikTok discover_by_keywords,
-research_job com cron 07:00, CLI cf research start/stop/status, Google
-Trends real via pytrends, web-suggest real via Google Suggest — ambos com
-circuit breaker. Nenhuma fonte restante como noop.)_
+_(nenhuma branch de feature aberta — roadmap A→C→D→E→B+web-suggest+F COMPLETO.
+Pipeline de pesquisa multi-plataforma funcional com métricas persistidas,
+candidatos sociais idempotentes, Trends histórico e web-suggest real.)_
 
 ## ✅ CONCLUÍDO
+
+### Fase F — Integridade do pipeline (2026-10-12)
+
+Branch `feat/fase-f-integridade` (3 commits, 186 passed + pyright 0).
+Achado principal: **nenhum fluxo gravava em `video_metrics`** — todo
+score rodava com views=likes=0. Corrigido + 3 problemas da revisão
+externa.
+
+- [x] **F1** (`b54505d`): `upsert_candidates` grava snapshot em
+  `video_metrics` no MESMO `begin_nested` (atomicidade por candidato),
+  preservando `None` para métricas não reportadas. 2 testes.
+- [x] **F2** (`ebe4c59`): `research_pipeline` persiste candidatos
+  sociais via `upsert_candidates` (idempotente, ON CONFLICT DO UPDATE),
+  grava `CollectRun` com `collector=research:<platform>`, contadores
+  alinhados ao vocabulário `collect()` (found/inserted/updated/skipped).
+- [x] **F3** (`566e990`): `trend_observations` — série temporal
+  append-only do Google Trends (migração 0004, ORM, porta, repo,
+  wiring). `history_for_keyword` devolve mais recente primeiro (base
+  para Fase G).
+- [x] **F4**: gates completos (pytest 186 passed, ruff/format 0,
+  pyright 0, alembic check ok, bandit 0, mkdocs strict ok, privacy 184) +
+  operacao.md §5 atualizado + roadmap marcado.
 
 ### Web Suggest real via Google Suggest (2026-10-12)
 

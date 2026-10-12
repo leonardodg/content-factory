@@ -77,11 +77,11 @@ no banco (query direta, não via `VideoSnapshot`, porque `VideoMetrics`
 hoje ainda colapsa `None` em `0` — isso só é corrigido na Fase G; o teste
 desta fase deve verificar o dado crú em `video_metrics`, não o DTO).
 
-- [ ] RED: escrever os dois testes acima, confirmar que falham
+- [x] RED: escrever os dois testes acima, confirmar que falham
   (`video_metrics` vazio após `upsert_candidates`).
-- [ ] GREEN: implementar o INSERT condicional acima.
-- [ ] Gates locais (`pytest`, `ruff`, `pyright`) verdes.
-- [ ] Commit: `fix(db): upsert_candidates grava snapshot em video_metrics (bug: scoring sempre rodava com métricas zeradas)`
+- [x] GREEN: implementar o INSERT condicional acima.
+- [x] Gates locais (`pytest`, `ruff`, `pyright`) verdes.
+- [x] Commit: `fix(db): upsert_candidates grava snapshot em video_metrics (bug: scoring sempre rodava com métricas zeradas)`
 
 ### Task F2: `research_pipeline` persiste candidatos sociais pelo contrato do `collect()`
 
@@ -178,9 +178,9 @@ usado por `collect()`); reexecutar o ciclo de pesquisa não duplica vídeo.
   com `status="failed"` foi gravado (`deps.runs` — usar `_FakeRuns`, já
   existente em `tests/stubs.py`).
 
-- [ ] RED → GREEN nos dois arquivos de teste.
-- [ ] Gates locais verdes.
-- [ ] Commit: `fix(research): persiste candidatos sociais via upsert_candidates (mesmo contrato do collect) + CollectRun por plataforma`
+- [x] RED → GREEN nos dois arquivos de teste.
+- [x] Gates locais verdes.
+- [x] Commit: `fix(research): persiste candidatos sociais via upsert_candidates (mesmo contrato do collect) + CollectRun por plataforma`
 
 ### Task F3: observação histórica do Google Trends (`trend_observations`)
 
@@ -275,8 +275,8 @@ montagem de `ResearchDeps` — mesmo padrão dos outros repositórios.
   com exatamente esses pontos (fake nova em `tests/stubs.py` ou inline no
   teste, seguindo o padrão de `_FakeSignalRepo` já existente no arquivo).
 
-- [ ] RED → GREEN (migração, ORM, porta, repo, wiring, testes).
-- [ ] `alembic upgrade head` + `alembic check` verdes. **Atenção**:
+- [x] RED → GREEN (migração, ORM, porta, repo, wiring, testes).
+- [x] `alembic upgrade head` + `alembic check` verdes. **Atenção**:
   `alembic/env.py` lê `get_settings().database_url` (env `DATABASE_URL`),
   não `TEST_DATABASE_URL` — dentro do devcontainer/compose `DATABASE_URL`
   já está setado pelo `docker-compose.yml`; rodar via
@@ -284,26 +284,26 @@ montagem de `ResearchDeps` — mesmo padrão dos outros repositórios.
   (os testes de repositório, por outro lado, criam a própria engine a
   partir de `TEST_DATABASE_URL` — ver `tests/infra/test_repositories.py` —
   são mecanismos independentes, não confundir os dois ao depurar).
-- [ ] Gates locais verdes (`pytest` precisa de `TEST_DATABASE_URL` exportado
+- [x] Gates locais verdes (`pytest` precisa de `TEST_DATABASE_URL` exportado
   no ambiente onde rodar — exportar dentro do container, não no host, se o
   Postgres do compose só expuser a porta em `127.0.0.1`).
-- [ ] Commit: `feat(trends): trend_observations — série temporal do Google Trends separada do sinal de descoberta`
+- [x] Commit: `feat(trends): trend_observations — série temporal do Google Trends separada do sinal de descoberta`
 
 ### Task F4: gates completos + docs + HANDOFF
 
-- [ ] Gates completos: `pytest` (com `TEST_DATABASE_URL` exportado no shell
+- [x] Gates completos: `pytest` (com `TEST_DATABASE_URL` exportado no shell
   onde o comando roda — subir o compose, ver
   `docs/dev/dev-environment.md`), `ruff check`, `pyright`, `alembic check`
   (via `docker compose ... exec python`, que já tem `DATABASE_URL` setado
   — ver nota da Task F3), `bandit -r src`, `pip-audit`,
   `mkdocs build --strict`, teste de privacidade.
-- [ ] `docs/manual/operacao.md` ganha uma nota sobre o que mudou no
+- [x] `docs/manual/operacao.md` ganha uma nota sobre o que mudou no
   envelope de `cf research status`/no `CollectRun` audit (novo prefixo
   `research:<platform>` nos registros de `collect_runs`).
-- [ ] `docs/HANDOFF.md`: nova entrada "Fase F — integridade do pipeline
+- [x] `docs/HANDOFF.md`: nova entrada "Fase F — integridade do pipeline
   (2026-10-12)" descrevendo o bug de `video_metrics` nunca escrito como o
   achado principal, e os 3 problemas da revisão externa corrigidos.
   Atualizar a classificação do roadmap
   (`docs/ai-plans/2026-10-12-content-factory-melhorias-roadmap.md`) movendo
   Fase F de "a fazer" para concluída.
-- [ ] Commit final: `docs: Fase F completa — métricas persistidas, pesquisa social idempotente, Trends histórico`
+- [x] Commit final: `docs: Fase F completa — métricas persistidas, pesquisa social idempotente, Trends histórico`

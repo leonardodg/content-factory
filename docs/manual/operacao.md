@@ -184,6 +184,32 @@ A campanha expira sozinha quando `ends_at` passa — não é preciso `stop`
 manual no fim do período. O `research_job` no worker filtra
 `active == true AND ends_at > now()` ([§4](#4-worker-e-cron)).
 
+### O que o research_job faz (Fase F)
+
+1. **Web suggest** — expande `segment.keywords` via Google Suggest.
+2. **Google Trends** — busca interesse histórico e grava a série
+   temporal em `trend_observations` (append-only) + um `KeywordSignal`
+   por ponto (descoberta).
+3. **Social (IG/YT/TikTok)** — para cada plataforma do segmento, chama
+   `discover_by_keywords` e **persiste os candidatos via
+   `upsert_candidates`** (mesmo contrato do `cf collect`, idempotente).
+   Cada plataforma gera um `CollectRun` auditável com
+   `collector=research:<platform>` (prefixo para diferenciar do
+   `collect()` no audit).
+
+### Contadores do envelope
+
+| Contador | Significado |
+|---|---|
+| `web_found` | sinais de keyword expandidos pelo web suggest |
+| `trends_found` | pontos de trend convertidos em sinais |
+| `signals_saved` | total de sinais gravados (web + trends) |
+| `social_found` | candidatos descobertos pelos coletores sociais |
+| `social_inserted` | candidatos novos inseridos em `videos` |
+| `social_updated` | candidatos já existentes atualizados |
+| `social_skipped` | candidatos revertidos pelo savepoint |
+| `<platform>_failed` | falhas por plataforma social |
+
 ## 6. Limitações conhecidas
 
 - **Google Trends e Suggest são scraping não-oficial** (`pytrends` e
