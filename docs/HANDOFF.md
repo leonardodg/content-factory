@@ -5,11 +5,26 @@
 
 ## 🔄 EM ANDAMENTO
 
-_(nenhuma branch de feature aberta — roadmap A→C→D→E→B+web-suggest+F COMPLETO.
-Pipeline de pesquisa multi-plataforma funcional com métricas persistidas,
-candidatos sociais idempotentes, Trends histórico e web-suggest real.)_
+_(nenhuma branch de feature aberta — roadmap A→C→D→E→B+web-suggest+F+G
+PARCIAL COMPLETO. Pipeline com métricas persistidas, scoring que distingue
+ausência de zero, cobertura auditável. Fase G parcial: estrutural pronto;
+velocidade por diff e recalibração de pesos dependem de dados reais.)_
 
 ## ✅ CONCLUÍDO
+
+### Fase G (parcial) — Scoring v2: None vs Zero + cobertura (2026-10-12)
+
+Branch `feat/fase-g-scoring-v2` (2 commits, 193 passed + pyright 0).
+Escopo estrutural apenas — velocidade por diff entre snapshots e
+recalibração de pesos ficam para depois de dados reais em `video_metrics`.
+
+- [x] **G1** (`9e5a8dd`): `VideoMetrics` campos mudam de `int = 0` para
+  `int | None = None`. `_snapshot()` para de colapsar `None` em `0`.
+  `engagement_rate` devolve `None` quando `views` ausente. `viral_score`
+  exclui componentes `None` da média (renormaliza pesos). Vídeo sem
+  métrica não é penalizado como desempenho zero.
+- [x] **G2** (`e3ea4a0`): `ScoreResult.metrics_available: list[str]` —
+  quais métricas o snapshot tinha de verdade (auditável por plataforma).
 
 ### Fase F — Integridade do pipeline (2026-10-12)
 

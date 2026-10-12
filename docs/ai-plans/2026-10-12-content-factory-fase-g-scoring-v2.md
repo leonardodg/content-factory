@@ -26,8 +26,8 @@ plano cobre só a parte **estrutural** que não precisa de calibração.
 não `0.0`). `viral_score` trata componente com `None` como "sem dados"
 (exclui da média em vez de contar como zero).
 
-- [ ] RED → GREEN
-- [ ] Commit: `feat(scoring): VideoMetrics distingue metrica ausente (None) de zero`
+- [x] RED → GREEN
+- [x] Commit: `feat(scoring): VideoMetrics distingue metrica ausente (None) de zero`
 
 ### Task G2: cobertura de métricas no ScoreResult
 
@@ -41,11 +41,11 @@ não `0.0`). `viral_score` trata componente com `None` como "sem dados"
 — quais métricas o snapshot tinha de verdade. Permite auditar cobertura
 por plataforma sem query extra.
 
-- [ ] RED → GREEN
-- [ ] Commit: `feat(scoring): ScoreResult registra cobertura de metricas disponiveis`
+- [x] RED → GREEN
+- [x] Commit: `feat(scoring): ScoreResult registra cobertura de metricas disponiveis`
 
 ### Task G3: gates + docs + HANDOFF
 
-- [ ] Gates completos.
-- [ ] `docs/HANDOFF.md` + roadmap (G parcialmente concluído — estrutural).
-- [ ] Commit final.
+- [x] Gates completos.
+- [x] `docs/HANDOFF.md` + roadmap (G parcialmente concluído — estrutural).
+- [x] Commit final.

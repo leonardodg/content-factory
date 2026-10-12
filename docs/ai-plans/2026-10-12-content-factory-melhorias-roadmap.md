@@ -76,19 +76,20 @@ em `videos` e tem pelo menos uma linha em `video_metrics`; toda execução
 de pesquisa por plataforma tem um `CollectRun` auditável; uma observação
 de Trends pode ser consultada por keyword e período.
 
-### Fase G — Modelo de métricas e scoring v2 (P0, depende da Fase F)
+### Fase G — Modelo de métricas e scoring v2 (P0, depende da Fase F) ✅ PARCIAL
 
-Plano a escrever **depois** da Fase F estar em produção por tempo
-suficiente para existirem snapshots reais — não calibrar pesos no escuro
-(mesma cautela da revisão externa).
+Plano: `docs/ai-plans/2026-10-12-content-factory-fase-g-scoring-v2.md`.
 
-- `VideoMetrics` distingue métrica ausente de métrica zero (`int | None`),
+- [x] `VideoMetrics` distingue métrica ausente de métrica zero (`int | None`),
   propagado até `VideoSnapshot` (hoje `_snapshot()` colapsa `None` em `0`).
-- Velocidade calculada por diferença entre snapshots reais, não por idade.
-- Separar performance (alcance acumulado) de momentum (crescimento) de
-  relevância, como dimensões auditáveis independentes — sem recalibrar
-  pesos sem dados de base.
-- Registrar cobertura de métricas por plataforma no resultado do score.
+- [x] Registrar cobertura de métricas por plataforma no resultado do score
+  (`ScoreResult.metrics_available`).
+- [ ] Velocidade calculada por diferença entre snapshots reais, não por
+  idade — **pendente de dados reais** (Fase F recém-mergeada; precisa de
+  `video_metrics` acumulado).
+- [ ] Separar performance (alcance acumulado) de momentum (crescimento) de
+  relevância, como dimensões auditáveis independentes — **pendente de
+  dados reais** para calibrar sem recalibrar pesos no escuro.
 
 **Critério de conclusão:** o ranking pode ser explicado componente a
 componente, e vídeos sem uma métrica (ex.: Instagram sem views) não são
