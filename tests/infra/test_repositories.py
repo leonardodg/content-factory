@@ -517,3 +517,86 @@ async def test_research_campaign_stop_removes_from_active() -> None:
         await repo.stop(seg.id)
         assert await repo.active_for_segment(seg.id) is None
     await engine.dispose()
+
+
+@requires_infra
+async def test_upsert_candidates_writes_video_metrics_snapshot() -> None:
+    """upsert_candidates grava linha em video_metrics (bug Fase F: nunca gravava).
+
+    Sem isso, latest_for_segment sempre cai no ramo `m is None` e devolve
+    VideoMetrics() zerado — todo score rodava com views=0/likes=0.
+    """
+    engine = create_async_engine(os.environ["TEST_DATABASE_URL"])
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    async with factory() as s:
+        await s.rollback()
+        seg = await SegmentRepositoryImpl(s).upsert(
+            SegmentConfig(
+                slug=f"teste-metrics-{uuid4().hex[:8]}",
+                name="Teste metrics",
+                platforms=["youtube"],
+                keywords=["k"],
+            )
+        )
+        c = CandidateVideo(
+            platform="youtube",
+            platform_video_id=f"vid-metrics-{uuid4().hex[:12]}",
+            url="https://youtu.be/vm",
+            creator_handle="u",
+            views=1000,
+            likes=50,
+            shares=None,  # YouTube não expõe shares — deve ficar NULL
+        )
+        repo = VideoRepositoryImpl(s)
+        await repo.upsert_candidates(seg.id, "youtube", [c])
+
+        # snapshot via latest_for_segment (views/likes visíveis no DTO)
+        snaps = {snap.video_id: snap for snap in await repo.latest_for_segment(seg.id)}
+        vid = await video_id_of(s, c)
+        assert snaps[vid].metrics.views == 1000
+        assert snaps[vid].metrics.likes == 50
+
+        # shares NULL no banco (query crua — VideoMetrics colapsa None em 0,
+        # correção de None-vs-zero é Fase G)
+        row = (
+            await s.execute(select(VideoMetricsRow).where(VideoMetricsRow.video_id == vid))
+        ).scalar_one()
+        assert row.views == 1000
+        assert row.likes == 50
+        assert row.shares is None  # não reportado → NULL, não zero
+    await engine.dispose()
+
+
+@requires_infra
+async def test_upsert_candidates_skips_metrics_row_when_no_metric_reported() -> None:
+    """Candidato sem NENHUMA métrica reportada não gera linha de metrics toda NULL."""
+    engine = create_async_engine(os.environ["TEST_DATABASE_URL"])
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    async with factory() as s:
+        await s.rollback()
+        seg = await SegmentRepositoryImpl(s).upsert(
+            SegmentConfig(
+                slug=f"teste-nometrics-{uuid4().hex[:8]}",
+                name="Teste no metrics",
+                platforms=["youtube"],
+                keywords=["k"],
+            )
+        )
+        c = CandidateVideo(
+            platform="youtube",
+            platform_video_id=f"vid-nometrics-{uuid4().hex[:12]}",
+            url="https://youtu.be/vn",
+            creator_handle="u",
+            views=None,
+            likes=None,
+        )
+        repo = VideoRepositoryImpl(s)
+        await repo.upsert_candidates(seg.id, "youtube", [c])
+        vid = await video_id_of(s, c)
+        rows = (
+            (await s.execute(select(VideoMetricsRow).where(VideoMetricsRow.video_id == vid)))
+            .scalars()
+            .all()
+        )
+        assert rows == []  # sem métrica reportada → sem linha
+    await engine.dispose()

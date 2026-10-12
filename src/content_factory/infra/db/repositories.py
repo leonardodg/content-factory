@@ -115,6 +115,26 @@ class VideoRepositoryImpl(VideoRepository):
                         set_={"discovery_source": link.excluded.discovery_source},
                     )
                     await self._s.execute(link)
+                    # Fase F: gravar snapshot em video_metrics no MESMO
+                    # begin_nested (atomicidade por candidato). Preserva
+                    # None quando o coletor não reportou a métrica (YouTube
+                    # não expõe shares; TikTok não expõe saves — ADR-0003).
+                    # Candidato sem NENHUMA métrica não gera linha toda NULL.
+                    has_metric = any(
+                        v is not None for v in (c.views, c.likes, c.comments, c.shares, c.saves)
+                    )
+                    if has_metric:
+                        self._s.add(
+                            VideoMetricsRow(
+                                video_id=video_id,
+                                views=c.views,
+                                likes=c.likes,
+                                comments=c.comments,
+                                shares=c.shares,
+                                saves=c.saves,
+                                followers_at_capture=c.creator_followers,
+                            )
+                        )
                 if is_new:
                     stats.inserted += 1
                 else:
