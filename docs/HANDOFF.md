@@ -5,16 +5,28 @@
 
 ## 🔄 EM ANDAMENTO
 
-Branch `feat/pipeline-pesquisa-fase-c` — Fase C do pipeline de pesquisa
-(Instagram orientado a keyword, ver
-`docs/ai-plans/2026-10-12-pipeline-pesquisa-fase-c.md`). Tasks C1–C2
-concluídas e gates verdes; falta: PR + merge. Próximas fases
-(D→E→B) são planos futuros em
-`docs/ai-plans/2026-10-12-pipeline-pesquisa-fase-{d,e,b}.md` — nenhum
-provider real existe ainda (Fase C só liga o SocialDiscoverer do
-Instagram ao pipeline).
+_(nenhuma branch de feature aberta — próxima fase: D, quando o usuário decidir
+executar; planos prontos em `docs/ai-plans/2026-10-12-pipeline-pesquisa-fase-{d,e,b}.md`.)_
 
 ## ✅ CONCLUÍDO
+
+### Fase C — Instagram orientado a keyword (2026-10-12)
+
+Merge local fast-forward em `main` (`34d5172` + `3e08390`, branch deletada;
+153 passed + pyright 0 no merged). Executada via executing-plans, plano
+`docs/ai-plans/2026-10-12-pipeline-pesquisa-fase-c.md` (TDD, RED verificado).
+
+- [x] **Task C1** (`34d5172`): `InstagramCollector.discover_by_keywords` —
+  extrai `_own_media_by_terms` (helper parametrizado por lista de termos)
+  de `_own_media`; `discover_by_keywords` consome a união keywords+hashtags
+  do `research_pipeline`. `InstagramCollector` satisfaz estruturalmente
+  `Collector` E `SocialDiscoverer` (1 teste novo, RED via AttributeError).
+- [x] **Task C2** (`3e08390`): gates completos verdes (pytest 153 passed,
+  ruff/format 0, pyright 0, bandit 0, pip-audit 0, mkdocs strict, privacy
+  174 arquivos) + HANDOFF + checkboxes do plano.
+- Ajuste fino vs plano: o fixture compartilhado `_OWN_MEDIA` tem 18002 como
+  `IMAGE` (filtro de vídeo da Fase 0); o teste usa route custom com VIDEO
+  para provar a união keywords+hashtags.
 
 ### Fase A — fundação do pipeline de pesquisa (2026-10-12)
 
