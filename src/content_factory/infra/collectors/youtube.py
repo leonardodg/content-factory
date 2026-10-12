@@ -61,6 +61,18 @@ class YoutubeCollector:
 
     async def discover(self, segment: SegmentConfig, limit: int) -> list[CandidateVideo]:
         q = " OR ".join(segment.keywords[:5])
+        return await self._search(q, limit)
+
+    async def discover_by_keywords(
+        self, keywords: list[str], hashtags: list[str], depth: int
+    ) -> list[CandidateVideo]:
+        """Busca por keywords+hashtags dinâmicas — mesmo fluxo de discover()."""
+        _ = depth  # profundidade é controle do FanoutGuard, não da API
+        terms = [*keywords, *hashtags][:5]  # API não aceita query enorme
+        q = " OR ".join(terms)
+        return await self._search(q, limit=25)
+
+    async def _search(self, q: str, limit: int) -> list[CandidateVideo]:
         after = (datetime.now(UTC) - timedelta(days=7)).strftime("%Y-%m-%dT%H:%M:%SZ")
         search = await self._get(
             "search",

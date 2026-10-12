@@ -21,6 +21,39 @@ async def test_discover_maps_fixture(httpx_mock_transport: httpx.MockTransport) 
 
 
 @pytest.mark.asyncio
+async def test_discover_by_keywords_builds_query_and_returns_videos() -> None:
+    """discover_by_keywords monta query a partir de keywords+hashtags e usa o MESMO fluxo."""
+    captured: list[str] = []
+
+    def _route(request: httpx.Request) -> httpx.Response:
+        from pathlib import Path
+
+        fixtures = Path(__file__).parents[2] / "fixtures"
+        url = str(request.url)
+        if "/search" in url:
+            captured.append(request.url.params.get("q", ""))
+            return httpx.Response(200, content=(fixtures / "youtube_search.json").read_bytes())
+        if "/videos" in url:
+            return httpx.Response(200, content=(fixtures / "youtube_videos.json").read_bytes())
+        if "/channels" in url:
+            return httpx.Response(200, content=(fixtures / "youtube_channels.json").read_bytes())
+        return httpx.Response(404, json={})
+
+    c = YoutubeCollector(api_key="k", transport=httpx.MockTransport(_route))
+    out = await c.discover_by_keywords(
+        keywords=["candle making", "DIY candle"], hashtags=["#velas", "#soy"], depth=1
+    )
+    assert out and out[0].platform == "youtube"
+    assert out[0].duration_s == 492
+    assert c.quota_used == 102
+    # query = keywords+hashtags unidos (máx 5 termos)
+    assert len(captured) == 1
+    assert "candle making" in captured[0]
+    assert "DIY candle" in captured[0]
+    assert "#velas" in captured[0]
+
+
+@pytest.mark.asyncio
 async def test_quota_403_becomes_rate_limited() -> None:
     from content_factory.domain.errors import RateLimited
 
