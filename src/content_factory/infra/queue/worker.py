@@ -1,11 +1,12 @@
-"""Worker arq — jobs `collect_job`/`score_job` com cron 2x/dia.
+"""Worker arq — jobs `collect_job`/`score_job`/`research_job` com cron diário.
 
 Camada de composição: monta os deps uma vez no startup (registry +
 repositórios + Redis) e os injeta no `ctx` do arq; os jobs chamam os MESMOS
-use-cases da CLI (`app.collect`/`app.score`) — zero lógica duplicada.
+use-cases da CLI (`app.collect`/`app.score`/`app.research_pipeline`) — zero
+lógica duplicada.
 
-Hooks (`_collect_impl`, `_score_impl`, `_load_settings`) existem para o
-teste trocar por fakes sem tocar no arq/banco (fronteira = mock).
+Hooks (`_collect_impl`, `_score_impl`, `_research_impl`, `_load_settings`)
+existem para o teste trocar por fakes sem tocar no arq/banco (fronteira = mock).
 """
 
 import os
@@ -22,8 +23,11 @@ from arq.typing import StartupShutdown
 from arq.worker import Function, func
 
 from content_factory.app.collect import CollectDeps, collect
+from content_factory.app.research_pipeline import ResearchDeps, run_research_cycle
 from content_factory.app.score import ScoreDeps, score
 from content_factory.config import Settings, get_settings
+from content_factory.domain.fanout_guard import FanoutGuard
+from content_factory.domain.models import DepthConfig
 
 
 def parse_cron_hours(raw: str) -> set[int]:
@@ -48,6 +52,7 @@ def _load_settings() -> dict[str, Any]:
 # hooks de teste: monkeypatch troca por fakes sem tocar no arq/banco
 _collect_impl: Callable[..., Awaitable[Any]] = collect
 _score_impl: Callable[..., Awaitable[Any]] = score
+_research_impl: Callable[..., Awaitable[Any]] = run_research_cycle
 
 
 async def run_collect_job(ctx: dict[str, Any]) -> dict[str, Any]:
@@ -67,15 +72,51 @@ async def run_score_job(ctx: dict[str, Any]) -> dict[str, Any]:
     return {"ok": out.ok, "scored": out.scored}
 
 
+async def run_research_job(ctx: dict[str, Any]) -> dict[str, Any]:
+    """Ciclo diário do pipeline de pesquisa — só roda com campanha ativa.
+
+    O arq tem cron recorrente sem fim; a campanha (`research_campaigns`)
+    expressa "rodar por N semanas" — sem campanha ativa, skip silencioso.
+    """
+    cfg = _load_settings()
+    deps: ResearchDeps = ctx["research_deps"]
+    campaigns = ctx["campaigns_deps"]
+    segment = await deps.segments.get_by_slug(cfg["segment"])
+    campaign = await campaigns.active_for_segment(segment.id)
+    if campaign is None:
+        return {"ok": True, "skipped": "sem campanha ativa"}
+    out = await _research_impl(cfg["segment"], DepthConfig(), deps)
+    await ctx["app_deps"].commit()
+    return {"ok": out.ok, **out.counts}
+
+
 @dataclass
 class AppDeps:
-    """Deps de longa duração do worker — 1 sessão Postgres + 1 Redis p/ os 2 jobs."""
+    """Deps de longa duração do worker — 1 sessão Postgres + 1 Redis p/ os jobs."""
 
     collect: CollectDeps
     score: ScoreDeps
+    research: ResearchDeps
+    campaigns: Any  # ResearchCampaignRepository — tipado loose p/ não circular
     commit: Callable[[], Awaitable[None]]
     rollback: Callable[[], Awaitable[None]]
     close: Callable[[], Awaitable[None]]
+
+
+class _NoopKeywordExpander:
+    """Stub até a Fase B (Google/web suggest) — devolve vazio p/ não quebrar o job."""
+
+    platform: ClassVar[str] = "web_suggest"
+
+    async def expand(self, seeds: list[str], depth: int) -> list[Any]:
+        return []
+
+
+class _NoopTrendsProvider:
+    """Stub até a Fase B (Google Trends) — devolve vazio p/ não quebrar o job."""
+
+    async def interest_over_time(self, keywords: list[str], timeframe: str) -> list[Any]:
+        return []
 
 
 async def create_app_deps(settings: Settings) -> AppDeps:
@@ -83,11 +124,19 @@ async def create_app_deps(settings: Settings) -> AppDeps:
 
     Segmento precisa existir no banco (`cf segment load`) — senão o startup
     falha rápido. Testes nunca passam por aqui (monkeypatch nos hooks).
+
+    Decisão de composição (Fase D): `web`/`trends` = stubs noop até a Fase B
+    (planos em docs/ai-plans/); `socials` = collectors reais que satisfazem
+    SocialDiscoverer estruturalmente (Instagram desde a Fase C); `signals` =
+    repositório real (tabela existe desde a Fase A).
     """
+    from content_factory.app.ports import SocialDiscoverer
     from content_factory.infra.collectors import register_defaults, registry
     from content_factory.infra.db.base import get_session_factory
     from content_factory.infra.db.repositories import (
         CollectRunRepositoryImpl,
+        KeywordSignalRepositoryImpl,
+        ResearchCampaignRepositoryImpl,
         ScoreRepositoryImpl,
         SegmentRepositoryImpl,
         VideoRepositoryImpl,
@@ -102,6 +151,12 @@ async def create_app_deps(settings: Settings) -> AppDeps:
         session = await stack.enter_async_context(get_session_factory(settings)())
         register_defaults(settings)
         segment = await SegmentRepositoryImpl(session).get_by_slug(_load_settings()["segment"])
+        # socials: só collectors que implementam discover_by_keywords (Fase C+)
+        socials: dict[str, SocialDiscoverer] = {}
+        for name in registry.snapshot():
+            collector = registry.resolve([name])[0]
+            if hasattr(collector, "discover_by_keywords"):
+                socials[name] = collector  # type: ignore[assignment]
         return AppDeps(
             collect=CollectDeps(
                 # todos os coletores registrados; o job filtra pela plataforma pedida
@@ -118,6 +173,19 @@ async def create_app_deps(settings: Settings) -> AppDeps:
                 segment=segment,
                 keywords=segment.keywords,
             ),
+            research=ResearchDeps(
+                web=_NoopKeywordExpander(),
+                trends=_NoopTrendsProvider(),
+                socials=socials,
+                signals=KeywordSignalRepositoryImpl(session),
+                segments=SegmentRepositoryImpl(session),
+                videos=VideoRepositoryImpl(session),
+                runs=CollectRunRepositoryImpl(session),
+                limiter=RedisRateLimiter(client),
+                lock=RedisLock(client),
+                guard=FanoutGuard(segment.research or DepthConfig()),
+            ),
+            campaigns=ResearchCampaignRepositoryImpl(session),
             commit=session.commit,
             rollback=session.rollback,
             close=stack.aclose,
@@ -133,6 +201,8 @@ async def startup(ctx: dict[str, Any]) -> None:
     ctx["app_deps"] = deps
     ctx["collect_deps"] = deps.collect
     ctx["score_deps"] = deps.score
+    ctx["research_deps"] = deps.research
+    ctx["campaigns_deps"] = deps.campaigns
 
 
 async def job_end(ctx: dict[str, Any]) -> None:
@@ -154,8 +224,10 @@ class WorkerSettings:
     functions: ClassVar[list[Function]] = [
         func(run_collect_job, name="collect_job"),
         func(run_score_job, name="score_job"),
+        func(run_research_job, name="research_job"),
     ]
     cron_jobs: ClassVar[list[CronJob]] = [
+        cron(run_research_job, name="research_job", hour={7}, minute=0, unique=True),
         cron(
             run_collect_job,
             name="collect_job",
@@ -166,10 +238,10 @@ class WorkerSettings:
         cron(run_score_job, name="score_job", hour={8, 21}, minute=30, unique=True),
     ]
     redis_settings = RedisSettings.from_dsn(os.getenv("REDIS_URL", "redis://redis:6379/0"))
-    # sessão única compartilhada entre os 2 jobs: 1 job por vez
+    # sessão única compartilhada entre os jobs: 1 job por vez
     # (arq default max_jobs=10 quebraria a sessão com IllegalStateChangeError)
     max_jobs: ClassVar[int] = 1
-    # cron em horário local do projeto (08:00/20:00 BRT, não 05:00/17:00 UTC)
+    # cron em horário local do projeto (07:00 research, 08:00/20:00 collect BRT)
     timezone: ClassVar[tzinfo] = ZoneInfo("America/Sao_Paulo")
     on_startup: ClassVar[StartupShutdown] = startup
     on_job_end: ClassVar[StartupShutdown] = job_end

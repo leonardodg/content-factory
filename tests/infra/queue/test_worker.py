@@ -1,7 +1,13 @@
+from datetime import UTC, datetime
+from typing import ClassVar
+
 import pytest
 
 from content_factory.app.collect import CollectDeps
+from content_factory.app.research_pipeline import ResearchDeps
 from content_factory.domain.errors import SegmentNotFound
+from content_factory.domain.fanout_guard import FanoutGuard
+from content_factory.domain.models import DepthConfig, ResearchCampaign
 from content_factory.infra.queue import worker as w
 from tests.stubs import FakeLimiter, FakeLock, FakeRepos
 
@@ -60,15 +66,19 @@ async def test_collect_job_empty_platforms_fall_back_to_segment(
 
 
 def test_workersettings_registers_jobs_and_cron() -> None:
-    """Contrato: `functions` = collect_job/score_job; cron 2x/dia nesses jobs.
+    """Contrato: `functions` = collect/score/research; cron diário nesses jobs.
 
     Asserts diretos nas classes de settings (o `create_worker` do arq é
     validado de ponta a ponta na subida do container worker).
     """
     settings = w.WorkerSettings
-    assert {f.name for f in settings.functions} == {"collect_job", "score_job"}
-    assert [cj.coroutine for cj in settings.cron_jobs] == [w.run_collect_job, w.run_score_job]
-    assert [cj.minute for cj in settings.cron_jobs] == [0, 30]
+    assert {f.name for f in settings.functions} == {"collect_job", "score_job", "research_job"}
+    assert [cj.coroutine for cj in settings.cron_jobs] == [
+        w.run_research_job,
+        w.run_collect_job,
+        w.run_score_job,
+    ]
+    assert [cj.minute for cj in settings.cron_jobs] == [0, 0, 30]
     assert all(cj.unique for cj in settings.cron_jobs)
     assert settings.on_startup is w.startup
     assert settings.on_job_end is w.job_end
@@ -115,3 +125,119 @@ async def test_shutdown_closes_app_deps_when_present() -> None:
 
     await w.shutdown({"app_deps": FakeAppDeps()})
     assert closed == ["close"]
+
+
+class _FakeCampaigns:
+    def __init__(self, campaign: ResearchCampaign | None) -> None:
+        self._campaign = campaign
+        self.stopped: list[int] = []
+
+    async def active_for_segment(self, segment_id: int) -> ResearchCampaign | None:
+        return self._campaign
+
+    async def start(self, segment_id: int, ends_at: object) -> ResearchCampaign:
+        raise NotImplementedError
+
+    async def stop(self, segment_id: int) -> None:
+        self.stopped.append(segment_id)
+
+
+class _NoopWeb:
+    platform: str = "web_suggest"
+
+    async def expand(self, seeds: list[str], depth: int) -> list[object]:
+        return []
+
+
+class _NoopTrends:
+    async def interest_over_time(self, keywords: list[str], timeframe: str) -> list[object]:
+        return []
+
+
+class _NoopSignals:
+    async def upsert_many(self, segment_id: int, signals: object) -> int:
+        return 0
+
+    async def top_for_segment(self, segment_id: int, source: object, limit: int) -> list[object]:
+        return []
+
+
+def _research_deps() -> ResearchDeps:
+    repos = FakeRepos()
+    return ResearchDeps(
+        web=_NoopWeb(),  # type: ignore[arg-type]
+        trends=_NoopTrends(),  # type: ignore[arg-type]
+        socials={},
+        signals=_NoopSignals(),  # type: ignore[arg-type]
+        segments=repos.segments,  # type: ignore[arg-type]
+        videos=repos.videos,
+        runs=repos.runs,
+        lock=FakeLock(),
+        limiter=FakeLimiter(),
+        guard=FanoutGuard(DepthConfig()),
+    )
+
+
+async def test_run_research_job_skips_without_active_campaign(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Sem campanha ativa → ok=True + skipped, sem chamar o ciclo."""
+    calls: list[str] = []
+
+    async def fake_research(slug: str, cfg: object, deps: object) -> object:
+        calls.append(slug)
+        raise SystemExit
+
+    monkeypatch.setattr(w, "_research_impl", fake_research)
+    monkeypatch.setattr(w, "_load_settings", lambda: {"segment": "candles"})
+    deps = _research_deps()
+    campaigns = _FakeCampaigns(campaign=None)
+    out = await w.run_research_job(
+        {"research_deps": deps, "campaigns_deps": campaigns, "app_deps": None}
+    )
+    assert out == {"ok": True, "skipped": "sem campanha ativa"}
+    assert calls == []  # ciclo NAO rodou
+
+
+async def test_run_research_job_runs_cycle_with_active_campaign(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Campanha ativa → ciclo roda, devolve counts e commita."""
+    calls: list[str] = []
+
+    async def fake_research(slug: str, cfg: object, deps: object) -> object:
+        calls.append(slug)
+
+        class _Out:
+            ok = True
+            counts: ClassVar[dict[str, object]] = {"web_found": 3}
+
+        return _Out()
+
+    monkeypatch.setattr(w, "_research_impl", fake_research)
+    monkeypatch.setattr(w, "_load_settings", lambda: {"segment": "candles"})
+    deps = _research_deps()
+    now = datetime.now(UTC)
+    campaign = ResearchCampaign(id=1, segment_id=1, started_at=now, ends_at=now)
+    campaigns = _FakeCampaigns(campaign=campaign)
+    committed: list[str] = []
+
+    class _AppDeps:
+        async def commit(self) -> None:
+            committed.append("commit")
+
+    out = await w.run_research_job(
+        {"research_deps": deps, "campaigns_deps": campaigns, "app_deps": _AppDeps()}
+    )
+    assert calls == ["candles"]
+    assert out == {"ok": True, "web_found": 3}
+    assert committed == ["commit"]
+
+
+def test_workersettings_registers_research_job_and_cron() -> None:
+    """Contrato: research_job em functions + cron 07:00 antes do collect."""
+    settings = w.WorkerSettings
+    assert {f.name for f in settings.functions} == {"collect_job", "score_job", "research_job"}
+    coroutines = [cj.coroutine for cj in settings.cron_jobs]
+    assert coroutines == [w.run_research_job, w.run_collect_job, w.run_score_job]
+    assert settings.cron_jobs[0].hour == {7}
