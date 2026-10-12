@@ -1,4 +1,5 @@
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 
 from content_factory.app.ports import (
     CollectRunRepository,
@@ -12,7 +13,7 @@ from content_factory.app.ports import (
     VideoRepository,
 )
 from content_factory.domain.fanout_guard import FanoutGuard
-from content_factory.domain.models import DepthConfig, KeywordSignal
+from content_factory.domain.models import CollectRun, DepthConfig, KeywordSignal
 
 
 @dataclass
@@ -48,6 +49,9 @@ async def run_research_cycle(
             "trends_found": 0,
             "signals_saved": 0,
             "social_found": 0,
+            "social_inserted": 0,
+            "social_updated": 0,
+            "social_skipped": 0,
         }
 
         seeds = [k for k in segment.keywords if deps.guard.admit(k, 0)]
@@ -71,19 +75,42 @@ async def run_research_cycle(
         counts["signals_saved"] = await deps.signals.upsert_many(segment.id, all_signals)
 
         keywords_for_social = [s.keyword for s in all_signals]
-        social_found = 0
+        social_found = social_inserted = social_updated = social_skipped = 0
         for platform, discoverer in deps.socials.items():
             if platform not in segment.platforms:
                 continue
+            started = datetime.now(UTC)
+            run = CollectRun(
+                collector=f"research:{platform}", segment_id=segment.id, started_at=started
+            )
             try:
                 await deps.limiter.acquire(platform)
                 candidates = await discoverer.discover_by_keywords(keywords_for_social, [], 1)
+                # Fase F2: persistir pelo MESMO contrato do collect() —
+                # upsert_candidates faz ON CONFLICT DO UPDATE, ciclo
+                # reexecutado não duplica vídeo.
+                stats = await deps.videos.upsert_candidates(segment.id, platform, candidates)
+                run.status = "ok"
+                run.found = len(candidates)
+                run.inserted, run.updated = stats.inserted, stats.updated
+                run.failed = stats.skipped
                 social_found += len(candidates)
-            except Exception:
+                social_inserted += stats.inserted
+                social_updated += stats.updated
+                social_skipped += stats.skipped
+            except Exception as exc:
                 # erro de 1 rede social não aborta as demais (padrão de
                 # collect(), que captura por coletor); visível no envelope
+                run.status = "failed"
+                run.error_code = getattr(exc, "code", "internal_error")
                 counts[f"{platform}_failed"] = int(counts.get(f"{platform}_failed", 0)) + 1
+            finally:
+                run.finished_at = datetime.now(UTC)
+                await deps.runs.record(run)
         counts["social_found"] = social_found
+        counts["social_inserted"] = social_inserted
+        counts["social_updated"] = social_updated
+        counts["social_skipped"] = social_skipped
 
         return ResearchOutcome(ok=True, counts=counts)
     finally:

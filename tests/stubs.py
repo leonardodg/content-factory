@@ -158,6 +158,11 @@ class FakeRepos:
         self.runs: CollectRunRepository = _FakeRuns(status_counts)
 
 
+# aliases públicas p/ testes que precisam fazer isinstance/asserts
+FakeVideos = _FakeVideos
+FakeRuns = _FakeRuns
+
+
 class FakeRedis:
     """Redis in-memory na fronteira: só a superfície que a infra usa.
 

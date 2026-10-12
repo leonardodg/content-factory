@@ -185,8 +185,14 @@ async def test_guard_limits_keywords_to_socials_with_real_collectors() -> None:
     # IG recebeu exatamente as 3 keywords dos sinais (web + trends)
     assert len(ig.received_keywords) == 1
     assert len(ig.received_keywords[0]) == 3
+    # F2: candidatos reais do YT/TikTok foram persistidos via upsert_candidates
+    from tests.stubs import FakeVideos
+
+    assert isinstance(repos.videos, FakeVideos)
+    assert repos.videos.upserts  # pelo menos 1 plataforma social persistiu
     # YT e TikTok também foram chamados (social_found pode variar pelos fixtures)
     assert out.counts["social_found"] >= 0  # pelo menos não crachou
+    assert out.counts["social_inserted"] >= 1
 
 
 @pytest.mark.asyncio

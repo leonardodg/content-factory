@@ -3,7 +3,7 @@ from datetime import UTC, datetime
 from typing import ClassVar
 
 import pytest
-from tests.stubs import FakeLimiter, FakeLock, FakeRepos
+from tests.stubs import FakeLimiter, FakeLock, FakeRepos, FakeRuns, FakeVideos
 
 from content_factory.app.ports import KeywordSignalRepository
 from content_factory.app.research_pipeline import ResearchDeps, run_research_cycle
@@ -52,14 +52,15 @@ class _FakeTrends:
 class _FakeSocial:
     platform: ClassVar[str] = "instagram"
 
-    def __init__(self) -> None:
+    def __init__(self, candidates: list[CandidateVideo] | None = None) -> None:
         self.calls: list[list[str]] = []
+        self._candidates = candidates if candidates is not None else []
 
     async def discover_by_keywords(
         self, keywords: list[str], hashtags: list[str], depth: int
     ) -> list[CandidateVideo]:
         self.calls.append(list(keywords))
-        return []
+        return list(self._candidates)
 
 
 class _FakeSignalRepo(KeywordSignalRepository):
@@ -170,3 +171,84 @@ async def test_run_research_cycle_dedupes_seeds_via_guard() -> None:
     out = await run_research_cycle("candles", DepthConfig(), deps)
     assert out.ok is True
     assert web.calls == [["Vela"]]  # as duas variantes deduplicadas pelo guard
+
+
+@pytest.mark.asyncio
+async def test_run_research_cycle_persists_social_candidates() -> None:
+    """F2: candidatos de discover_by_keywords chegam a upsert_candidates."""
+    cands = [
+        CandidateVideo(
+            platform="instagram",
+            platform_video_id=f"ig{i}",
+            url=f"https://instagram.com/reel/ig{i}",
+            creator_handle="u",
+            views=100,
+            likes=10,
+        )
+        for i in range(2)
+    ]
+    repos = FakeRepos()
+    web = _FakeWeb()
+    deps = ResearchDeps(
+        web=web,
+        trends=_FakeTrends(),
+        socials={"instagram": _FakeSocial(cands)},
+        signals=_FakeSignalRepo(),
+        segments=_FakeSegmentsWithKeywords(),
+        videos=repos.videos,
+        runs=repos.runs,
+        lock=FakeLock(),
+        limiter=FakeLimiter(),
+        guard=FanoutGuard(DepthConfig()),
+    )
+    out = await run_research_cycle("candles", DepthConfig(), deps)
+
+    # upsert chamado com os 2 candidatos
+    assert isinstance(repos.videos, FakeVideos)
+    assert repos.videos.upserts == [(1, "instagram", 2)]
+    # contadores do vocabulário collect()
+    assert out.counts["social_found"] == 2
+    assert out.counts["social_inserted"] == 2
+    # CollectRun auditável com prefixo research:
+    assert isinstance(repos.runs, FakeRuns)
+    runs = repos.runs.recorded
+    assert len(runs) == 1
+    assert runs[0].collector == "research:instagram"
+    assert runs[0].status == "ok"
+    assert runs[0].found == 2
+    assert runs[0].inserted == 2
+
+
+@pytest.mark.asyncio
+async def test_run_research_cycle_social_failure_records_failed_run() -> None:
+    """Social que levanta CollectorError não aborta o ciclo; grava run failed."""
+
+    class _BoomSocial:
+        platform: ClassVar[str] = "instagram"
+
+        async def discover_by_keywords(
+            self, keywords: list[str], hashtags: list[str], depth: int
+        ) -> list[CandidateVideo]:
+            from content_factory.domain.errors import CollectorError
+
+            raise CollectorError("blocked", "instagram", "rate limit")
+
+    repos = FakeRepos()
+    deps = ResearchDeps(
+        web=_FakeWeb(),
+        trends=_FakeTrends(),
+        socials={"instagram": _BoomSocial()},
+        signals=_FakeSignalRepo(),
+        segments=_FakeSegmentsWithKeywords(),
+        videos=repos.videos,
+        runs=repos.runs,
+        lock=FakeLock(),
+        limiter=FakeLimiter(),
+        guard=FanoutGuard(DepthConfig()),
+    )
+    out = await run_research_cycle("candles", DepthConfig(), deps)
+    assert out.ok is True  # ciclo não aborta
+    assert out.counts.get("instagram_failed") == 1
+    assert isinstance(repos.runs, FakeRuns)
+    assert repos.runs.recorded[0].status == "failed"
+    assert repos.runs.recorded[0].error_code == "blocked"
