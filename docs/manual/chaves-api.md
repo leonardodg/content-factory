@@ -231,7 +231,7 @@ Resumo só do essencial; procedimento completo e tabela ampla em
 |---|---|---|
 | `YOUTUBE_API_KEY` | `rate_limited` (403 logo na primeira busca) | conferir se a API está habilitada e as restrições da chave; se vazou, criar nova e **revogar** a antiga no Cloud Console |
 | `INSTAGRAM_ACCESS_TOKEN` / `IG_USER_ID` | `auth_expired` (401/400) | token errado/expirado: gerar novo com escopo mínimo, **revogar** o anterior, atualizar env, reiniciar worker |
-| `INSTAGRAM_ACCESS_TOKEN` | `upstream_changed` (403 `"Requires instagram_basic permission"`) | token do produto **errado** ("login do Instagram" em vez de "login do Facebook") — gere de novo seguindo [§2](#2-instagram--graph-api-instagram_access_token--ig_user_id) passo a passo, **verificando no passo 6 antes de colar** |
+| `INSTAGRAM_ACCESS_TOKEN` | `upstream_changed` (403 `"Requires instagram_basic permission"`) | token do produto **errado** ("login do Instagram" em vez de "login do Facebook") — gere de novo seguindo [§2](#2-instagram-graph-api-instagram_access_token-ig_user_id) passo a passo, **verificando no passo 6 antes de colar** |
 | `TIKTOK_MS_TOKEN` | `auth_expired` | logar na conta secundária, copiar `ms_token` novo, atualizar env, reiniciar worker |
 | `TIKTOK_MS_TOKEN` | `blocked` | anti-bot: pausar a coleta TikTok (não retry cego), esperar e rotacionar se necessário |
 

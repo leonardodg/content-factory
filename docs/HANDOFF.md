@@ -122,7 +122,7 @@ plano `docs/ai-plans/2026-10-12-fix-instagram-collector-fase0.md`.
   `{platform}_gate_hits` no envelope quando o fallback do gate #10 é acionado.
 - [x] **Playtest real (Tasks 1+6)**: achado importante — o token
   `INSTAGRAM_ACCESS_TOKEN` em uso não era "gate #10 pendente" como
-  documentado, era **token sem a permissão `instagram_basic`** (403 code 200,
+  documentado, era **token sem a permissão `instagram_basic`** (403 code 10,
   gerado pelo fluxo errado — "API com login do Instagram" em vez de "API com
   login do Facebook"). Investigado ao vivo no Meta for Developers (app
   `Automation-IvanaLereaBR`, id `4160317280965017`): feature "Instagram
@@ -139,8 +139,9 @@ plano `docs/ai-plans/2026-10-12-fix-instagram-collector-fase0.md`.
   enfileirou `collect_job`/`score_job` manualmente via arq (sem esperar o
   cron 08:00/20:00) — runs 154-156 `ok` nas 3 plataformas (web/youtube/
   instagram), `score_job scored=23`.
-- [x] Gates completos verdes: pytest 117 passed (2 failed são
-  `test_e2e/test_00_prereq.py` — ambiente, não relacionados), ruff
+- [x] Gates completos verdes: pytest 120 passed (1 failed é
+  `tests/e2e/test_00_prereq.py::test_postgres_up` — ambiente/`TEST_DATABASE_URL`
+  ausente, não relacionado a código), ruff
   check/format 0, pyright strict 0 (local — dentro do `cf-python` falta
   `libatomic.so.1` para o node do pyright-python, ambiente, não bloqueante),
   bandit 0, pip-audit 0 vulns, `alembic check` ok, privacidade ok (162
@@ -157,3 +158,15 @@ plano `docs/ai-plans/2026-10-12-fix-instagram-collector-fase0.md`.
 - Minors deferidos (não bloqueiam): condição redundante `not out and page == 0`
   em `_own_media` (Task 4); relatório da Task 4 sem evidência explícita do
   RED do TDD.
+- [x] **Review final da branch corrigido** (2026-10-12): 2 Important + 3
+  Minor. `app/collect.py` — `gate_hits` agora é lido no `finally` do loop por
+  collector (não só no caminho de sucesso, então sobrevive a `discover()`
+  levantando exceção DEPOIS de incrementar o contador) e reporta **delta
+  before/after por run**, não o valor absoluto do atributo (o collector é
+  singleton no registry — `self.gate_hits` do worker acumula entre runs);
+  2 testes novos em `tests/app/test_collect.py`. Docs: `403 code 200` →
+  `403 code 10` (batia com `PLANO_TESTE_E2E.md` Bug 5); âncoras
+  `#2-instagram--graph-api-...` (`--` duplo) → `#2-instagram-graph-api-...`
+  (`-` simples, confirmado contra o slug real do mkdocs) em
+  `PLANO_TESTE_E2E.md` e `manual/chaves-api.md`; contagem de testes
+  atualizada (117→120 passed, 1 failed ambiente).

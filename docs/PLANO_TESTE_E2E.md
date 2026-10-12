@@ -248,7 +248,7 @@ caminho de hashtags é usado automaticamente — nenhuma mudança de código.
   já cobriam exatamente essa distinção corretamente.
 - **Correção operacional**: gerado token novo pelo produto certo (passo a
   passo agora documentado em
-  [`docs/manual/chaves-api.md` §2](manual/chaves-api.md#2-instagram--graph-api-instagram_access_token--ig_user_id),
+  [`docs/manual/chaves-api.md` §2](manual/chaves-api.md#2-instagram-graph-api-instagram_access_token-ig_user_id),
   com o aviso de qual produto usar). Verificado antes de colar
   (`GET /{IG_USER_ID}?fields=id,username` → `200`), colado em
   `secrets.env` **e** `app.env`, containers recriados.
