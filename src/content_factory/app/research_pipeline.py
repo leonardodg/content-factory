@@ -9,6 +9,7 @@ from content_factory.app.ports import (
     RateLimiter,
     SegmentRepository,
     SocialDiscoverer,
+    TrendObservationRepository,
     TrendsProvider,
     VideoRepository,
 )
@@ -22,6 +23,7 @@ class ResearchDeps:
     trends: TrendsProvider
     socials: dict[str, SocialDiscoverer]
     signals: KeywordSignalRepository
+    trend_observations: TrendObservationRepository
     segments: SegmentRepository
     videos: VideoRepository
     runs: CollectRunRepository
@@ -70,6 +72,10 @@ async def run_research_cycle(
             "trends",
         )
         counts["trends_found"] = len(trend_signals)
+
+        # Fase F3: gravar série temporal append-only (separada do signal
+        # de descoberta que faz upsert e sobrescreve o peso anterior)
+        await deps.trend_observations.record_many(segment.id, trend_points)
 
         all_signals = web_signals + trend_signals
         counts["signals_saved"] = await deps.signals.upsert_many(segment.id, all_signals)

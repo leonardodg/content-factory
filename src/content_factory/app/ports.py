@@ -93,6 +93,16 @@ class ResearchCampaignRepository(Protocol):
         ...
 
 
+class TrendObservationRepository(Protocol):
+    async def record_many(self, segment_id: int, points: Sequence[TrendPoint]) -> int: ...
+
+    async def history_for_keyword(
+        self, segment_id: int, keyword: str, limit: int
+    ) -> list[TrendPoint]:
+        """Mais recentes primeiro — base para calcular crescimento na Fase G."""
+        ...
+
+
 class RateLimiter(Protocol):
     async def acquire(self, platform: str) -> None: ...  # bloqueia até liberar
 

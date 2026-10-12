@@ -3,7 +3,14 @@ from datetime import UTC, datetime
 from typing import ClassVar
 
 import pytest
-from tests.stubs import FakeLimiter, FakeLock, FakeRepos, FakeRuns, FakeVideos
+from tests.stubs import (
+    FakeLimiter,
+    FakeLock,
+    FakeRepos,
+    FakeRuns,
+    FakeTrendObservations,
+    FakeVideos,
+)
 
 from content_factory.app.ports import KeywordSignalRepository
 from content_factory.app.research_pipeline import ResearchDeps, run_research_cycle
@@ -97,6 +104,7 @@ def _make_deps(lock: FakeLock | None = None) -> tuple[ResearchDeps, _FakeWeb, _F
         trends=_FakeTrends(),
         socials={"instagram": _FakeSocial()},
         signals=signals,
+        trend_observations=FakeTrendObservations(),
         segments=_FakeSegmentsWithKeywords(),
         videos=repos.videos,
         runs=repos.runs,
@@ -161,6 +169,7 @@ async def test_run_research_cycle_dedupes_seeds_via_guard() -> None:
         trends=_FakeTrends(),
         socials={},
         signals=_FakeSignalRepo(),
+        trend_observations=FakeTrendObservations(),
         segments=_DupSegments(),
         videos=repos.videos,
         runs=repos.runs,
@@ -194,6 +203,7 @@ async def test_run_research_cycle_persists_social_candidates() -> None:
         trends=_FakeTrends(),
         socials={"instagram": _FakeSocial(cands)},
         signals=_FakeSignalRepo(),
+        trend_observations=FakeTrendObservations(),
         segments=_FakeSegmentsWithKeywords(),
         videos=repos.videos,
         runs=repos.runs,
@@ -239,6 +249,7 @@ async def test_run_research_cycle_social_failure_records_failed_run() -> None:
         trends=_FakeTrends(),
         socials={"instagram": _BoomSocial()},
         signals=_FakeSignalRepo(),
+        trend_observations=FakeTrendObservations(),
         segments=_FakeSegmentsWithKeywords(),
         videos=repos.videos,
         runs=repos.runs,
@@ -252,3 +263,28 @@ async def test_run_research_cycle_social_failure_records_failed_run() -> None:
     assert isinstance(repos.runs, FakeRuns)
     assert repos.runs.recorded[0].status == "failed"
     assert repos.runs.recorded[0].error_code == "blocked"
+
+
+@pytest.mark.asyncio
+async def test_run_research_cycle_records_trend_observations() -> None:
+    """F3: TrendPoints do Google Trends são gravados em trend_observations."""
+    repos = FakeRepos()
+    trend_obs = FakeTrendObservations()
+    deps = ResearchDeps(
+        web=_FakeWeb(),
+        trends=_FakeTrends(),
+        socials={},
+        signals=_FakeSignalRepo(),
+        trend_observations=trend_obs,
+        segments=_FakeSegmentsWithKeywords(),
+        videos=repos.videos,
+        runs=repos.runs,
+        lock=FakeLock(),
+        limiter=FakeLimiter(),
+        guard=FanoutGuard(DepthConfig()),
+    )
+    await run_research_cycle("candles", DepthConfig(), deps)
+    # _FakeWeb devolve 1 sinal "vela relacionada" → _FakeTrends devolve 1 TrendPoint
+    assert len(trend_obs.recorded) == 1
+    assert trend_obs.recorded[0].keyword == "vela relacionada"
+    assert trend_obs.recorded[0].interest == 50.0

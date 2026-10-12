@@ -126,6 +126,7 @@ async def create_app_deps(settings: Settings) -> AppDeps:
         ResearchCampaignRepositoryImpl,
         ScoreRepositoryImpl,
         SegmentRepositoryImpl,
+        TrendObservationRepositoryImpl,
         VideoRepositoryImpl,
     )
     from content_factory.infra.lock import RedisLock
@@ -165,6 +166,7 @@ async def create_app_deps(settings: Settings) -> AppDeps:
                 trends=TrendsGoogleProvider(),
                 socials=socials,
                 signals=KeywordSignalRepositoryImpl(session),
+                trend_observations=TrendObservationRepositoryImpl(session),
                 segments=SegmentRepositoryImpl(session),
                 videos=VideoRepositoryImpl(session),
                 runs=CollectRunRepositoryImpl(session),

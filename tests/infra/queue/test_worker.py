@@ -162,6 +162,14 @@ class _NoopSignals:
         return []
 
 
+class _NoopTrendObservations:
+    async def record_many(self, segment_id: int, points: object) -> int:
+        return 0
+
+    async def history_for_keyword(self, segment_id: int, keyword: str, limit: int) -> list[object]:
+        return []
+
+
 def _research_deps() -> ResearchDeps:
     repos = FakeRepos()
     return ResearchDeps(
@@ -169,6 +177,7 @@ def _research_deps() -> ResearchDeps:
         trends=_NoopTrends(),  # type: ignore[arg-type]
         socials={},
         signals=_NoopSignals(),  # type: ignore[arg-type]
+        trend_observations=_NoopTrendObservations(),  # type: ignore[arg-type]
         segments=repos.segments,  # type: ignore[arg-type]
         videos=repos.videos,
         runs=repos.runs,

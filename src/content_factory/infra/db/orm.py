@@ -243,3 +243,26 @@ class ResearchCampaignRow(Base):
     started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     ends_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     active: Mapped[bool] = mapped_column(Boolean, default=True)
+
+
+class TrendObservationRow(Base):
+    """Série temporal append-only do Google Trends — separada de keyword_signals.
+
+    Sem unique constraint: o mesmo (segment_id, keyword, period_start) pode
+    legitimamente ser regravado pelo pytrends numa reexecução (decisão
+    ADR-0005 / plano Fase F3 — deduplicar na leitura se necessário).
+    """
+
+    __tablename__ = "trend_observations"
+    __table_args__ = (
+        Index("ix_trend_obs_segment_keyword_period", "segment_id", "keyword", "period_start"),
+    )
+    id: Mapped[int] = mapped_column(primary_key=True)
+    segment_id: Mapped[int] = mapped_column(ForeignKey("segments.id"))
+    keyword: Mapped[str] = mapped_column(String(200))
+    period_start: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    period_granularity: Mapped[str] = mapped_column(String(8))
+    interest: Mapped[float] = mapped_column(Float)
+    collected_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )

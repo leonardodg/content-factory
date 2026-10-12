@@ -11,7 +11,7 @@ from typing import Any, ClassVar
 
 import httpx
 import pytest
-from tests.stubs import FakeLimiter, FakeLock, FakeRepos
+from tests.stubs import FakeLimiter, FakeLock, FakeRepos, FakeTrendObservations
 
 from content_factory.app.ports import KeywordSignalRepository
 from content_factory.app.research_pipeline import ResearchDeps, run_research_cycle
@@ -169,6 +169,7 @@ async def test_guard_limits_keywords_to_socials_with_real_collectors() -> None:
         trends=_FakeTrends(),
         socials={"instagram": ig, "youtube": yt, "tiktok": tt},
         signals=_SignalRepo(),
+        trend_observations=FakeTrendObservations(),
         segments=_Segments(),
         videos=repos.videos,
         runs=repos.runs,
@@ -235,6 +236,7 @@ async def test_guard_dedupe_prevents_duplicate_keywords_to_socials() -> None:
         trends=_FakeTrends(),
         socials={"instagram": ig},
         signals=_SignalRepo(),
+        trend_observations=FakeTrendObservations(),
         segments=_DupSegments(),
         videos=repos.videos,
         runs=repos.runs,

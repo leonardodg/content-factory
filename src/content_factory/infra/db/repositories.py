@@ -13,6 +13,7 @@ from content_factory.app.ports import (
     ResearchCampaignRepository,
     ScoreRepository,
     SegmentRepository,
+    TrendObservationRepository,
     VideoRepository,
 )
 from content_factory.domain.errors import SegmentNotFound
@@ -24,6 +25,7 @@ from content_factory.domain.models import (
     ScoreResult,
     Segment,
     SegmentConfig,
+    TrendPoint,
     UpsertStats,
     VideoMetrics,
     VideoSnapshot,
@@ -33,6 +35,7 @@ from content_factory.infra.db.orm import (
     KeywordSignalRow,
     ResearchCampaignRow,
     SegmentRow,
+    TrendObservationRow,
     VideoMetricsRow,
     VideoRow,
     VideoScoreRow,
@@ -322,3 +325,54 @@ class ResearchCampaignRepositoryImpl(ResearchCampaignRepository):
         )
         row = (await self._s.execute(stmt)).scalar_one_or_none()
         return _campaign_model(row) if row is not None else None
+
+
+class TrendObservationRepositoryImpl(TrendObservationRepository):
+    """Série temporal append-only — insert simples, sem ON CONFLICT.
+
+    Ao contrário de KeywordSignalRepositoryImpl (que faz upsert por
+    (segment_id, keyword, source)), aqui o mesmo periodo pode ser regravado
+    legitimamente pelo pytrends numa reexecução — o histórico é a soma das
+    observações, não o estado corrente. Deduplicar na leitura/Fase G se
+    necessário.
+    """
+
+    def __init__(self, session: AsyncSession) -> None:
+        self._s = session
+
+    async def record_many(self, segment_id: int, points: Sequence[TrendPoint]) -> int:
+        for p in points:
+            self._s.add(
+                TrendObservationRow(
+                    segment_id=segment_id,
+                    keyword=p.keyword,
+                    period_start=p.period_start,
+                    period_granularity=p.period_granularity,
+                    interest=p.interest,
+                )
+            )
+        await self._s.flush()
+        return len(points)
+
+    async def history_for_keyword(
+        self, segment_id: int, keyword: str, limit: int
+    ) -> list[TrendPoint]:
+        stmt = (
+            select(TrendObservationRow)
+            .where(
+                TrendObservationRow.segment_id == segment_id,
+                TrendObservationRow.keyword == keyword,
+            )
+            .order_by(TrendObservationRow.period_start.desc())
+            .limit(limit)
+        )
+        rows = (await self._s.execute(stmt)).scalars().all()
+        return [
+            TrendPoint(
+                keyword=r.keyword,
+                period_start=r.period_start,
+                period_granularity=r.period_granularity,
+                interest=r.interest,
+            )
+            for r in rows
+        ]

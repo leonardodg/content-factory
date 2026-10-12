@@ -14,6 +14,7 @@ from content_factory.app.ports import (
     Collector,
     CollectRunRepository,
     SegmentRepository,
+    TrendObservationRepository,
     VideoRepository,
 )
 from content_factory.domain.errors import CollectorError
@@ -22,6 +23,7 @@ from content_factory.domain.models import (
     CollectRun,
     Segment,
     SegmentConfig,
+    TrendPoint,
     UpsertStats,
     VideoSnapshot,
 )
@@ -161,6 +163,24 @@ class FakeRepos:
 # aliases públicas p/ testes que precisam fazer isinstance/asserts
 FakeVideos = _FakeVideos
 FakeRuns = _FakeRuns
+
+
+class FakeTrendObservations(TrendObservationRepository):
+    """Registra pontos gravados e devolve histórico em memória."""
+
+    def __init__(self) -> None:
+        self.recorded: list[TrendPoint] = []
+
+    async def record_many(self, segment_id: int, points: Sequence[TrendPoint]) -> int:
+        self.recorded.extend(points)
+        return len(points)
+
+    async def history_for_keyword(
+        self, segment_id: int, keyword: str, limit: int
+    ) -> list[TrendPoint]:
+        matched = [p for p in self.recorded if p.keyword == keyword]
+        matched.sort(key=lambda p: p.period_start, reverse=True)
+        return matched[:limit]
 
 
 class FakeRedis:
