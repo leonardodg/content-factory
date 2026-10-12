@@ -5,11 +5,45 @@
 
 ## 🔄 EM ANDAMENTO
 
-Branch `fix/instagram-collector-fase0` — Fase 0 do plano de pipeline de
-pesquisa multi-plataforma (ver `docs/ai-plans/2026-10-12-fix-instagram-collector-fase0.md`).
-Tasks 1-5 concluídas (ver seção "Fase 0" abaixo); falta: PR + merge.
+Branch `feat/pipeline-pesquisa-fase-a` — Fase A do pipeline de pesquisa
+multi-plataforma (ver `docs/ai-plans/2026-10-12-pipeline-pesquisa-fase-a.md`).
+Tasks 1–6 concluídas e gates verdes (ver seção "Fase A" abaixo); falta:
+PR + merge. Próximas fases (C→D→E→B) são planos futuros em
+`docs/ai-plans/2026-10-12-pipeline-pesquisa-fase-{c,d,e,b}.md` — nenhum
+provider real existe ainda.
 
-## ✅ CONCLUÍDO (sessão 2026-10-07 → 2026-10-10)
+## ✅ CONCLUÍDO
+
+### Fase A — fundação do pipeline de pesquisa (2026-10-12)
+
+Executada via executing-plans na branch `feat/pipeline-pesquisa-fase-a`
+(plano split e copiado para `docs/ai-plans/2026-10-12-pipeline-pesquisa-fase-a.md`
+em `9db8a7d`/`b1602d4`); TDD (RED verificado em todas as tasks),
+review e gates completos. Nenhum provider real — só contratos,
+guard-rail, tabela e orquestrador; Fases B–E pendem de decisão do usuário.
+
+- [x] **Task 1** (`1762f91`): modelos `KeywordSignal`/`TrendPoint`/`DepthConfig`
+  + `SegmentConfig.research` (`domain/models.py`, 4 testes novos).
+- [x] **Task 2** (`0ac14a0`): `FanoutGuard` (`domain/fanout_guard.py`) — dedupe
+  casefold, cap `max_nodes_per_cycle`, truncate top-N por peso (5 testes).
+- [x] **Task 3** (`319b9f6`): Protocols `KeywordExpander`/`TrendsProvider`/
+  `SocialDiscoverer`/`KeywordSignalRepository` (`app/ports.py`, 3 testes
+  estruturais).
+- [x] **Task 4** (`1e27099`): migração Alembic `0002_keyword_signals` +
+  `KeywordSignalRow` (`infra/db/orm.py`) + `KeywordSignalRepositoryImpl`
+  (`infra/db/repositories.py`, upsert por `(segment_id, keyword, source)`,
+  3 testes @requires_infra; `alembic check` limpo).
+- [x] **Task 5** (`579ab51` + fix `f2817fb`): use-case
+  `app/research_pipeline.py::run_research_cycle` — lock por segmento,
+  guard-rail nas seeds/trends, rate-limit por plataforma, falha de 1 rede
+  social não aborta as demais (4 testes em `tests/app/test_research_pipeline.py`).
+- [x] **Task 6**: gates completos verdes — pytest 152 passed (com
+  `TEST_DATABASE_URL`), ruff check/format 0, pyright strict 0,
+  `alembic check` ok, bandit exit 0 (B112 resolvido em `f2817fb`),
+  pip-audit 0 vulns, `mkdocs build --strict` ok, privacidade ok (174
+  arquivos).
+
+### Sessão 2026-10-07 → 2026-10-10 (fundação + PR #3)
 
 - [x] Fase 0 (brain/spec/ADRs/PRD/plano 18 tasks): commits `5f9b4ef`,
   `2c80bde`, `4b81c65`, `2276254`

@@ -55,7 +55,7 @@ sem Docker necessário nesta fase), pyright strict.
 - Produces: 3 novos modelos Pydantic + um campo opcional novo em
   `SegmentConfig`, consumidos pelas Tasks 2, 3, 4, 5.
 
-- [ ] **Step 1: Escrever os testes falhando**
+- [x] **Step 1: Escrever os testes falhando**
 
 ```python
 from content_factory.domain.models import DepthConfig, KeywordSignal, SegmentConfig, TrendPoint
@@ -99,13 +99,13 @@ def test_segment_config_research_is_optional() -> None:
     assert seg2.research is not None and seg2.research.max_depth == 3
 ```
 
-- [ ] **Step 2: Rodar e confirmar falha**
+- [x] **Step 2: Rodar e confirmar falha**
 
 Run: `uv run pytest tests/domain/test_models.py -v`
 Expected: FAIL — `ImportError`/`AttributeError` (`DepthConfig`/`KeywordSignal`/
 `TrendPoint` não existem; `SegmentConfig` não tem `research`).
 
-- [ ] **Step 3: Implementar**
+- [x] **Step 3: Implementar**
 
 Em `src/content_factory/domain/models.py`, adicionar (perto de
 `CandidateVideo`, antes de `CollectRun`):
@@ -145,23 +145,23 @@ E em `SegmentConfig`, adicionar o campo (mantém backward-compat — default
     research: "DepthConfig | None" = None
 ```
 
-- [ ] **Step 4: Rodar e confirmar sucesso**
+- [x] **Step 4: Rodar e confirmar sucesso**
 
 Run: `uv run pytest tests/domain/test_models.py -v`
 Expected: PASS (4 testes).
 
-- [ ] **Step 5: `pyright strict`**
+- [x] **Step 5: `pyright strict`**
 
 Run: `uv run pyright src/content_factory/domain/models.py`
 Expected: 0 erros.
 
-- [ ] **Step 6: Rodar a suíte completa (garantir que nada quebrou)**
+- [x] **Step 6: Rodar a suíte completa (garantir que nada quebrou)**
 
 Run: `uv run pytest -q`
 Expected: mesmo baseline de antes (120 passed, 1 failed ambiental
 `test_postgres_up`, 14 skipped) + 4 novos testes passando.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add src/content_factory/domain/models.py tests/domain/test_models.py
@@ -182,7 +182,7 @@ git commit -m "feat(domain): adiciona KeywordSignal/TrendPoint/DepthConfig"
   `FanoutGuard(cfg).truncate(signals, stage) -> list[KeywordSignal]` —
   consumidos pela Task 5.
 
-- [ ] **Step 1: Escrever os testes falhando**
+- [x] **Step 1: Escrever os testes falhando**
 
 ```python
 from content_factory.domain.fanout_guard import FanoutGuard
@@ -225,12 +225,12 @@ def test_truncate_without_configured_fanout_returns_all() -> None:
     assert guard.truncate(signals, "web") == signals
 ```
 
-- [ ] **Step 2: Rodar e confirmar falha**
+- [x] **Step 2: Rodar e confirmar falha**
 
 Run: `uv run pytest tests/domain/test_fanout_guard.py -v`
 Expected: FAIL — `ModuleNotFoundError` (`fanout_guard.py` não existe).
 
-- [ ] **Step 3: Implementar**
+- [x] **Step 3: Implementar**
 
 Criar `src/content_factory/domain/fanout_guard.py`:
 
@@ -270,17 +270,17 @@ class FanoutGuard:
         return sorted(signals, key=lambda s: s.weight, reverse=True)[:limit]
 ```
 
-- [ ] **Step 4: Rodar e confirmar sucesso**
+- [x] **Step 4: Rodar e confirmar sucesso**
 
 Run: `uv run pytest tests/domain/test_fanout_guard.py -v`
 Expected: PASS (5 testes).
 
-- [ ] **Step 5: `pyright strict`**
+- [x] **Step 5: `pyright strict`**
 
 Run: `uv run pyright src/content_factory/domain/fanout_guard.py`
 Expected: 0 erros.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add src/content_factory/domain/fanout_guard.py tests/domain/test_fanout_guard.py
@@ -305,7 +305,7 @@ git commit -m "feat(domain): adiciona FanoutGuard (anti-explosao combinatoria)"
   (`research_pipeline.py`) e pela Task 4 (`KeywordSignalRepositoryImpl`
   implementa `KeywordSignalRepository`).
 
-- [ ] **Step 1: Ler `tests/app/test_ports.py` para entender o padrão de teste**
+- [x] **Step 1: Ler `tests/app/test_ports.py` para entender o padrão de teste**
 
 Antes de escrever, rode `cat tests/app/test_ports.py` e confirme: o arquivo
 testa conformidade estrutural dos Protocols existentes (`Collector`,
@@ -314,7 +314,7 @@ tipo/chamada), não via `isinstance` com `@runtime_checkable` (os Protocols
 atuais em `ports.py` não usam `@runtime_checkable` — siga o mesmo estilo,
 sem adicionar o decorator nos novos).
 
-- [ ] **Step 2: Escrever os testes falhando**
+- [x] **Step 2: Escrever os testes falhando**
 
 Seguindo o padrão encontrado no Step 1, adicionar em
 `tests/app/test_ports.py` (adaptar à sintaxe exata do arquivo real):
@@ -365,12 +365,12 @@ def test_new_protocols_accept_structural_fakes() -> None:
 não satisfizerem os Protocols, `pyright strict` falha na atribuição
 `expander: KeywordExpander = ...`, que é o teste de verdade aqui.)
 
-- [ ] **Step 3: Rodar e confirmar falha**
+- [x] **Step 3: Rodar e confirmar falha**
 
 Run: `uv run pytest tests/app/test_ports.py -v`
 Expected: FAIL — `ImportError` (os 4 Protocols não existem em `ports.py`).
 
-- [ ] **Step 4: Implementar**
+- [x] **Step 4: Implementar**
 
 Em `src/content_factory/app/ports.py`, atualizar o import de
 `domain.models` para incluir `KeywordSignal`, `TrendPoint`, e adicionar
@@ -411,17 +411,17 @@ class KeywordSignalRepository(Protocol):
     ) -> list[KeywordSignal]: ...
 ```
 
-- [ ] **Step 5: Rodar e confirmar sucesso**
+- [x] **Step 5: Rodar e confirmar sucesso**
 
 Run: `uv run pytest tests/app/test_ports.py -v`
 Expected: PASS.
 
-- [ ] **Step 6: `pyright strict`**
+- [x] **Step 6: `pyright strict`**
 
 Run: `uv run pyright src/content_factory/app/ports.py tests/app/test_ports.py`
 Expected: 0 erros.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add src/content_factory/app/ports.py tests/app/test_ports.py
@@ -450,7 +450,7 @@ git commit -m "feat(ports): adiciona KeywordExpander/TrendsProvider/SocialDiscov
 - Produces: `KeywordSignalRepositoryImpl` implementando o Protocol —
   consumido pela Task 5.
 
-- [ ] **Step 1: Ler o padrão de teste de repositório existente**
+- [x] **Step 1: Ler o padrão de teste de repositório existente**
 
 Abrir `tests/infra/test_repositories.py` inteiro — note o marker
 `pytestmark = [pytest.mark.integration, pytest.mark.asyncio]` no topo do
@@ -458,7 +458,7 @@ arquivo, a função `@requires_infra` (importada de `tests/conftest.py`) e
 o teste `test_upsert_is_idempotent` como referência exata de como criar
 engine/session e satisfazer a FK de segmento via `SegmentRepositoryImpl`.
 
-- [ ] **Step 2: Escrever os testes falhando** — anexar ao FINAL de
+- [x] **Step 2: Escrever os testes falhando** — anexar ao FINAL de
   `tests/infra/test_repositories.py` (mesmo arquivo, mesmo estilo):
 
 ```python
@@ -545,7 +545,7 @@ async def test_keyword_signal_top_for_segment_orders_by_weight_desc() -> None:
 topo do arquivo — slug com `uuid4().hex[:8]` evita colisão entre reruns
 da suíte, mesmo precedente de `candidate()` no mesmo arquivo.)
 
-- [ ] **Step 3: Rodar e confirmar falha**
+- [x] **Step 3: Rodar e confirmar falha**
 
 Run: `TEST_DATABASE_URL=<...> uv run pytest tests/infra/test_repositories.py -k keyword_signal -v`
 Expected: FAIL — `ModuleNotFoundError`/tabela inexistente (se
@@ -553,7 +553,7 @@ Expected: FAIL — `ModuleNotFoundError`/tabela inexistente (se
 `@requires_infra`, não FAIL — nesse caso, rodar dentro do
 `docker exec cf-python` ou exportar a var localmente antes de prosseguir).
 
-- [ ] **Step 4: Criar a migração Alembic**
+- [x] **Step 4: Criar a migração Alembic**
 
 ```bash
 cd <repo>
@@ -590,7 +590,7 @@ def downgrade() -> None:
     op.drop_table("keyword_signals")
 ```
 
-- [ ] **Step 5: Adicionar `KeywordSignalRow` em `orm.py`**
+- [x] **Step 5: Adicionar `KeywordSignalRow` em `orm.py`**
 
 Em `src/content_factory/infra/db/orm.py`, seguindo o padrão exato de
 `CollectRunRow` (mesmos imports `Mapped`/`mapped_column`, mesmo estilo):
@@ -607,7 +607,7 @@ class KeywordSignalRow(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
 ```
 
-- [ ] **Step 6: Implementar `KeywordSignalRepositoryImpl`**
+- [x] **Step 6: Implementar `KeywordSignalRepositoryImpl`**
 
 Em `src/content_factory/infra/db/repositories.py`, seguindo o padrão de
 `VideoRepositoryImpl.upsert_candidates` (`pg_insert(...).on_conflict_do_update`):
@@ -653,7 +653,7 @@ class KeywordSignalRepositoryImpl(KeywordSignalRepository):
 (adicionar `datetime`/`UTC` ao import do topo do arquivo se não estiverem
 já importados — conferir antes de duplicar import.)
 
-- [ ] **Step 7: Rodar e confirmar sucesso**
+- [x] **Step 7: Rodar e confirmar sucesso**
 
 ```bash
 docker exec cf-python uv run alembic upgrade head
@@ -662,7 +662,7 @@ docker exec cf-python uv run alembic upgrade head
 Run: `uv run pytest tests/infra/test_repositories.py -k keyword_signal -v`
 Expected: PASS (3 testes).
 
-- [ ] **Step 8: `alembic check` + `pyright strict`**
+- [x] **Step 8: `alembic check` + `pyright strict`**
 
 ```bash
 docker exec cf-python uv run alembic check
@@ -671,7 +671,7 @@ uv run pyright src/content_factory/infra/db/orm.py src/content_factory/infra/db/
 
 Expected: ambos limpos.
 
-- [ ] **Step 9: Commit**
+- [x] **Step 9: Commit**
 
 ```bash
 git add alembic/versions/0002_keyword_signals.py src/content_factory/infra/db/orm.py src/content_factory/infra/db/repositories.py tests/infra/test_repositories.py
@@ -697,7 +697,7 @@ git commit -m "feat(db): tabela keyword_signals + KeywordSignalRepositoryImpl"
   topo da pirâmide desta fase; consumido pela Fase D (worker) no futuro,
   não nesta fase.
 
-- [ ] **Step 1: Escrever os testes falhando**
+- [x] **Step 1: Escrever os testes falhando**
 
 Reaproveitar de `tests/stubs.py` (NÃO recriar): `FakeLock`, `FakeLimiter`,
 `FakeRepos().videos`, `FakeRepos().runs`. **Atenção**: `FakeRepos().segments`
@@ -832,12 +832,12 @@ nome exato antes de usar. Adicionar também um teste de `guard.admit`
 realmente filtrando — ex. seed repetida não gera 2 chamadas a
 `web.expand`.)
 
-- [ ] **Step 2: Rodar e confirmar falha**
+- [x] **Step 2: Rodar e confirmar falha**
 
 Run: `uv run pytest tests/app/test_research_pipeline.py -v`
 Expected: FAIL — `ModuleNotFoundError` (`research_pipeline.py` não existe).
 
-- [ ] **Step 3: Implementar**
+- [x] **Step 3: Implementar**
 
 Criar `src/content_factory/app/research_pipeline.py`:
 
@@ -933,23 +933,23 @@ async def run_research_cycle(
         await deps.lock.release(f"research:{segment_slug}")
 ```
 
-- [ ] **Step 4: Rodar e confirmar sucesso**
+- [x] **Step 4: Rodar e confirmar sucesso**
 
 Run: `uv run pytest tests/app/test_research_pipeline.py -v`
 Expected: PASS.
 
-- [ ] **Step 5: `pyright strict`**
+- [x] **Step 5: `pyright strict`**
 
 Run: `uv run pyright src/content_factory/app/research_pipeline.py tests/app/test_research_pipeline.py`
 Expected: 0 erros.
 
-- [ ] **Step 6: Rodar a suíte completa**
+- [x] **Step 6: Rodar a suíte completa**
 
 Run: `uv run pytest -q`
 Expected: baseline + todos os testes novos das Tasks 1-5 passando, nenhuma
 regressão nos testes existentes (`collect()`/`score()` intocados).
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add src/content_factory/app/research_pipeline.py tests/app/test_research_pipeline.py
@@ -965,7 +965,7 @@ git commit -m "feat(app): run_research_cycle orquestra web->trends->social com g
 
 **Interfaces:** nenhuma (fechamento da fase).
 
-- [ ] **Step 1: Gates completos**
+- [x] **Step 1: Gates completos**
 
 ```bash
 uv run pytest -q
@@ -981,7 +981,7 @@ uv run python scripts/check_privacy.py
 Expected: todos saem com exit `0` (pytest pode manter a falha ambiental
 pré-existente `test_postgres_up`, documentada desde a Fase 0).
 
-- [ ] **Step 2: Atualizar `docs/HANDOFF.md`**
+- [x] **Step 2: Atualizar `docs/HANDOFF.md`**
 
 Mover o item "Fase A — fundação do pipeline" do roadmap para
 "✅ CONCLUÍDO", citando os commits das Tasks 1-5 e deixando claro que
@@ -989,7 +989,7 @@ nenhum provider real existe ainda (Fases B-E são planos futuros, salvos
 em `docs/ai-plans/2026-10-12-pipeline-pesquisa-fase-{c,d,e,b}.md`, não
 implementados).
 
-- [ ] **Step 3: Commit final**
+- [x] **Step 3: Commit final**
 
 ```bash
 git add docs/HANDOFF.md
