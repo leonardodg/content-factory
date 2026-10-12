@@ -218,3 +218,17 @@ class CollectRunRow(Base):
     quota_used: Mapped[int] = mapped_column(Integer, default=0)
     retries: Mapped[int] = mapped_column(Integer, default=0)
     error_code: Mapped[str | None] = mapped_column(String(32))
+
+
+class KeywordSignalRow(Base):
+    __tablename__ = "keyword_signals"
+    __table_args__ = (
+        UniqueConstraint("segment_id", "keyword", "source", name="uq_keyword_signal"),
+    )
+    id: Mapped[int] = mapped_column(primary_key=True)
+    segment_id: Mapped[int] = mapped_column(ForeignKey("segments.id"))
+    keyword: Mapped[str] = mapped_column(String(200))
+    source: Mapped[str] = mapped_column(String(32))
+    weight: Mapped[float] = mapped_column(Float, default=0.0)
+    depth: Mapped[int] = mapped_column(Integer, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())

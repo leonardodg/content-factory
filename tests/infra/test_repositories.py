@@ -8,7 +8,13 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from content_factory.app.score import ScoreDeps, score
-from content_factory.domain.models import CandidateVideo, CollectRun, ScoreResult, SegmentConfig
+from content_factory.domain.models import (
+    CandidateVideo,
+    CollectRun,
+    KeywordSignal,
+    ScoreResult,
+    SegmentConfig,
+)
 from content_factory.infra.db.orm import (
     CollectRunRow,
     VideoMetricsRow,
@@ -18,6 +24,7 @@ from content_factory.infra.db.orm import (
 )
 from content_factory.infra.db.repositories import (
     CollectRunRepositoryImpl,
+    KeywordSignalRepositoryImpl,
     ScoreRepositoryImpl,
     SegmentRepositoryImpl,
     VideoRepositoryImpl,
@@ -367,3 +374,78 @@ async def test_collect_run_status_counts_last_7_days() -> None:
         counts = await repo.status_counts(seg.id, now - timedelta(days=7))
         assert counts == {"ok": 2, "blocked": 1}  # o failed de 8 dias fica de fora
     await engine.dispose()
+
+
+@requires_infra
+async def test_keyword_signal_upsert_many_inserts_new_signals() -> None:
+    engine = create_async_engine(os.environ["TEST_DATABASE_URL"])
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    async with factory() as s:
+        await s.rollback()
+        seg = await SegmentRepositoryImpl(s).upsert(
+            SegmentConfig(
+                slug=f"teste-ks-{uuid4().hex[:8]}",
+                name="Teste KS",
+                platforms=["web"],
+                keywords=["k"],
+            )
+        )
+        repo = KeywordSignalRepositoryImpl(s)
+        signals = [
+            KeywordSignal(keyword="vela aromatica", source="web_suggest", weight=0.8, depth=0),
+            KeywordSignal(keyword="vela de soja", source="web_suggest", weight=0.6, depth=0),
+        ]
+        saved = await repo.upsert_many(seg.id, signals)
+        assert saved == 2
+
+
+@requires_infra
+async def test_keyword_signal_upsert_many_dedupes_by_segment_keyword_source() -> None:
+    engine = create_async_engine(os.environ["TEST_DATABASE_URL"])
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    async with factory() as s:
+        await s.rollback()
+        seg = await SegmentRepositoryImpl(s).upsert(
+            SegmentConfig(
+                slug=f"teste-ks-{uuid4().hex[:8]}",
+                name="Teste KS",
+                platforms=["web"],
+                keywords=["k"],
+            )
+        )
+        repo = KeywordSignalRepositoryImpl(s)
+        sig = KeywordSignal(keyword="vela aromatica", source="web_suggest", weight=0.5, depth=0)
+        await repo.upsert_many(seg.id, [sig])
+        sig_updated = KeywordSignal(
+            keyword="vela aromatica", source="web_suggest", weight=0.9, depth=0
+        )
+        await repo.upsert_many(seg.id, [sig_updated])  # mesmo (segment,keyword,source)
+        top = await repo.top_for_segment(seg.id, source="web_suggest", limit=10)
+        assert len(top) == 1  # não duplicou
+        assert top[0].weight == 0.9  # peso foi atualizado
+
+
+@requires_infra
+async def test_keyword_signal_top_for_segment_orders_by_weight_desc() -> None:
+    engine = create_async_engine(os.environ["TEST_DATABASE_URL"])
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    async with factory() as s:
+        await s.rollback()
+        seg = await SegmentRepositoryImpl(s).upsert(
+            SegmentConfig(
+                slug=f"teste-ks-{uuid4().hex[:8]}",
+                name="Teste KS",
+                platforms=["web"],
+                keywords=["k"],
+            )
+        )
+        repo = KeywordSignalRepositoryImpl(s)
+        await repo.upsert_many(
+            seg.id,
+            [
+                KeywordSignal(keyword="a", source="web_suggest", weight=0.1, depth=0),
+                KeywordSignal(keyword="b", source="web_suggest", weight=0.9, depth=0),
+            ],
+        )
+        top = await repo.top_for_segment(seg.id, source=None, limit=10)
+        assert [s.keyword for s in top] == ["b", "a"]
