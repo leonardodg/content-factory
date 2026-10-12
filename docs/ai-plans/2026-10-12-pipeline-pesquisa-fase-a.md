@@ -556,7 +556,7 @@ Expected: FAIL — `ModuleNotFoundError`/tabela inexistente (se
 - [ ] **Step 4: Criar a migração Alembic**
 
 ```bash
-cd /home/leodg/localhost/InstagramReelsAnalyzer
+cd <repo>
 docker exec cf-python uv run alembic revision -m "keyword_signals"
 ```
 
