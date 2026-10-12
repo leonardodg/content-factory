@@ -32,6 +32,7 @@ nav:
       - 0002 Redis+arq: adr/0002-redis-arq-fila.md
       - 0003 Coletores: adr/0003-coletores-fontes.md
       - 0004 CLI-first: adr/0004-cli-first.md
+      - 0005 Google scraping: adr/0005-trends-pytrends.md
   - Arquitetura:
       - Visão geral: architecture/README.md
       - Estado e fases: architecture/estado-e-proximas-fases.md

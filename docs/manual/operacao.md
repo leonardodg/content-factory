@@ -186,6 +186,12 @@ manual no fim do período. O `research_job` no worker filtra
 
 ## 6. Limitações conhecidas
 
+- **Google Trends e Suggest são scraping não-oficial** (`pytrends` e
+  `suggestqueries.google.com`). Ambos usam circuit breaker (5 falhas →
+  cooldown 3 ciclos) e mapeiam erros para `RateLimited`/`NetworkError`/
+  `UpstreamChanged`. Se o Google mudar as endpoints, o `research_job`
+  não aborta o ciclo — só registra `trends_found=0` / `keywords_expanded=0`.
+  Ver ADR-0005.
 - **`defaults.env` não é montado no compose.** O arquivo
   `.devcontainer/env/defaults.env` é versionado, mas nenhum serviço o lê (o
   compose só monta `env/app.env` e o secret `secrets/secrets.env`). Os
