@@ -112,26 +112,21 @@ class _NoopKeywordExpander:
         return []
 
 
-class _NoopTrendsProvider:
-    """Stub até a Fase B (Google Trends) — devolve vazio p/ não quebrar o job."""
-
-    async def interest_over_time(self, keywords: list[str], timeframe: str) -> list[Any]:
-        return []
-
-
 async def create_app_deps(settings: Settings) -> AppDeps:
     """Fábrica do worker: `register_defaults` + repositórios + lock/rate-limit.
 
     Segmento precisa existir no banco (`cf segment load`) — senão o startup
     falha rápido. Testes nunca passam por aqui (monkeypatch nos hooks).
 
-    Decisão de composição (Fase D): `web`/`trends` = stubs noop até a Fase B
-    (planos em docs/ai-plans/); `socials` = collectors reais que satisfazem
+    Decisão de composição (Fase D→B): `web` = stub noop (Fase B pendente
+    para web suggest); `trends` = TrendsGoogleProvider real (Fase B);
+    `socials` = collectors reais que satisfazem
     SocialDiscoverer estruturalmente (Instagram desde a Fase C); `signals` =
     repositório real (tabela existe desde a Fase A).
     """
     from content_factory.app.ports import SocialDiscoverer
     from content_factory.infra.collectors import register_defaults, registry
+    from content_factory.infra.collectors.trends_google import TrendsGoogleProvider
     from content_factory.infra.db.base import get_session_factory
     from content_factory.infra.db.repositories import (
         CollectRunRepositoryImpl,
@@ -175,7 +170,7 @@ async def create_app_deps(settings: Settings) -> AppDeps:
             ),
             research=ResearchDeps(
                 web=_NoopKeywordExpander(),
-                trends=_NoopTrendsProvider(),
+                trends=TrendsGoogleProvider(),
                 socials=socials,
                 signals=KeywordSignalRepositoryImpl(session),
                 segments=SegmentRepositoryImpl(session),
