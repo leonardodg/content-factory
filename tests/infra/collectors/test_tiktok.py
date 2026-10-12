@@ -44,9 +44,21 @@ class StubClient:
     def __init__(self, payload: list[dict[str, Any]]) -> None:
         self._payload = payload
         self.trending = StubTrending(payload)
+        self.search = StubSearch(payload)
 
     def hashtag(self, name: str) -> StubHashtag:
         return StubHashtag(self._payload)
+
+
+class StubSearch:
+    def __init__(self, payload: list[dict[str, Any]]) -> None:
+        self._payload = payload
+
+    def videos(self, query: str, count: int = 30, **kw: object) -> Any:
+        async def _run() -> list[dict[str, Any]]:
+            return self._payload
+
+        return _run()
 
 
 @pytest.mark.asyncio
@@ -57,6 +69,44 @@ async def test_discover_maps_fixture() -> None:
     assert out[0].views == 250000 and out[0].likes == 18000
     assert out[0].url.endswith(FIXTURE[0]["id"])
     assert out[0].published_at is not None  # epoch → UTC
+
+
+@pytest.mark.asyncio
+async def test_discover_by_keywords_uses_search_endpoint() -> None:
+    """discover_by_keywords usa client.search.videos (mesma sessão, mesmo backoff)."""
+    queries: list[str] = []
+
+    class SpySearch:
+        def __init__(self, payload: list[dict[str, Any]]) -> None:
+            self._payload = payload
+
+        def videos(self, query: str, count: int = 30, **kw: object) -> Any:
+            queries.append(query)
+
+            async def _run() -> list[dict[str, Any]]:
+                return self._payload
+
+            return _run()
+
+    class SpyClient:
+        def __init__(self, payload: list[dict[str, Any]]) -> None:
+            self._payload = payload
+            self.trending = StubTrending(payload)
+            self.search = SpySearch(payload)
+
+        def hashtag(self, name: str) -> StubHashtag:
+            return StubHashtag(self._payload)
+
+    c = TikTokCollector(ms_token="tok", client=SpyClient(FIXTURE))
+    out = await c.discover_by_keywords(
+        keywords=["candle making", "DIY"], hashtags=["#velas"], depth=1
+    )
+    assert out and out[0].platform == "tiktok"
+    assert out[0].views == 250000
+    # query = keywords+hashtags unidos
+    assert len(queries) == 1
+    assert "candle making" in queries[0]
+    assert "#velas" in queries[0]
 
 
 @pytest.mark.asyncio

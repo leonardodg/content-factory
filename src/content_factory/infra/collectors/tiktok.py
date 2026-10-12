@@ -9,6 +9,20 @@ from content_factory.domain.models import CandidateVideo, SegmentConfig
 MAX_ATTEMPTS = 5
 
 
+class _SearchEndpoint:
+    """Adapta client.search p/ o contrato .videos(count=) do _call_with_backoff.
+
+    TikTokApi v6: client.search.videos(query, count=N) → gerador async de Video.
+    """
+
+    def __init__(self, client: Any, query: str) -> None:
+        self._search = client.search
+        self._query = query
+
+    def videos(self, count: int = 30, **kw: object) -> Any:
+        return self._search.videos(self._query, count=count)
+
+
 def _raw(item: Any) -> dict[str, Any]:
     """`Video.as_dict` do TikTokApi v6 ou dict cru (contrato de teste)."""
     data = getattr(item, "as_dict", None)
@@ -55,6 +69,37 @@ class TikTokCollector:
             # extra por segurança (padrão __aexit__ da própria lib)
             await api.close_sessions()
             await api.stop_playwright()
+
+    async def discover_by_keywords(
+        self, keywords: list[str], hashtags: list[str], depth: int
+    ) -> list[CandidateVideo]:
+        """Busca por keywords+hashtags dinâmicas — mesma sessão/backoff de discover()."""
+        if not self._token:
+            raise AuthExpired(
+                self.platform, "TIKTOK_MS_TOKEN ausente/expirado — ver docs/dev/credentials.md"
+            )
+        _ = depth  # profundidade é controle do FanoutGuard, não da API
+        terms = [*keywords, *hashtags][:5]  # API não aceita query enorme
+        query = " ".join(terms)
+        if self._client is not None:
+            return await self._search(self._client, query)
+        api = await self._open_session()
+        try:
+            return await self._search(api, query)
+        finally:
+            await api.close_sessions()
+            await api.stop_playwright()
+
+    async def _search(self, client: Any, query: str) -> list[CandidateVideo]:
+        """Busca por keyword via client.search.videos — mesma sessão Playwright."""
+        videos = await self._call_with_backoff(_SearchEndpoint(client, query), count=30)
+        seen: set[str] = set()
+        out: list[CandidateVideo] = []
+        for v in videos:
+            if v.get("id") not in seen:
+                seen.add(v.get("id", ""))
+                out.append(self._map(v))
+        return out
 
     async def _discover(
         self, client: Any, segment: SegmentConfig, limit: int
