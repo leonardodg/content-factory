@@ -338,6 +338,59 @@ async def test_own_media_fallback_keyword_with_hash_matches_caption_without_hash
     assert [v.platform_video_id for v in out] == ["18001"]
 
 
+@pytest.mark.asyncio
+async def test_own_media_fallback_paginates_until_match() -> None:
+    """Sem match na página 1 (tem cursor 'after'), busca a página 2 e acha."""
+    calls = {"n": 0}
+
+    def _route(request: httpx.Request) -> httpx.Response:
+        path = request.url.path
+        if path.endswith("/ig_hashtag_search"):
+            return httpx.Response(
+                400,
+                json={"error": {"message": "(#10) ... public content access ...", "code": 10}},
+            )
+        if path.endswith("/media"):
+            calls["n"] += 1
+            if calls["n"] == 1:
+                return httpx.Response(
+                    200,
+                    json={
+                        "data": [
+                            {
+                                "id": "1",
+                                "caption": "sabonete",
+                                "media_type": "VIDEO",
+                                "permalink": "https://x/1",
+                                "username": "u",
+                            }
+                        ],
+                        "paging": {"cursors": {"after": "CURSOR2"}},
+                    },
+                )
+            return httpx.Response(
+                200,
+                json={
+                    "data": [
+                        {
+                            "id": "2",
+                            "caption": "vela artesanal",
+                            "media_type": "VIDEO",
+                            "permalink": "https://x/2",
+                            "username": "u",
+                        }
+                    ],
+                    "paging": {},
+                },
+            )
+        return httpx.Response(404, json={})
+
+    c = InstagramCollector(access_token="t", ig_user_id="42", transport=httpx.MockTransport(_route))
+    out = await c.discover(SEG, limit=5)
+    assert [v.platform_video_id for v in out] == ["2"]
+    assert calls["n"] == 2
+
+
 def test_register_defaults_registers_instagram() -> None:
     from content_factory.config import Settings
     from content_factory.infra.collectors import register_defaults, registry

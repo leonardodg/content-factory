@@ -16,6 +16,7 @@ FIELDS = (
 )
 
 _SKIP_MEDIA_TYPES = {"IMAGE"}
+_MAX_OWN_MEDIA_PAGES = 3
 
 
 def _is_video_like(item: dict[str, Any]) -> bool:
@@ -100,25 +101,38 @@ class InstagramCollector:
 
         A conta publica conteúdo misto (velas, sabonetes, macramê); sem filtro a
         relevância do segmento seria violada. Busca vazia de hashtag não cai aqui.
+        Pagina até _MAX_OWN_MEDIA_PAGES para achar `limit` matches.
         """
         logger.warning("instagram: gate #10 (App Review pendente) — usando mídia própria")
-        rows = await self._get(f"{self._user}/media", {"fields": FIELDS, "limit": "50"})
-        if rows is None:
-            # gate também na mídia própria: sem hashtag e sem fallback — falha ruidosa
-            raise AuthExpired(self.platform, "HTTP 400 gate #10 na mídia própria")
-        if not rows:
-            return []
         keywords = [k.casefold().removeprefix("#") for k in segment.keywords]
-        items: Any = rows.get("data") or []
         out: list[CandidateVideo] = []
-        for raw_item in items:
-            item = cast(dict[str, Any], raw_item)
-            if not _is_video_like(item):
-                continue
-            caption = str(item.get("caption") or "").casefold()
-            if not keywords or any(k in caption for k in keywords):
-                out.append(self._map(item))
-            if len(out) >= limit:
+        after: str | None = None
+        for page in range(_MAX_OWN_MEDIA_PAGES):
+            params = {"fields": FIELDS, "limit": "50"}
+            if after:
+                params["after"] = after
+            rows = await self._get(f"{self._user}/media", params)
+            if rows is None:
+                if not out and page == 0:
+                    # gate também na mídia própria: sem hashtag e sem fallback — falha ruidosa
+                    raise AuthExpired(self.platform, "HTTP 400 gate #10 na mídia própria")
+                break
+            items: Any = rows.get("data") or []
+            if not items:
+                break
+            for raw_item in items:
+                item = cast(dict[str, Any], raw_item)
+                if not _is_video_like(item):
+                    continue
+                caption = str(item.get("caption") or "").casefold()
+                if not keywords or any(k in caption for k in keywords):
+                    out.append(self._map(item))
+                if len(out) >= limit:
+                    return out
+            paging = cast(dict[str, Any], rows.get("paging") or {})
+            cursors = cast(dict[str, Any], paging.get("cursors") or {})
+            after = cast(str | None, cursors.get("after"))
+            if not after:
                 break
         return out
 
