@@ -97,6 +97,14 @@ class InstagramCollector:
         videos = [cast(dict[str, Any], item) for item in items if _is_video_like(item)]
         return [self._map(item) for item in videos[:limit]]
 
+    async def discover_by_keywords(
+        self, keywords: list[str], hashtags: list[str], depth: int
+    ) -> list[CandidateVideo]:
+        """Stage 3-5 do pipeline (Fase A): filtra mídia própria pela união
+        keywords+hashtags vinda do research_pipeline, não só segment.keywords."""
+        terms = [k.casefold().removeprefix("#") for k in [*keywords, *hashtags]]
+        return await self._own_media_by_terms(terms, limit=25)
+
     async def _own_media(self, segment: SegmentConfig, limit: int) -> list[CandidateVideo]:
         """Fallback no gate #10: mídia pública da própria conta, filtrada por keyword.
 
@@ -104,9 +112,12 @@ class InstagramCollector:
         relevância do segmento seria violada. Busca vazia de hashtag não cai aqui.
         Pagina até _MAX_OWN_MEDIA_PAGES para achar `limit` matches.
         """
+        keywords = [k.casefold().removeprefix("#") for k in segment.keywords]
+        return await self._own_media_by_terms(keywords, limit)
+
+    async def _own_media_by_terms(self, terms: list[str], limit: int) -> list[CandidateVideo]:
         self.gate_hits += 1
         logger.warning("instagram: gate #10 (App Review pendente) — usando mídia própria")
-        keywords = [k.casefold().removeprefix("#") for k in segment.keywords]
         out: list[CandidateVideo] = []
         after: str | None = None
         for page in range(_MAX_OWN_MEDIA_PAGES):
@@ -127,7 +138,7 @@ class InstagramCollector:
                 if not _is_video_like(item):
                     continue
                 caption = str(item.get("caption") or "").casefold()
-                if not keywords or any(k in caption for k in keywords):
+                if not terms or any(t in caption for t in terms):
                     out.append(self._map(item))
                 if len(out) >= limit:
                     return out

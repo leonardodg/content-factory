@@ -407,3 +407,44 @@ def test_register_defaults_registers_instagram() -> None:
 
     register_defaults(Settings(instagram_access_token="t", ig_user_id="1"))
     assert isinstance(registry.get("instagram"), InstagramCollector)
+
+
+@pytest.mark.asyncio
+async def test_discover_by_keywords_uses_union_of_keywords_and_hashtags() -> None:
+    """discover_by_keywords filtra mídia própria pela união keywords+hashtags.
+
+    Diferente de discover→_own_media (que usa segment.keywords), aqui os termos
+    vêm do research_pipeline: keyword "sabonete" + hashtag "#vela" (sem # na
+    legenda) devem casar posts distintos. 18002 é VIDEO aqui — o fixture
+    compartilhado _OWN_MEDIA tem IMAGE (filtro de vídeo da Fase 0).
+    """
+
+    def _route(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/media"):
+            return httpx.Response(
+                200,
+                json={
+                    "data": [
+                        {
+                            "id": "18001",
+                            "caption": "Passo a passo de Vela Artesanal",
+                            "media_type": "CAROUSEL_ALBUM",
+                            "permalink": "https://www.instagram.com/p/AAA/",
+                            "username": "atelie.velas",
+                        },
+                        {
+                            "id": "18002",
+                            "caption": "Sabonete artesanal de lavanda",
+                            "media_type": "VIDEO",
+                            "permalink": "https://www.instagram.com/p/BBB/",
+                            "username": "atelie.velas",
+                        },
+                    ]
+                },
+            )
+        return httpx.Response(404, json={})
+
+    c = InstagramCollector(access_token="t", ig_user_id="42", transport=httpx.MockTransport(_route))
+    out = await c.discover_by_keywords(keywords=["sabonete"], hashtags=["#vela"], depth=1)
+    ids = {v.platform_video_id for v in out}
+    assert ids == {"18001", "18002"}  # ambos batem: "vela" (hashtag sem #) + "sabonete"
