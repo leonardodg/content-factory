@@ -108,7 +108,7 @@ class InstagramCollector:
             raise AuthExpired(self.platform, "HTTP 400 gate #10 na mídia própria")
         if not rows:
             return []
-        keywords = [k.casefold() for k in segment.keywords]
+        keywords = [k.casefold().removeprefix("#") for k in segment.keywords]
         items: Any = rows.get("data") or []
         out: list[CandidateVideo] = []
         for raw_item in items:

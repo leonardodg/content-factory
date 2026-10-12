@@ -327,6 +327,17 @@ async def test_discover_skips_image_media_type() -> None:
     assert [v.platform_video_id for v in out] == ["901"]
 
 
+@pytest.mark.asyncio
+async def test_own_media_fallback_keyword_with_hash_matches_caption_without_hash() -> None:
+    """Keyword cadastrada como '#vela' deve casar legenda 'Vela artesanal' (sem #)."""
+    seg = SegmentConfig(slug="candles", name="Velas", platforms=["instagram"], keywords=["#vela"])
+    c = InstagramCollector(
+        access_token="t", ig_user_id="42", transport=httpx.MockTransport(_gate_route)
+    )
+    out = await c.discover(seg, limit=5)
+    assert [v.platform_video_id for v in out] == ["18001"]
+
+
 def test_register_defaults_registers_instagram() -> None:
     from content_factory.config import Settings
     from content_factory.infra.collectors import register_defaults, registry

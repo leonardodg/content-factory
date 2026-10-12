@@ -1,6 +1,6 @@
 from datetime import UTC, datetime, timedelta
 
-from content_factory.app.score import ScoreDeps, score
+from content_factory.app.score import ScoreDeps, relevance_of, score
 from content_factory.domain.models import (
     ScoreResult,
     Segment,
@@ -158,6 +158,18 @@ async def test_all_upserts_failing_is_not_partial() -> None:
     out = await score(deps)
     assert out.scored == 0
     assert out.ok is False and out.partial is False
+
+
+def test_relevance_of_keyword_with_hash_matches_text_without_hash() -> None:
+    """Keyword cadastrada como '#vela' deve casar texto 'Vela artesanal' (sem #)."""
+    snap_ = VideoSnapshot(
+        video_id=1,
+        title="",
+        description="Vela artesanal de soja",
+        published_at=None,
+        metrics=VideoMetrics(),
+    )
+    assert relevance_of(snap_, ["#vela"]) == 1.0
 
 
 async def test_empty_segment_scores_nothing_and_is_ok() -> None:
