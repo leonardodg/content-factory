@@ -31,10 +31,10 @@ implementador, documentar a escolha no plano real da fase quando escrita;
 o ponto de design fixo é: reusar o MESMO client HTTP/parsing de resposta
 de `discover()`, não duplicar.)
 
-- [ ] Steps de TDD completos seguindo o padrão exato dos testes existentes
+- [x] Steps de TDD completos seguindo o padrão exato dos testes existentes
   de `test_youtube.py` (fixtures, `httpx.MockTransport` se usado, ou o
   mock de client real se for `google-api-python-client`).
-- [ ] Commit: `feat(youtube): discover_by_keywords reusa busca por query dinâmica`
+- [x] Commit: `feat(youtube): discover_by_keywords reusa busca por query dinâmica`
 
 ### Task E2: `TikTokCollector.discover_by_keywords`
 
@@ -50,8 +50,8 @@ banimento — qualquer busca nova por keyword precisa passar pelo MESMO
 `RateLimiter`/jitter já em uso, nunca gerar rajada de requisições novas
 sem throttle (reforçar isso no plano real, não é opcional).
 
-- [ ] Steps de TDD completos seguindo o padrão exato de `test_tiktok.py`.
-- [ ] Commit: `feat(tiktok): discover_by_keywords reusa sessao com termo dinamico`
+- [x] Steps de TDD completos seguindo o padrão exato de `test_tiktok.py`.
+- [x] Commit: `feat(tiktok): discover_by_keywords reusa sessao com termo dinamico`
 
 ### Task E3: Teste de ponta a ponta do guard-rail com todos os stages
 
@@ -66,11 +66,11 @@ limita o total de chamadas (`max_nodes_per_cycle` baixo no teste, ex. 5,
 e assert que nenhum collector é chamado mais vezes que o fan-out
 permitiria).
 
-- [ ] Steps de TDD completos.
-- [ ] Commit: `test(research): guard-rail de ponta a ponta com IG/YT/TikTok reais`
+- [x] Steps de TDD completos.
+- [x] Commit: `test(research): guard-rail de ponta a ponta com IG/YT/TikTok reais`
 
 ### Task E4: Gates + docs
 
-- [ ] Gates completos, HANDOFF atualizado, plano copiado, commit final.
+- [x] Gates completos, HANDOFF atualizado, plano copiado, commit final.
 
 > **Nota**: plano de intenção detalhada (não SDD travado como a Fase A) — leia os arquivos reais citados antes de executar e ajuste os detalhes finos; a arquitetura (Protocols, nomes, pontos de integração) é o que está fixado aqui.

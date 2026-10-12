@@ -5,10 +5,29 @@
 
 ## 🔄 EM ANDAMENTO
 
-_(nenhuma branch de feature aberta — próxima fase: E, quando o usuário decidir
-executar; planos prontos em `docs/ai-plans/2026-10-12-pipeline-pesquisa-fase-{e,b}.md`.)_
+_(nenhuma branch de feature aberta — próxima fase: B, quando o usuário decidir
+executar; plano pronto em `docs/ai-plans/2026-10-12-pipeline-pesquisa-fase-b.md`.)_
 
 ## ✅ CONCLUÍDO
+
+### Fase E — YouTube/TikTok discover_by_keywords (2026-10-12)
+
+Branch `feat/pipeline-pesquisa-fase-e` (3 commits, 170 passed + pyright 0).
+Executada via executing-plans, plano
+`docs/ai-plans/2026-10-12-pipeline-pesquisa-fase-e.md` (TDD, RED verificado).
+
+- [x] **Task E1** (`e221e1c`): `YoutubeCollector.discover_by_keywords` —
+  extrai `_search()` de `discover()`; query OR de keywords+hashtags
+  (max 5 termos); mesmo fluxo search→videos→channels (1 teste).
+- [x] **Task E2** (`ace9653`): `TikTokCollector.discover_by_keywords` —
+  `_SearchEndpoint` adapta `client.search.videos` ao contrato
+  `.videos(count=)` do `_call_with_backoff`; mesma sessão Playwright +
+  backoff/jitter (1 teste).
+- [x] **Task E3** (`2b98df5`): E2E guard-rail com coletores REAIS
+  (MockTransport YT, stub TikTok, spy IG) — `fanout_per_stage` corta
+  sinais web antes dos socials; dedupe casefold via `guard.admit` (2 testes).
+- [x] **Task E4**: gates completos (pytest 170 passed, ruff/format 0,
+  pyright 0, alembic check ok, bandit 0, mkdocs strict ok, privacy 176).
 
 ### Fase D — research_job + CLI + campanhas (2026-10-12)
 
