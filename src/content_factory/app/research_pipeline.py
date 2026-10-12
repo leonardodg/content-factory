@@ -80,8 +80,9 @@ async def run_research_cycle(
                 candidates = await discoverer.discover_by_keywords(keywords_for_social, [], 1)
                 social_found += len(candidates)
             except Exception:
-                # erro de 1 rede social não aborta as demais (padrão de collect())
-                continue
+                # erro de 1 rede social não aborta as demais (padrão de
+                # collect(), que captura por coletor); visível no envelope
+                counts[f"{platform}_failed"] = int(counts.get(f"{platform}_failed", 0)) + 1
         counts["social_found"] = social_found
 
         return ResearchOutcome(ok=True, counts=counts)
