@@ -791,7 +791,7 @@ async def test_create_app_deps_single_redis_when_urls_equal(
     monkeypatch.setattr(collectors_mod, "registry", _Registry())
 
     settings = Settings()
-    assert settings.rate_limit_redis_url is None
+    assert settings.rate_limit_redis_url == settings.redis_url  # default = redis_url
     deps = await w.create_app_deps(settings)
     assert opened == [settings.redis_url]  # um cliente só
     await deps.close()
