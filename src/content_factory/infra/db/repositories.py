@@ -271,6 +271,42 @@ class CollectRunRepositoryImpl(CollectRunRepository):
         rows = (await self._s.execute(stmt)).all()
         return {status: count for status, count in rows}
 
+    async def timing_stats(
+        self, segment_id: int, since: datetime
+    ) -> dict[str, dict[str, float | int | None]]:
+        """Agregado de discover_ms/persist_ms por plataforma (baseline Task 4).
+
+        `avg`/`percentile_cont` ignoram NULLs (runs pré-instrumentação) —
+        plataforma só com NULLs volta com médias None e `n` contando tudo.
+        """
+        stmt = (
+            select(
+                CollectRunRow.collector,
+                func.count(CollectRunRow.id).label("n"),
+                func.avg(CollectRunRow.discover_ms).label("avg_discover_ms"),
+                func.avg(CollectRunRow.persist_ms).label("avg_persist_ms"),
+                func.percentile_cont(0.95)
+                .within_group(CollectRunRow.discover_ms)
+                .label("p95_discover_ms"),
+                func.percentile_cont(0.95)
+                .within_group(CollectRunRow.persist_ms)
+                .label("p95_persist_ms"),
+            )
+            .where(CollectRunRow.segment_id == segment_id, CollectRunRow.started_at > since)
+            .group_by(CollectRunRow.collector)
+        )
+        stats: dict[str, dict[str, float | int | None]] = {}
+        for row in (await self._s.execute(stmt)).all():
+            collector, n, avg_d, avg_p, p95_d, p95_p = row
+            stats[collector] = {
+                "n": int(n),
+                "avg_discover_ms": float(avg_d) if avg_d is not None else None,
+                "p95_discover_ms": float(p95_d) if p95_d is not None else None,
+                "avg_persist_ms": float(avg_p) if avg_p is not None else None,
+                "p95_persist_ms": float(p95_p) if p95_p is not None else None,
+            }
+        return stats
+
 
 class ScoreRepositoryImpl(ScoreRepository):
     """`video_scores` é timeseries: 1 linha por captura (append, sem ON CONFLICT)."""

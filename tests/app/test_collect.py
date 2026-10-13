@@ -1,10 +1,13 @@
+from collections.abc import Sequence
+from datetime import UTC, datetime, timedelta
 from typing import ClassVar
 
 from tests.stubs import FakeCollector, FakeLimiter, FakeLock, FakeRepos
 
 from content_factory.app.collect import CollectDeps, collect
+from content_factory.app.ports import Collector, VideoRepository
 from content_factory.domain.errors import CollectorError
-from content_factory.domain.models import CandidateVideo, SegmentConfig
+from content_factory.domain.models import CandidateVideo, SegmentConfig, UpsertStats, VideoSnapshot
 
 
 class _FakeGatedCollector:
@@ -183,6 +186,107 @@ async def test_collect_exposes_gate_hits_even_when_discover_fails() -> None:
     out = await collect("candles", ["instagram"], limit=5, deps=deps)
     assert out.ok is False
     assert out.counts["instagram_gate_hits"] == 1
+
+
+class _FakeClock:
+    """Relógio manual: só avança quando o teste manda (discover/upsert)."""
+
+    def __init__(self) -> None:
+        self._now = datetime(2026, 10, 13, 12, 0, tzinfo=UTC)
+
+    def __call__(self) -> datetime:
+        return self._now
+
+    def advance_ms(self, ms: int) -> None:
+        self._now += timedelta(milliseconds=ms)
+
+
+def _TimedCollector(platform: str, clock: _FakeClock, discover_ms: int, n: int = 2) -> Collector:
+    """Collector que consome `discover_ms` do relógio fake durante discover()."""
+    name = platform
+
+    class Impl:
+        platform: ClassVar[str] = name
+
+        async def discover(self, segment: SegmentConfig, limit: int) -> list[CandidateVideo]:
+            clock.advance_ms(discover_ms)
+            return [
+                CandidateVideo(
+                    platform=name,
+                    platform_video_id=f"{name}-{i}",
+                    url=f"https://example.invalid/v/{i}",
+                    creator_handle="stub",
+                    title=f"video {i}",
+                )
+                for i in range(n)
+            ]
+
+    return Impl()
+
+
+def _TimedVideos(clock: _FakeClock, persist_ms: int) -> VideoRepository:
+    """Videos que consome `persist_ms` do relógio fake durante upsert_candidates()."""
+
+    class Impl:
+        async def upsert_candidates(
+            self, segment_id: int, source: str, candidates: Sequence[CandidateVideo]
+        ) -> UpsertStats:
+            clock.advance_ms(persist_ms)
+            return UpsertStats(inserted=len(candidates))
+
+        async def latest_for_segment(self, segment_id: int) -> list[VideoSnapshot]:
+            return []
+
+    return Impl()
+
+
+async def test_collect_records_discover_and_persist_ms_separately() -> None:
+    """Task 4 (baseline): tempo de rede vs tempo de persistência separados.
+
+    Clock fake avança 150ms em discover() e 40ms em upsert_candidates() —
+    o CollectRun gravado precisa carregar os dois campos separados, não um total.
+    """
+    clock = _FakeClock()
+    repos = FakeRepos()
+    deps = CollectDeps(
+        collectors=[_TimedCollector("youtube", clock, discover_ms=150)],
+        videos=_TimedVideos(clock, persist_ms=40),
+        segments=repos.segments,
+        runs=repos.runs,
+        limiter=FakeLimiter(),
+        lock=FakeLock(),
+        clock=clock,
+    )
+    out = await collect("candles", ["youtube"], limit=5, deps=deps)
+    assert out.ok is True
+    run = out.runs[0]
+    assert run.discover_ms == 150
+    assert run.persist_ms == 40
+
+
+async def test_collect_failure_still_records_discover_ms_without_persist_ms() -> None:
+    """discover() que levanta registra o custo da fase de rede; sem persistência."""
+    clock = _FakeClock()
+    repos = FakeRepos()
+    deps = CollectDeps(
+        collectors=[
+            _TimedCollector("youtube", clock, discover_ms=150),
+            FakeCollector("tiktok", fail=CollectorError("blocked", "tiktok")),
+        ],
+        videos=_TimedVideos(clock, persist_ms=40),
+        segments=repos.segments,
+        runs=repos.runs,
+        limiter=FakeLimiter(),
+        lock=FakeLock(),
+        clock=clock,
+    )
+    out = await collect("candles", ["youtube", "tiktok"], limit=5, deps=deps)
+    assert out.ok is False
+    run_ok = next(r for r in out.runs if r.collector == "youtube")
+    assert (run_ok.discover_ms, run_ok.persist_ms) == (150, 40)
+    run_bad = next(r for r in out.runs if r.collector == "tiktok")
+    assert run_bad.status == "blocked"
+    assert run_bad.persist_ms is None
 
 
 async def test_collect_gate_hits_is_per_run_delta_not_cumulative() -> None:

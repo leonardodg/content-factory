@@ -850,6 +850,75 @@ async def test_collect_run_record_persists_skipped_separate_from_failed() -> Non
 
 
 @requires_infra
+async def test_collect_run_record_round_trips_timing_columns() -> None:
+    """Task 4 (baseline): discover_ms/persist_ms fazem round-trip em collect_runs."""
+    engine = create_async_engine(os.environ["TEST_DATABASE_URL"])
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    async with factory() as s:
+        await s.rollback()
+        run = CollectRun(
+            collector="youtube",
+            status="ok",
+            found=3,
+            inserted=3,
+            discover_ms=150,
+            persist_ms=40,
+            started_at=datetime.now(UTC),
+        )
+        run_id = await CollectRunRepositoryImpl(s).record(run)
+        await s.commit()
+        row = (
+            await s.execute(select(CollectRunRow).where(CollectRunRow.id == run_id))
+        ).scalar_one()
+        assert row.discover_ms == 150
+        assert row.persist_ms == 40
+    await engine.dispose()
+
+
+@requires_infra
+async def test_collect_run_timing_stats_aggregates_by_platform() -> None:
+    """Task 4 (baseline): timing_stats agrega média/p95 de cada fase por plataforma."""
+    engine = create_async_engine(os.environ["TEST_DATABASE_URL"])
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    async with factory() as s:
+        await s.rollback()
+        seg = await SegmentRepositoryImpl(s).upsert(
+            SegmentConfig(
+                slug=f"teste-timings-{uuid4().hex[:8]}",
+                name="Teste timings",
+                platforms=["youtube", "tiktok"],
+                keywords=["k"],
+            )
+        )
+        now = datetime.now(UTC)
+        repo = CollectRunRepositoryImpl(s)
+        for discover_ms, persist_ms in ((100, 10), (200, 30)):
+            await repo.record(
+                CollectRun(
+                    collector="youtube",
+                    segment_id=seg.id,
+                    status="ok",
+                    discover_ms=discover_ms,
+                    persist_ms=persist_ms,
+                    started_at=now,
+                )
+            )
+        # run pré-instrumentação: timings NULL entram na contagem, fora das médias
+        await repo.record(
+            CollectRun(collector="tiktok", segment_id=seg.id, status="ok", started_at=now)
+        )
+        stats = await repo.timing_stats(seg.id, now - timedelta(days=7))
+        assert stats["youtube"]["n"] == 2
+        assert stats["youtube"]["avg_discover_ms"] == 150.0
+        assert stats["youtube"]["avg_persist_ms"] == 20.0
+        assert stats["youtube"]["p95_discover_ms"] is not None
+        assert 100 <= stats["youtube"]["p95_discover_ms"] <= 200
+        assert stats["tiktok"]["n"] == 1
+        assert stats["tiktok"]["avg_discover_ms"] is None
+    await engine.dispose()
+
+
+@requires_infra
 async def test_active_segments_returns_only_segments_with_active_campaign() -> None:
     """active_segments() devolve só quem tem campanha ativa e não vencida."""
     engine = create_async_engine(os.environ["TEST_DATABASE_URL"])

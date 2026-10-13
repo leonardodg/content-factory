@@ -129,9 +129,14 @@ class _FakeSegments:
 
 
 class _FakeRuns:
-    def __init__(self, status_counts: dict[str, int] | None = None) -> None:
+    def __init__(
+        self,
+        status_counts: dict[str, int] | None = None,
+        timing_stats: dict[str, dict[str, float | int | None]] | None = None,
+    ) -> None:
         self.recorded: list[CollectRun] = []
         self._status_counts = status_counts
+        self._timing_stats = timing_stats
 
     async def record(self, run: CollectRun) -> int:
         self.recorded.append(run)
@@ -142,6 +147,14 @@ class _FakeRuns:
         if self._status_counts is None:
             raise NotImplementedError("configure via FakeRepos(..., status_counts={...})")
         return dict(self._status_counts)
+
+    async def timing_stats(
+        self, segment_id: int, since: datetime
+    ) -> dict[str, dict[str, float | int | None]]:
+        _ = segment_id, since
+        if self._timing_stats is None:
+            raise NotImplementedError("configure via FakeRepos(..., timing_stats={...})")
+        return {k: dict(v) for k, v in self._timing_stats.items()}
 
 
 class FakeRepos:
@@ -154,10 +167,11 @@ class FakeRepos:
         updates_only: bool = False,
         skipped: int = 0,
         status_counts: dict[str, int] | None = None,
+        timing_stats: dict[str, dict[str, float | int | None]] | None = None,
     ) -> None:
         self.videos: VideoRepository = _FakeVideos(updates_only, skipped)
         self.segments: SegmentRepository = _FakeSegments(segment_id)
-        self.runs: CollectRunRepository = _FakeRuns(status_counts)
+        self.runs: CollectRunRepository = _FakeRuns(status_counts, timing_stats)
 
 
 # aliases públicas p/ testes que precisam fazer isinstance/asserts

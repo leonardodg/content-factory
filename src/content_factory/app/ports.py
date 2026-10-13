@@ -84,6 +84,16 @@ class CollectRunRepository(Protocol):
         """Contagem de runs por status a partir de `since` (janela do `cf status`)."""
         ...
 
+    async def timing_stats(
+        self, segment_id: int, since: datetime
+    ) -> dict[str, dict[str, float | int | None]]:
+        """Agregado de discover_ms/persist_ms por plataforma (baseline Task 4).
+
+        Janela do `cf collect-timings`: `{plataforma: {n, avg/p95 de cada fase}}`.
+        NULLs (runs pré-instrumentação) são ignorados nas médias.
+        """
+        ...
+
 
 class ResearchCampaignRepository(Protocol):
     async def start(self, segment_id: int, ends_at: datetime) -> ResearchCampaign: ...

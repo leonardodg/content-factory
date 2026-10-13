@@ -1,3 +1,4 @@
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 
@@ -13,6 +14,15 @@ from content_factory.domain.errors import CollectorError
 from content_factory.domain.models import CollectRun
 
 
+def _utcnow() -> datetime:
+    return datetime.now(UTC)
+
+
+def _ms_between(start: datetime, end: datetime) -> int:
+    """Milissegundos entre duas leituras do clock (baseline Task 4)."""
+    return int((end - start).total_seconds() * 1000)
+
+
 @dataclass
 class CollectDeps:
     collectors: list[Collector]
@@ -21,6 +31,9 @@ class CollectDeps:
     runs: CollectRunRepository
     limiter: RateLimiter
     lock: Lock
+    # Mesmo padrão de ScoreDeps: clock injetável, default = agora em UTC —
+    # chamadas existentes (worker/CLI) continuam funcionando sem mudança.
+    clock: Callable[[], datetime] = field(default_factory=lambda: _utcnow)
 
 
 @dataclass
@@ -52,15 +65,20 @@ async def collect(
         for collector in deps.collectors:
             if collector.platform not in platforms:
                 continue
-            started = datetime.now(UTC)
+            started = deps.clock()
             run = CollectRun(
                 collector=collector.platform, segment_id=segment.id, started_at=started
             )
             gate_hits_before = getattr(collector, "gate_hits", 0)
+            discover_start: datetime | None = None
             try:
                 await deps.limiter.acquire(collector.platform)
+                discover_start = deps.clock()
                 found = await collector.discover(segment, limit)
+                run.discover_ms = _ms_between(discover_start, deps.clock())
+                persist_start = deps.clock()
                 stats = await deps.videos.upsert_candidates(segment.id, collector.platform, found)
+                run.persist_ms = _ms_between(persist_start, deps.clock())
                 run.status = "ok"
                 run.found = len(found)
                 run.inserted, run.updated = stats.inserted, stats.updated
@@ -70,6 +88,10 @@ async def collect(
                 counts["updated"] = int(counts["updated"]) + stats.updated
                 counts["skipped"] = int(counts["skipped"]) + stats.skipped
             except CollectorError as exc:
+                if discover_start is not None and run.discover_ms is None:
+                    # discover() (ou o upsert) abriu a fase de rede antes de
+                    # falhar — registra o custo até o erro; sem persistência.
+                    run.discover_ms = _ms_between(discover_start, deps.clock())
                 run.status = "blocked" if exc.code == "blocked" else "failed"
                 run.error_code = exc.code
                 run.failed = 1  # Fase H: explícito no campo numérico, não só em status
@@ -85,7 +107,7 @@ async def collect(
                 gate_hits_delta = gate_hits_after - gate_hits_before
                 if gate_hits_delta:
                     counts[f"{collector.platform}_gate_hits"] = gate_hits_delta
-                run.finished_at = datetime.now(UTC)
+                run.finished_at = deps.clock()
                 await deps.runs.record(run)
                 runs.append(run)
         ok = errors == 0

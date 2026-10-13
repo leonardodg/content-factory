@@ -306,6 +306,45 @@ def test_status_unknown_segment_exit_1(monkeypatch: pytest.MonkeyPatch) -> None:
     assert '"code": "segment_not_found"' in result.stdout
 
 
+def _fake_timings_deps(
+    timings: dict[str, dict[str, float | int | None]] | None = None, *, missing: bool = False
+) -> Callable[[], AbstractAsyncContextManager[tuple[SegmentRepository, CollectRunRepository]]]:
+    """Seam de monkeypatch: (segments, runs) fake com timing_stats (sem DB)."""
+
+    @asynccontextmanager
+    async def factory() -> AsyncGenerator[tuple[SegmentRepository, CollectRunRepository]]:
+        repos = FakeRepos(timing_stats=timings)
+        if missing:
+            yield _MissingSegments(), repos.runs
+        else:
+            yield repos.segments, repos.runs
+
+    return factory
+
+
+def test_collect_timings_success_envelope(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Task 4 (baseline): `cf collect-timings` devolve só o envelope, dados no banco."""
+    monkeypatch.setattr(
+        "content_factory.cli.main._timings_deps",
+        _fake_timings_deps(
+            {"youtube": {"n": 2, "avg_discover_ms": 150.0, "p95_discover_ms": 150.0}}
+        ),
+    )
+    result = runner.invoke(app, ["collect-timings", "--segment", "candles"])
+    assert result.exit_code == 0
+    assert '"ok": true' in result.stdout
+    assert '"command": "collect-timings"' in result.stdout
+    assert '"youtube"' in result.stdout
+
+
+def test_collect_timings_unknown_segment_exit_1(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("content_factory.cli.main._timings_deps", _fake_timings_deps(missing=True))
+    result = runner.invoke(app, ["collect-timings", "--segment", "nao-existe"])
+    assert result.exit_code == 1
+    assert '"ok": false' in result.stdout
+    assert '"code": "segment_not_found"' in result.stdout
+
+
 def _fake_segment_id(_slug: str) -> int:
     return 42
 

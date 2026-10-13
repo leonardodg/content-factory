@@ -125,6 +125,8 @@ class CollectRun(BaseModel):
     error_code: str | None = None
     started_at: datetime
     finished_at: datetime | None = None
+    discover_ms: int | None = None  # Task 4 (baseline): tempo de rede (discover)
+    persist_ms: int | None = None  # Task 4 (baseline): tempo de persistência (upsert)
 
 
 class ResearchCampaign(BaseModel):

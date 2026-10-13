@@ -225,6 +225,9 @@ class CollectRunRow(Base):
     quota_used: Mapped[int] = mapped_column(Integer, default=0)
     retries: Mapped[int] = mapped_column(Integer, default=0)
     error_code: Mapped[str | None] = mapped_column(String(32))
+    # Task 4 (baseline): NULL = run pré-instrumentação; médias ignoram NULLs
+    discover_ms: Mapped[int | None]
+    persist_ms: Mapped[int | None]
 
 
 class KeywordSignalRow(Base):
