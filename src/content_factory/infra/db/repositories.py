@@ -17,6 +17,7 @@ from content_factory.app.ports import (
     TrendObservationRepository,
     VideoRepository,
 )
+from content_factory.app.score_sample import ScoreSampleRow
 from content_factory.domain.errors import SegmentNotFound
 from content_factory.domain.models import (
     CandidateVideo,
@@ -303,6 +304,49 @@ class ScoreRepositoryImpl(ScoreRepository):
                 )
             )
             await self._s.flush()
+
+
+class ScoreSampleRepositoryImpl:
+    """Task 8 — ranking mais recente de um segmento, joinado com `videos.url`.
+
+    Mesmo padrão `DISTINCT ON` de `latest_for_segment`: pega a linha mais
+    recente de `video_scores` por vídeo (append-only timeseries), ordena por
+    `viral_score DESC` e limita.
+    """
+
+    def __init__(self, session: AsyncSession) -> None:
+        self._s = session
+
+    async def top_scored_for_segment(self, segment_id: int, limit: int) -> list[ScoreSampleRow]:
+        stmt = (
+            select(VideoScoreRow, VideoRow.url)
+            .join(VideoRow, VideoRow.id == VideoScoreRow.video_id)
+            .where(VideoScoreRow.segment_id == segment_id)
+            .ext(distinct_on(VideoScoreRow.video_id))
+            .order_by(
+                VideoScoreRow.video_id,
+                VideoScoreRow.computed_at.desc(),
+                VideoScoreRow.viral_score.desc(),
+            )
+        )
+        rows = (await self._s.execute(stmt)).all()
+        # ordena por viral_score desc e limita em Python: DISTINCT ON garante
+        # 1 linha/vídeo; o ORDER BY SQL do distinct_on é pelo partition key
+        rows = sorted(rows, key=lambda pair: pair[0].viral_score, reverse=True)[:limit]
+        return [
+            ScoreSampleRow(
+                video_id=score.video_id,
+                url=url,
+                total=score.viral_score,
+                performance=score.performance,
+                velocity=score.velocity,
+                engagement=score.engagement,
+                relevance=score.relevance,
+                recency=score.recency,
+                metrics_available=list(score.metrics_available or []),
+            )
+            for score, url in rows
+        ]
 
 
 class KeywordSignalRepositoryImpl(KeywordSignalRepository):

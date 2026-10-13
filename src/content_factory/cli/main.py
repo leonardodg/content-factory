@@ -272,6 +272,72 @@ def ping() -> None:
     raise typer.Exit(exit_code_for(ok=True))
 
 
+# --- score-sample / score-correlation (Fase H, Task 8) ---
+
+
+async def _ascore_sample(segment_slug: str, limit: int, out: Path) -> int:
+    from content_factory.app.score_sample import score_sample, write_score_csv
+    from content_factory.config import get_settings
+    from content_factory.infra.db.base import get_session_factory
+    from content_factory.infra.db.repositories import (
+        ScoreSampleRepositoryImpl,
+        SegmentRepositoryImpl,
+    )
+
+    factory: async_sessionmaker[AsyncSession] = get_session_factory(get_settings())
+    async with factory() as session:
+        seg = await SegmentRepositoryImpl(session).get_by_slug(segment_slug)
+        repo = ScoreSampleRepositoryImpl(session)
+        rows = await score_sample(segment_id=seg.id, limit=limit, repo=repo)
+    write_score_csv(rows, out)
+    return len(rows)
+
+
+@app.command("score-sample")
+def score_sample_cmd(
+    segment: str = typer.Option(..., "--segment", help="slug do segmento"),
+    limit: int = typer.Option(50, "--limit", min=1, max=500, help="máximo de vídeos"),
+    out: str = typer.Option(..., "--out", help="caminho do CSV a gravar"),
+) -> None:
+    """Exporta o ranking atual em CSV para anotação manual (avaliacao_manual)."""
+    try:
+        n = asyncio.run(_ascore_sample(segment, limit, Path(out)))
+    except SegmentNotFound as exc:
+        print(dumps(envelope_err("score-sample", "segment_not_found", redact(str(exc)))))
+        raise typer.Exit(exit_code_for(ok=False)) from exc
+    except DomainError as exc:
+        print(dumps(envelope_err("score-sample", "usage_error", redact(str(exc)))))
+        raise typer.Exit(exit_code_for(ok=False)) from exc
+    except Exception as exc:
+        print(dumps(envelope_err("score-sample", "internal_error", redact(str(exc)))))
+        raise typer.Exit(exit_code_for(ok=False)) from exc
+    print(dumps(envelope_ok("score-sample", rows=n, out=out)))
+    raise typer.Exit(exit_code_for(ok=True))
+
+
+@app.command("score-correlation")
+def score_correlation_cmd(
+    csv_path: str = typer.Option(..., "--csv", help="CSV já anotado (avaliacao_manual)"),
+) -> None:
+    """Spearman entre o rank do sistema (total) e a avaliação manual."""
+    from content_factory.app.score_sample import score_correlation
+
+    try:
+        out = score_correlation(Path(csv_path))
+    except FileNotFoundError as exc:
+        print(dumps(envelope_err("score-correlation", "file_not_found", redact(str(exc)))))
+        raise typer.Exit(exit_code_for(ok=False)) from exc
+    except Exception as exc:
+        print(dumps(envelope_err("score-correlation", "internal_error", redact(str(exc)))))
+        raise typer.Exit(exit_code_for(ok=False)) from exc
+    if out.ok and out.n is not None and out.spearman is not None:
+        print(dumps(envelope_ok("score-correlation", n=out.n, spearman=out.spearman)))
+        raise typer.Exit(exit_code_for(ok=True))
+    code = out.error_code or "internal_error"
+    print(dumps(envelope_err("score-correlation", code, out.message or "")))
+    raise typer.Exit(exit_code_for(ok=False))
+
+
 @asynccontextmanager
 async def _status_deps() -> AsyncGenerator[tuple[SegmentRepository, CollectRunRepository]]:
     """Deps do `status`: só Postgres (sem Redis/registry — é leitura)."""
