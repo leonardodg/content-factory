@@ -23,6 +23,7 @@ from arq.typing import StartupShutdown
 from arq.worker import Function, func
 
 from content_factory.app.collect import CollectDeps, collect
+from content_factory.app.ports import ResearchCampaignRepository
 from content_factory.app.research_pipeline import ResearchDeps, run_research_cycle
 from content_factory.app.score import ScoreDeps, score
 from content_factory.config import Settings, get_settings
@@ -56,14 +57,28 @@ _research_impl: Callable[..., Awaitable[Any]] = run_research_cycle
 
 
 async def run_collect_job(ctx: dict[str, Any]) -> dict[str, Any]:
+    """Coleta de todos os segmentos com campanha ativa — 1 commit por segmento.
+
+    `COLLECT_SEGMENT` não é mais lido: a lista vem de
+    `ResearchCampaignRepository.active_segments()`. 1 segmento com erro
+    não reverte os outros (commit por iteração, mesmo princípio do
+    savepoint por candidato em `upsert_candidates`).
+    """
     cfg = _load_settings()
-    deps: CollectDeps = ctx["collect_deps"]  # buildado no startup do worker
-    platforms: list[str] = cfg["platforms"]
-    if not platforms:  # default: plataformas declaradas do segmento (fallback da CLI)
-        platforms = (await deps.segments.get_by_slug(cfg["segment"])).platforms
-    out = await _collect_impl(cfg["segment"], platforms, cfg["limit"], deps)
-    await ctx["app_deps"].commit()  # commit só no sucesso; falha ⇒ rollback no job_end
-    return {"ok": out.ok, "partial": out.partial, **out.counts}
+    deps: CollectDeps = ctx["collect_deps"]
+    campaigns: ResearchCampaignRepository = ctx["campaigns_deps"]
+    app_deps: AppDeps = ctx["app_deps"]
+    active = await campaigns.active_segments()
+    results: dict[str, Any] = {}
+    for segment in active:
+        platforms: list[str] = cfg["platforms"] or segment.platforms
+        out = await _collect_impl(segment.slug, platforms, cfg["limit"], deps)
+        await app_deps.commit()
+        results[segment.slug] = {"ok": out.ok, "partial": out.partial, **out.counts}
+    return {
+        "ok": all(r["ok"] for r in results.values()) if results else True,
+        "segments": results,
+    }
 
 
 async def run_score_job(ctx: dict[str, Any]) -> dict[str, Any]:

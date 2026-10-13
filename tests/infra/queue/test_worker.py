@@ -3,11 +3,10 @@ from typing import ClassVar
 
 import pytest
 
-from content_factory.app.collect import CollectDeps
 from content_factory.app.research_pipeline import ResearchDeps
 from content_factory.domain.errors import SegmentNotFound
 from content_factory.domain.fanout_guard import FanoutGuard
-from content_factory.domain.models import DepthConfig, ResearchCampaign
+from content_factory.domain.models import DepthConfig, ResearchCampaign, Segment
 from content_factory.infra.queue import worker as w
 from tests.stubs import FakeLimiter, FakeLock, FakeRepos
 
@@ -17,28 +16,91 @@ class CountingDeps:
         self.collect_calls = 0
 
 
-async def test_run_collect_job_delegates(monkeypatch: pytest.MonkeyPatch) -> None:
+class _FakeCampaignsMultiSegment:
+    """Campanhas ativas devolvendo Segment fakes para os slugs pedidos."""
+
+    def __init__(self, slugs: list[str], platforms: list[str] | None = None) -> None:
+        self._slugs = slugs
+        self._platforms = platforms or ["youtube", "tiktok"]
+        self.stopped: list[int] = []
+
+    async def active_segments(self) -> list[Segment]:
+        return [
+            Segment(
+                id=i + 1,
+                slug=slug,
+                name=slug,
+                platforms=self._platforms,
+                keywords=["k"],
+            )
+            for i, slug in enumerate(self._slugs)
+        ]
+
+    async def active_for_segment(self, segment_id: int) -> ResearchCampaign | None:
+        return None
+
+    async def start(self, segment_id: int, ends_at: object) -> ResearchCampaign:
+        raise NotImplementedError
+
+    async def stop(self, segment_id: int) -> None:
+        self.stopped.append(segment_id)
+
+
+class _NoopAppDeps:
+    async def commit(self) -> None:
+        pass
+
+    async def rollback(self) -> None:
+        pass
+
+
+async def test_run_collect_job_processes_all_active_segments(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """2 segmentos ativos → 2 chamadas de collect, 1 commit por segmento."""
     calls: list[str] = []
 
     async def fake_collect(slug: str, platforms: list[str], limit: int, deps: object) -> object:
         calls.append(slug)
-        raise SystemExit  # sai imediato — só conta a chamada
+
+        class _Out:
+            ok = True
+            partial = False
+            counts: ClassVar[dict[str, object]] = {"found": 1}
+
+        return _Out()
 
     monkeypatch.setattr(w, "_collect_impl", fake_collect)
-    monkeypatch.setattr(
-        w, "_load_settings", lambda: {"segment": "candles", "platforms": ["youtube"], "limit": 10}
+    monkeypatch.setattr(w, "_load_settings", lambda: {"platforms": [], "limit": 10})
+    campaigns = _FakeCampaignsMultiSegment(slugs=["velas", "sabonetes"])
+    committed: list[str] = []
+
+    class _AppDeps:
+        async def commit(self) -> None:
+            committed.append("commit")
+
+    out = await w.run_collect_job(
+        {"collect_deps": object(), "campaigns_deps": campaigns, "app_deps": _AppDeps()}
     )
-    with pytest.raises(SystemExit):
-        await w.run_collect_job({"collect_deps": None})
-    assert calls == ["candles"]
+    assert calls == ["velas", "sabonetes"]
+    assert out["ok"] is True
+    assert set(out["segments"]) == {"velas", "sabonetes"}
+    assert committed == ["commit", "commit"]  # 1 commit por segmento
 
 
-def test_cron_hours_parse() -> None:
-    assert w.parse_cron_hours("08,20") == {8, 20}
-    assert w.parse_cron_hours("") == {8, 20}  # default
+async def test_run_collect_job_noop_when_no_active_segment(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """0 segmentos ativos → noop ok=True, sem chamar collect."""
+    monkeypatch.setattr(w, "_load_settings", lambda: {"platforms": [], "limit": 10})
+    campaigns = _FakeCampaignsMultiSegment(slugs=[])
+    out = await w.run_collect_job(
+        {"collect_deps": object(), "campaigns_deps": campaigns, "app_deps": _NoopAppDeps()}
+    )
+    assert out == {"ok": True, "segments": {}}
 
 
-async def test_collect_job_empty_platforms_fall_back_to_segment(
+async def test_run_collect_job_platforms_fall_back_to_segment(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """`COLLECT_PLATFORMS` vazio → usa as plataformas declaradas do segmento."""
@@ -46,23 +108,26 @@ async def test_collect_job_empty_platforms_fall_back_to_segment(
 
     async def fake_collect(slug: str, platforms: list[str], limit: int, deps: object) -> object:
         calls.append(platforms)
-        raise SystemExit
 
-    cfg: dict[str, object] = {"segment": "candles", "platforms": [], "limit": 5}
+        class _Out:
+            ok = True
+            partial = False
+            counts: ClassVar[dict[str, object]] = {}
+
+        return _Out()
+
     monkeypatch.setattr(w, "_collect_impl", fake_collect)
-    monkeypatch.setattr(w, "_load_settings", lambda: cfg)
-    repos = FakeRepos()
-    deps = CollectDeps(
-        collectors=[],
-        videos=repos.videos,
-        segments=repos.segments,
-        runs=repos.runs,
-        limiter=FakeLimiter(),
-        lock=FakeLock(),
+    monkeypatch.setattr(w, "_load_settings", lambda: {"platforms": [], "limit": 5})
+    campaigns = _FakeCampaignsMultiSegment(slugs=["candles"], platforms=["youtube", "tiktok"])
+    await w.run_collect_job(
+        {"collect_deps": object(), "campaigns_deps": campaigns, "app_deps": _NoopAppDeps()}
     )
-    with pytest.raises(SystemExit):
-        await w.run_collect_job({"collect_deps": deps, "app_deps": None})
     assert calls == [["youtube", "tiktok"]]  # plataformas do segmento (stub)
+
+
+def test_cron_hours_parse() -> None:
+    assert w.parse_cron_hours("08,20") == {8, 20}
+    assert w.parse_cron_hours("") == {8, 20}  # default
 
 
 def test_workersettings_registers_jobs_and_cron() -> None:
