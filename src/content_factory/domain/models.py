@@ -118,7 +118,8 @@ class CollectRun(BaseModel):
     found: int = 0
     inserted: int = 0
     updated: int = 0
-    failed: int = 0
+    failed: int = 0  # Fase H: só falha de plataforma (discover/upsert abortou)
+    skipped: int = 0  # Fase H: candidatos ignorados pelo savepoint, run continua ok
     quota_used: int = 0
     retries: int = 0
     error_code: str | None = None

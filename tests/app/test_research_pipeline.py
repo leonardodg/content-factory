@@ -264,6 +264,8 @@ async def test_run_research_cycle_social_failure_records_failed_run() -> None:
     assert isinstance(repos.runs, FakeRuns)
     assert repos.runs.recorded[0].status == "failed"
     assert repos.runs.recorded[0].error_code == "blocked"
+    assert repos.runs.recorded[0].failed == 1  # Fase H: explícito no campo numérico
+    assert repos.runs.recorded[0].skipped == 0
 
 
 @pytest.mark.asyncio

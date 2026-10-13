@@ -811,3 +811,39 @@ async def test_trend_observation_record_many_upserts_same_period() -> None:
         assert len(history) == 1  # não duplicou
         assert history[0].interest == 65.0  # valor mais recente venceu
     await engine.dispose()
+
+
+@requires_infra
+async def test_collect_run_record_persists_skipped_separate_from_failed() -> None:
+    """CollectRun.skipped e .failed são colunas distintas no banco (Fase H)."""
+    engine = create_async_engine(os.environ["TEST_DATABASE_URL"])
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    async with factory() as s:
+        await s.rollback()
+        seg = await SegmentRepositoryImpl(s).upsert(
+            SegmentConfig(
+                slug=f"teste-skipped-run-{uuid4().hex[:8]}",
+                name="Teste skipped run",
+                platforms=["youtube"],
+                keywords=["k"],
+            )
+        )
+        run = CollectRun(
+            collector="youtube",
+            segment_id=seg.id,
+            status="ok",
+            found=3,
+            inserted=1,
+            updated=0,
+            failed=0,
+            skipped=2,
+            started_at=datetime.now(UTC),
+        )
+        run_id = await CollectRunRepositoryImpl(s).record(run)
+        await s.commit()
+        row = (
+            await s.execute(select(CollectRunRow).where(CollectRunRow.id == run_id))
+        ).scalar_one()
+        assert row.skipped == 2
+        assert row.failed == 0
+    await engine.dispose()

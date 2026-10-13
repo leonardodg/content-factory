@@ -64,9 +64,7 @@ async def collect(
                 run.status = "ok"
                 run.found = len(found)
                 run.inserted, run.updated = stats.inserted, stats.updated
-                # candidatos revertidos pelo savepoint (REVISÃO §6 #1): visíveis
-                # no audit e no envelope, mesmo com a plataforma em ok
-                run.failed = stats.skipped
+                run.skipped = stats.skipped  # Fase H: era run.failed = stats.skipped
                 counts["found"] = int(counts["found"]) + len(found)
                 counts["inserted"] = int(counts["inserted"]) + stats.inserted
                 counts["updated"] = int(counts["updated"]) + stats.updated
@@ -74,6 +72,7 @@ async def collect(
             except CollectorError as exc:
                 run.status = "blocked" if exc.code == "blocked" else "failed"
                 run.error_code = exc.code
+                run.failed = 1  # Fase H: explícito no campo numérico, não só em status
                 errors += 1
                 counts["failed"] = int(counts["failed"]) + 1
             finally:

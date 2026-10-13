@@ -103,7 +103,7 @@ async def run_research_cycle(
                 run.status = "ok"
                 run.found = len(candidates)
                 run.inserted, run.updated = stats.inserted, stats.updated
-                run.failed = stats.skipped
+                run.skipped = stats.skipped  # Fase H: era run.failed = stats.skipped
                 social_found += len(candidates)
                 social_inserted += stats.inserted
                 social_updated += stats.updated
@@ -113,6 +113,7 @@ async def run_research_cycle(
                 # collect(), que captura por coletor); visível no envelope
                 run.status = "failed"
                 run.error_code = getattr(exc, "code", "internal_error")
+                run.failed = 1  # Fase H: explícito no campo numérico
                 social_platform_errors += 1
                 counts[f"{platform}_failed"] = int(counts.get(f"{platform}_failed", 0)) + 1
             finally:

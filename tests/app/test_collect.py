@@ -123,15 +123,15 @@ async def test_limiter_blocked_marks_run_blocked_without_discover() -> None:
     assert limiter.acquired == ["youtube"]
     run = out.runs[0]
     assert run.status == "blocked" and run.error_code == "blocked"
+    assert run.failed == 1  # Fase H: explícito no campo numérico, não só em status
+    assert run.skipped == 0
     assert run.finished_at is not None
 
 
-async def test_skipped_candidates_visible_in_run_failed_and_counts() -> None:
+async def test_skipped_candidates_visible_in_run_skipped_and_counts() -> None:
     """Candidato descartado pelo savepoint (REVISÃO §6 #1) aparece no audit.
 
-    O repositório reverte só o candidato doente; o use-case precisa
-    refletir `UpsertStats.skipped` em `CollectRun.failed` e em
-    `counts["skipped"]` — senão o playtest viraria `ok` silencioso.
+    Fase H: separado de falha de plataforma — CollectRun.skipped != .failed.
     `counts["failed"]` fica só para falha de plataforma (mensagem da CLI).
     """
     repos = FakeRepos(skipped=2)
@@ -147,7 +147,8 @@ async def test_skipped_candidates_visible_in_run_failed_and_counts() -> None:
     assert out.ok is True  # plataforma respondeu; só candidatos caíram
     assert out.counts["skipped"] == 2
     assert out.counts["failed"] == 0
-    assert out.runs[0].failed == 2
+    assert out.runs[0].skipped == 2  # era out.runs[0].failed == 2
+    assert out.runs[0].failed == 0  # Fase H: failed não carrega mais skip
     assert out.runs[0].status == "ok"
 
 
