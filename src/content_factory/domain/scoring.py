@@ -11,6 +11,35 @@ WEIGHTS = {
 }
 FORMULA_VERSION = "fase-h"  # bump quando WEIGHTS ou a fórmula de um componente mudar
 
+# MVP — calibrar com dados reais (roadmap Fase G/H): escala 0-100 sem
+# calibração empírica ainda, igual ao performance (views/1M*100).
+VELOCITY_VIEWS_PER_HOUR_CAP = 1000.0
+
+
+def momentum_score(
+    metrics: VideoMetrics,
+    previous_metrics: VideoMetrics | None,
+    captured_at: datetime | None,
+    previous_captured_at: datetime | None,
+) -> float | None:
+    """Crescimento de `views` entre as duas capturas mais recentes, em views/hora.
+
+    `None` quando não há par de capturas comparável: vídeo só tem uma
+    captura, alguma delas não reportou `views`, ou o intervalo entre
+    capturas não é positivo (relógio incoerente/mesma captura).
+    """
+    if previous_metrics is None or captured_at is None or previous_captured_at is None:
+        return None
+    if metrics.views is None or previous_metrics.views is None:
+        return None
+    delta_hours = (captured_at - previous_captured_at).total_seconds() / 3600
+    if delta_hours <= 0:
+        return None
+    delta_views = metrics.views - previous_metrics.views
+    if delta_views <= 0:
+        return 0.0
+    return min(delta_views / delta_hours / VELOCITY_VIEWS_PER_HOUR_CAP * 100, 100.0)
+
 
 def engagement_rate(m: VideoMetrics) -> float | None:
     """Taxa de engajamento ponderada. `None` se views OU toda submétrica ausente.
@@ -45,7 +74,13 @@ def trend_decay(published_at: datetime | None, now: datetime) -> str:
 
 
 def viral_score(
-    m: VideoMetrics, relevance: float, now: datetime, published_at: datetime | None
+    m: VideoMetrics,
+    relevance: float,
+    now: datetime,
+    published_at: datetime | None,
+    captured_at: datetime | None = None,
+    previous_metrics: VideoMetrics | None = None,
+    previous_captured_at: datetime | None = None,
 ) -> ScoreResult:
     # Fase G: métrica None = ausente → excluída da média (renormaliza pesos),
     # métrica 0 = reportada como zero → conta como zero de verdade.
@@ -59,11 +94,11 @@ def viral_score(
     eng = engagement_rate(m)
     components["engagement"] = min(eng * 10, 100.0) if eng is not None else None
 
+    # Fase H: velocity mede crescimento real entre snapshots — sem par
+    # comparável é None (excluído da média), nunca idade inventada.
+    components["velocity"] = momentum_score(m, previous_metrics, captured_at, previous_captured_at)
+
     decay = trend_decay(published_at, now)
-    age_days = (now - published_at).days if published_at else 999
-    components["velocity"] = (
-        100.0 if age_days <= 1 else 80.0 if age_days <= 3 else 50.0 if age_days <= 7 else 20.0
-    )
     components["recency"] = {"none": 50.0, "low": 100.0, "medium": 50.0, "high": 15.0}[decay]
     components["relevance"] = min(max(relevance, 0.0), 1.0) * 100
 
@@ -95,7 +130,7 @@ def viral_score(
     return ScoreResult(
         total=total,
         performance=components["performance"],
-        velocity=components["velocity"] or 0.0,
+        velocity=components["velocity"],  # já pode ser None — não força 0.0
         engagement=components["engagement"],
         relevance=components["relevance"] or 0.0,
         recency=components["recency"] or 0.0,

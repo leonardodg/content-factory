@@ -2,7 +2,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from content_factory.domain.models import ScoreResult, VideoMetrics
-from content_factory.domain.scoring import engagement_rate, viral_score
+from content_factory.domain.scoring import engagement_rate, momentum_score, viral_score
 
 NOW = datetime(2026, 10, 7, 12, 0, tzinfo=UTC)
 
@@ -128,3 +128,72 @@ def test_viral_score_metrics_available_empty_when_all_none() -> None:
     m = VideoMetrics(views=None, likes=None, comments=None, shares=None, saves=None)
     r = viral_score(m, relevance=0.5, now=NOW, published_at=NOW - timedelta(hours=6))
     assert r.metrics_available == []
+
+
+# --- H Task 3: velocity mede crescimento real entre snapshots ---
+
+
+def test_momentum_score_none_without_previous_snapshot() -> None:
+    """Sem captura anterior não há par comparável → velocity None."""
+    assert momentum_score(metrics(views=1000), None, NOW, None) is None
+
+
+def test_momentum_score_none_when_views_missing_in_either_snapshot() -> None:
+    """views ausente em qualquer um dos snapshots → None (ausência ≠ zero)."""
+    prev = VideoMetrics(views=None)
+    assert momentum_score(metrics(views=1000), prev, NOW, NOW - timedelta(hours=1)) is None
+
+
+def test_momentum_score_none_when_interval_not_positive() -> None:
+    """Intervalo zero/negativo entre capturas (relógio incoerente) → None."""
+    prev = VideoMetrics(views=1000)
+    assert momentum_score(metrics(views=2000), prev, NOW, NOW) is None
+
+
+def test_momentum_score_computes_views_per_hour_rate() -> None:
+    """1000 views em 1h = 1000 views/h = cap → 100.0."""
+    prev = VideoMetrics(views=1000)
+    cur = VideoMetrics(views=2000)
+    assert momentum_score(cur, prev, NOW, NOW - timedelta(hours=1)) == 100.0
+
+
+def test_momentum_score_below_cap_scales_linearly() -> None:
+    """100 views em 2h = 50 views/h = 5% do cap (1000) → 5.0."""
+    prev = VideoMetrics(views=1000)
+    cur = VideoMetrics(views=1100)
+    assert momentum_score(cur, prev, NOW, NOW - timedelta(hours=2)) == 5.0
+
+
+def test_momentum_score_negative_delta_clamped_to_zero() -> None:
+    """views 'caiu' (correção de contagem da plataforma) → 0.0, não negativo."""
+    prev = VideoMetrics(views=5000)
+    cur = VideoMetrics(views=4000)
+    assert momentum_score(cur, prev, NOW, NOW - timedelta(hours=1)) == 0.0
+
+
+def test_viral_score_velocity_none_without_snapshot_history() -> None:
+    """Sem previous_metrics/captured_at → velocity None (não inventa idade)."""
+    r = viral_score(metrics(), 0.9, NOW, NOW - timedelta(hours=6))
+    assert r.velocity is None
+
+
+def test_viral_score_velocity_from_real_momentum() -> None:
+    """Velocity vem do diff de views entre snapshots, não da idade."""
+    prev = VideoMetrics(views=1000)
+    cur = metrics(views=2000)
+    r = viral_score(
+        cur,
+        0.9,
+        NOW,
+        NOW - timedelta(hours=6),
+        captured_at=NOW,
+        previous_metrics=prev,
+        previous_captured_at=NOW - timedelta(hours=1),
+    )
+    assert r.velocity == 100.0
+
+
+def test_viral_score_missing_published_at_does_not_invent_velocity() -> None:
+    """published_at=None não força mais velocity=20 (age_days=999 fake)."""
+    r = viral_score(metrics(), 0.9, NOW, None)
+    assert r.velocity is None

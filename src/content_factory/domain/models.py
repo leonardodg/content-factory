@@ -60,14 +60,17 @@ class VideoSnapshot(BaseModel):
     description: str = ""
     published_at: datetime | None = None
     metrics: VideoMetrics
+    captured_at: datetime | None = None  # quando `metrics` foi capturada
+    previous_metrics: VideoMetrics | None = None  # captura anterior, se existir
+    previous_captured_at: datetime | None = None
 
 
 class ScoreResult(BaseModel):
-    """Resultado do scoring — `None` em performance/engagement = métrica ausente."""
+    """Resultado do scoring — `None` em performance/velocity/engagement = ausente."""
 
     total: float
     performance: float | None = None
-    velocity: float
+    velocity: float | None = None  # Fase H: None = sem snapshot comparável
     engagement: float | None = None
     relevance: float
     recency: float
