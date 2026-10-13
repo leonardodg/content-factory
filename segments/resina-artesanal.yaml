@@ -1,0 +1,29 @@
+slug: resina-artesanal
+name: Artesanato em resina
+languages: [pt-BR, en]
+platforms: [youtube, tiktok, instagram, web]
+content_types: [tutorial, passo_a_passo, dicas, erros_e_solucoes,
+                comparativo_de_materiais, tendencias_de_produtos]
+keywords:
+  # pt-BR (principal)
+  - artesanato em resina
+  - resina epóxi
+  - resina para artesanato
+  - bandeja de resina
+  - moldes para resina
+  - chaveiro de resina
+  - pigmento para resina
+  - flores encapsuladas em resina
+  - como trabalhar com resina
+  - peças decorativas em resina
+  # en (grupo rastreável — ver subnichos.idioma_en)
+  - resin art
+  - epoxy resin crafts
+  - resin molds
+  - resin tray
+  - resin keychains
+  - resin art for beginners
+subnichos:
+  idioma_en: [resin art, epoxy resin crafts, resin molds, resin tray,
+              resin keychains, resin art for beginners]
+audience: [artesanato, decoração, presentes, empreendedorismo, DIY]

@@ -1,0 +1,53 @@
+# Override pro experimento de 7 dias com 3 segmentos em paralelo.
+#
+# O worker base (`docker-compose.yml`) roda 1 único segmento por processo
+# (env COLLECT_SEGMENT) e usa a fila default do arq. Rodar 3 instâncias do
+# MESMO service sem separar a fila faria elas competirem no mesmo Redis —
+# o cron com unique=True dispararia research_job só 1x no total, não 1x
+# por segmento. Aqui cada worker ganha seu próprio índice de banco Redis
+# (/1, /2, /3 — /0 fica livre pro uso normal do CLI/dev), o que isola fila
+# E dedupe de cron por completo, sem precisar mudar código.
+#
+# Uso:
+#   docker compose -f .devcontainer/docker-compose.yml \
+#     -f .devcontainer/docker-compose.experimento-7dias.yml \
+#     --profile experimento up -d worker-velas worker-sabonetes worker-resina
+#
+# Credenciais de plataforma (YOUTUBE_API_KEY etc.) continuam vindo do
+# env_file compartilhado — são por-plataforma, não por-segmento.
+services:
+  worker-velas:
+    extends:
+      file: docker-compose.yml
+      service: worker
+    container_name: cf-worker-velas-artesanais
+    environment:
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-contentfactory}:${POSTGRES_PASSWORD:-localdev}@postgres:5432/${POSTGRES_DB:-contentfactory}
+      REDIS_URL: redis://redis:6379/1
+      COLLECT_SEGMENT: velas-artesanais
+      COLLECT_PLATFORMS: ""  # vazio = usa segment.platforms (inclui tiktok)
+    profiles: ["experimento"]
+
+  worker-sabonetes:
+    extends:
+      file: docker-compose.yml
+      service: worker
+    container_name: cf-worker-sabonetes-artesanais
+    environment:
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-contentfactory}:${POSTGRES_PASSWORD:-localdev}@postgres:5432/${POSTGRES_DB:-contentfactory}
+      REDIS_URL: redis://redis:6379/2
+      COLLECT_SEGMENT: sabonetes-artesanais
+      COLLECT_PLATFORMS: ""
+    profiles: ["experimento"]
+
+  worker-resina:
+    extends:
+      file: docker-compose.yml
+      service: worker
+    container_name: cf-worker-resina-artesanal
+    environment:
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-contentfactory}:${POSTGRES_PASSWORD:-localdev}@postgres:5432/${POSTGRES_DB:-contentfactory}
+      REDIS_URL: redis://redis:6379/3
+      COLLECT_SEGMENT: resina-artesanal
+      COLLECT_PLATFORMS: ""
+    profiles: ["experimento"]

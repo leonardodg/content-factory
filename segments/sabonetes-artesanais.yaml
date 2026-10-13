@@ -1,0 +1,30 @@
+slug: sabonetes-artesanais
+name: Sabonetes artesanais
+languages: [pt-BR, en]
+platforms: [youtube, tiktok, instagram, web]
+content_types: [tutorial, passo_a_passo, dicas, erros_e_solucoes,
+                comparativo_de_materiais, tendencias_de_produtos]
+keywords:
+  # pt-BR (principal)
+  - sabonete artesanal
+  - sabonetes artesanais
+  - saboaria artesanal
+  - sabonete glicerinado
+  - base glicerinada
+  - processo a frio sabonete
+  - como fazer sabonete artesanal
+  - essência para sabonete
+  - corante para sabonete
+  - materiais para saboaria
+  # en (grupo rastreável — ver subnichos.idioma_en)
+  - handmade soap
+  - soap making
+  - cold process soap
+  - melt and pour soap
+  - soap making for beginners
+  - homemade soap ideas
+subnichos:
+  idioma_en: [handmade soap, soap making, cold process soap,
+              melt and pour soap, soap making for beginners,
+              homemade soap ideas]
+audience: [artesanato, saboaria, cosmética natural, empreendedorismo, DIY]

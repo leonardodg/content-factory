@@ -1,0 +1,32 @@
+slug: velas-artesanais
+name: Velas artesanais
+languages: [pt-BR, en]
+platforms: [youtube, tiktok, instagram, web]
+content_types: [tutorial, passo_a_passo, dicas, erros_e_solucoes,
+                comparativo_de_materiais, tendencias_de_produtos]
+keywords:
+  # pt-BR (principal)
+  - vela artesanal
+  - velas artesanais
+  - fabricação de velas aromáticas
+  - vela aromática
+  - cera de soja
+  - tipos de cera para velas
+  - pavio para vela
+  - essência para velas
+  - como fazer velas
+  - materiais para fazer velas
+  # en (grupo rastreável — ver subnichos.idioma_en)
+  - candle making
+  - handmade candles
+  - scented candles
+  - soy wax candles
+  - candle wick
+  - candle making for beginners
+subnichos:
+  # metadado puro (não consumido pelo pipeline) — marca quais keywords
+  # acima são do grupo en, pra separar na análise pós-semana sem misturar
+  # com pt-BR silenciosamente
+  idioma_en: [candle making, handmade candles, scented candles,
+              soy wax candles, candle wick, candle making for beginners]
+audience: [artesanato, decoração, presentes, empreendedorismo, DIY]

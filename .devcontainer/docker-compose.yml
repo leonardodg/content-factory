@@ -24,10 +24,11 @@ services:
     command: sleep infinity
 
   worker:
+    restart: unless-stopped
     build:
       context: ..
       dockerfile: .devcontainer/Dockerfile
-      target: worker 
+      target: worker
     env_file: [./env/app.env]
     secrets: [app_secrets]
     environment:
@@ -40,6 +41,7 @@ services:
 
   postgres:
     image: pgvector/pgvector:pg16
+    restart: unless-stopped
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-contentfactory}
       POSTGRES_DB: ${POSTGRES_DB:-contentfactory}
@@ -50,6 +52,7 @@ services:
 
   redis:
     image: redis:7-alpine
+    restart: unless-stopped
     networks: [content-factory-net]
 
 volumes: { pgdata: {} }
