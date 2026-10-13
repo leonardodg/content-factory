@@ -1,5 +1,4 @@
-from datetime import UTC, datetime
-from typing import Any, ClassVar
+from typing import Any, ClassVar, cast
 
 import pytest
 
@@ -276,21 +275,6 @@ async def test_shutdown_closes_app_deps_when_present() -> None:
     assert closed == ["close"]
 
 
-class _FakeCampaigns:
-    def __init__(self, campaign: ResearchCampaign | None) -> None:
-        self._campaign = campaign
-        self.stopped: list[int] = []
-
-    async def active_for_segment(self, segment_id: int) -> ResearchCampaign | None:
-        return self._campaign
-
-    async def start(self, segment_id: int, ends_at: object) -> ResearchCampaign:
-        raise NotImplementedError
-
-    async def stop(self, segment_id: int) -> None:
-        self.stopped.append(segment_id)
-
-
 class _NoopWeb:
     platform: str = "web_suggest"
 
@@ -336,35 +320,70 @@ def _research_deps() -> ResearchDeps:
     )
 
 
-async def test_run_research_job_skips_without_active_campaign(
+async def test_run_research_job_noop_when_no_active_segment(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Sem campanha ativa → ok=True + skipped, sem chamar o ciclo."""
+    """0 segmentos com campanha ativa → noop ok=True, sem chamar o ciclo.
+
+    A chave antiga `skipped` saiu do envelope — a lista vazia de
+    `active_segments()` já é o "sem campanha ativa".
+    """
     calls: list[str] = []
 
     async def fake_research(slug: str, cfg: object, deps: object) -> object:
         calls.append(slug)
-        raise SystemExit
+        raise AssertionError("ciclo nao devia rodar")
 
     monkeypatch.setattr(w, "_research_impl", fake_research)
-    monkeypatch.setattr(w, "_load_settings", lambda: {"segment": "candles"})
-    deps = _research_deps()
-    campaigns = _FakeCampaigns(campaign=None)
+    campaigns = _FakeCampaignsMultiSegment(slugs=[])
     out = await w.run_research_job(
-        {"research_deps": deps, "campaigns_deps": campaigns, "app_deps": None}
+        {"research_deps": _research_deps(), "campaigns_deps": campaigns, "app_deps": _NoopAppDeps()}
     )
-    assert out == {"ok": True, "skipped": "sem campanha ativa"}
-    assert calls == []  # ciclo NAO rodou
+    assert out == {"ok": True, "segments": {}}
+    assert calls == []
 
 
-async def test_run_research_job_runs_cycle_with_active_campaign(
+async def test_run_research_job_processes_all_active_segments(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Campanha ativa → ciclo roda, devolve counts e commita."""
+    """2 campanhas ativas num tick → 1 ciclo cada, guard trocado, 1 commit cada."""
+
+    class _Campaigns:
+        async def active_segments(self) -> list[Segment]:
+            return [
+                Segment(
+                    id=1,
+                    slug="velas",
+                    name="Velas",
+                    platforms=["youtube"],
+                    keywords=["k"],
+                    research=DepthConfig(max_depth=5),
+                ),
+                Segment(
+                    id=2,
+                    slug="sabonetes",
+                    name="Sabonetes",
+                    platforms=["youtube"],
+                    keywords=["k"],
+                ),
+            ]
+
+        async def active_for_segment(self, segment_id: int) -> ResearchCampaign | None:
+            return None
+
+        async def start(self, segment_id: int, ends_at: object) -> ResearchCampaign:
+            raise NotImplementedError
+
+        async def stop(self, segment_id: int) -> None:
+            pass
+
     calls: list[str] = []
+    guard_allows_depth4: list[bool] = []
 
     async def fake_research(slug: str, cfg: object, deps: object) -> object:
+        research = cast("ResearchDeps", deps)
         calls.append(slug)
+        guard_allows_depth4.append(research.guard.admit(slug, depth=4))
 
         class _Out:
             ok = True
@@ -374,11 +393,6 @@ async def test_run_research_job_runs_cycle_with_active_campaign(
         return _Out()
 
     monkeypatch.setattr(w, "_research_impl", fake_research)
-    monkeypatch.setattr(w, "_load_settings", lambda: {"segment": "candles"})
-    deps = _research_deps()
-    now = datetime.now(UTC)
-    campaign = ResearchCampaign(id=1, segment_id=1, started_at=now, ends_at=now)
-    campaigns = _FakeCampaigns(campaign=campaign)
     committed: list[str] = []
 
     class _AppDeps:
@@ -386,11 +400,24 @@ async def test_run_research_job_runs_cycle_with_active_campaign(
             committed.append("commit")
 
     out = await w.run_research_job(
-        {"research_deps": deps, "campaigns_deps": campaigns, "app_deps": _AppDeps()}
+        {
+            "research_deps": _research_deps(),
+            "campaigns_deps": _Campaigns(),
+            "app_deps": _AppDeps(),
+        }
     )
-    assert calls == ["candles"]
-    assert out == {"ok": True, "partial": False, "web_found": 3}
-    assert committed == ["commit"]
+    assert calls == ["velas", "sabonetes"]
+    # guard novo por segmento: max_depth=5 do segmento permite depth=4;
+    # segmento sem research cai no DepthConfig default (max_depth=2)
+    assert guard_allows_depth4 == [True, False]
+    assert out == {
+        "ok": True,
+        "segments": {
+            "velas": {"ok": True, "partial": False, "web_found": 3},
+            "sabonetes": {"ok": True, "partial": False, "web_found": 3},
+        },
+    }
+    assert committed == ["commit", "commit"]
 
 
 def test_workersettings_registers_research_job_and_cron() -> None:

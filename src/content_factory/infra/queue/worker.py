@@ -12,7 +12,7 @@ existem para o teste trocar por fakes sem tocar no arq/banco (fronteira = mock).
 import os
 from collections.abc import Awaitable, Callable
 from contextlib import AsyncExitStack
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import tzinfo
 from typing import Any, ClassVar
 from zoneinfo import ZoneInfo
@@ -112,21 +112,27 @@ async def run_score_job(ctx: dict[str, Any]) -> dict[str, Any]:
 
 
 async def run_research_job(ctx: dict[str, Any]) -> dict[str, Any]:
-    """Ciclo diário do pipeline de pesquisa — só roda com campanha ativa.
+    """Ciclo diário do pipeline de pesquisa — para TODOS os segmentos ativos.
 
     O arq tem cron recorrente sem fim; a campanha (`research_campaigns`)
-    expressa "rodar por N semanas" — sem campanha ativa, skip silencioso.
+    expressa "rodar por N semanas" — sem campanha ativa, `active_segments()`
+    devolve lista vazia e o loop não roda nenhuma vez. A chave antiga
+    `"skipped"` saiu do envelope: vazio é `segments: {}`.
     """
-    cfg = _load_settings()
-    deps: ResearchDeps = ctx["research_deps"]
-    campaigns = ctx["campaigns_deps"]
-    segment = await deps.segments.get_by_slug(cfg["segment"])
-    campaign = await campaigns.active_for_segment(segment.id)
-    if campaign is None:
-        return {"ok": True, "skipped": "sem campanha ativa"}
-    out = await _research_impl(cfg["segment"], DepthConfig(), deps)
-    await ctx["app_deps"].commit()
-    return {"ok": out.ok, "partial": out.partial, **out.counts}
+    base: ResearchDeps = ctx["research_deps"]  # guard aqui é só placeholder — ver Task 5
+    campaigns: ResearchCampaignRepository = ctx["campaigns_deps"]
+    app_deps: AppDeps = ctx["app_deps"]
+    active = await campaigns.active_segments()
+    results: dict[str, Any] = {}
+    for segment in active:
+        deps = replace(base, guard=FanoutGuard(segment.research or DepthConfig()))
+        out = await _research_impl(segment.slug, DepthConfig(), deps)
+        await app_deps.commit()
+        results[segment.slug] = {"ok": out.ok, "partial": out.partial, **out.counts}
+    return {
+        "ok": all(r["ok"] for r in results.values()) if results else True,
+        "segments": results,
+    }
 
 
 @dataclass
