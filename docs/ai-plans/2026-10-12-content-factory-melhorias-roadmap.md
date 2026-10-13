@@ -132,6 +132,19 @@ registro de cobertura por plataforma) NÃO foi implementado aqui. Ele
 depende de momentum calculável (agora pronto) e foi adiado para uma
 futura fase — renumerar quando for planejado._
 
+### Operacional — worker multi-segmento dinâmico ✅ (2026-10-12)
+
+Não era fase do roadmap original, mas era o bloqueio real da operação:
+o worker lia `COLLECT_SEGMENT` fixo, então o experimento de 7 dias
+exigia **3 workers simultâneos** (1 por segmento, 3 índices Redis). Os 3
+jobs agora iteram `ResearchCampaignRepository.active_segments()` — um
+único worker cobre todos os segmentos com campanha ativa; adicionar
+segmento vira `cf segment load` + `cf research start`, sem tocar em
+compose/env/restart. Plano:
+`docs/ai-plans/2026-10-12-content-factory-worker-multi-segmento-dinamico.md`.
+**Adiado ao fim do experimento**: trocar o compose por 1 worker único e
+o teste de aceitação (4º segmento sem restart).
+
 ### Fase I — Contrato com `insta_kb` (P1, decisão arquitetural) — ⏳ PRÓXIMO PASSO SUGERIDO, NÃO INICIADA
 
 Não é uma tarefa de código isolada — precisa de uma sessão de
