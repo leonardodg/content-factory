@@ -87,16 +87,17 @@ def viral_score(
     components: dict[str, float | None] = {}
 
     if m.views is not None:
-        components["performance"] = min(m.views / 1_000_000 * 100, 100.0)
+        components["performance"] = round(min(m.views / 1_000_000 * 100, 100.0), 2)
     else:
         components["performance"] = None
 
     eng = engagement_rate(m)
-    components["engagement"] = min(eng * 10, 100.0) if eng is not None else None
+    components["engagement"] = round(min(eng * 10, 100.0), 2) if eng is not None else None
 
     # Fase H: velocity mede crescimento real entre snapshots — sem par
     # comparável é None (excluído da média), nunca idade inventada.
-    components["velocity"] = momentum_score(m, previous_metrics, captured_at, previous_captured_at)
+    momentum = momentum_score(m, previous_metrics, captured_at, previous_captured_at)
+    components["velocity"] = round(momentum, 2) if momentum is not None else None
 
     decay = trend_decay(published_at, now)
     components["recency"] = {"none": 50.0, "low": 100.0, "medium": 50.0, "high": 15.0}[decay]
