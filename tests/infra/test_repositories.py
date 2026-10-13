@@ -847,3 +847,37 @@ async def test_collect_run_record_persists_skipped_separate_from_failed() -> Non
         assert row.skipped == 2
         assert row.failed == 0
     await engine.dispose()
+
+
+@requires_infra
+async def test_active_segments_returns_only_segments_with_active_campaign() -> None:
+    """active_segments() devolve só quem tem campanha ativa e não vencida."""
+    engine = create_async_engine(os.environ["TEST_DATABASE_URL"])
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    async with factory() as s:
+        await s.rollback()
+        with_campaign = await SegmentRepositoryImpl(s).upsert(
+            SegmentConfig(
+                slug=f"teste-ativo-{uuid4().hex[:8]}",
+                name="Com campanha",
+                platforms=["youtube"],
+                keywords=["k"],
+            )
+        )
+        without_campaign = await SegmentRepositoryImpl(s).upsert(
+            SegmentConfig(
+                slug=f"teste-sem-{uuid4().hex[:8]}",
+                name="Sem campanha",
+                platforms=["youtube"],
+                keywords=["k"],
+            )
+        )
+        repo = ResearchCampaignRepositoryImpl(s)
+        await repo.start(with_campaign.id, datetime.now(UTC) + timedelta(weeks=1))
+        await s.commit()
+
+        active = await repo.active_segments()
+        active_ids = {seg.id for seg in active}
+        assert with_campaign.id in active_ids
+        assert without_campaign.id not in active_ids
+    await engine.dispose()

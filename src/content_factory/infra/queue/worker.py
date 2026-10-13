@@ -12,7 +12,7 @@ existem para o teste trocar por fakes sem tocar no arq/banco (fronteira = mock).
 import os
 from collections.abc import Awaitable, Callable
 from contextlib import AsyncExitStack
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import tzinfo
 from typing import Any, ClassVar
 from zoneinfo import ZoneInfo
@@ -23,11 +23,12 @@ from arq.typing import StartupShutdown
 from arq.worker import Function, func
 
 from content_factory.app.collect import CollectDeps, collect
+from content_factory.app.ports import ResearchCampaignRepository
 from content_factory.app.research_pipeline import ResearchDeps, run_research_cycle
 from content_factory.app.score import ScoreDeps, score
 from content_factory.config import Settings, get_settings
 from content_factory.domain.fanout_guard import FanoutGuard
-from content_factory.domain.models import DepthConfig
+from content_factory.domain.models import DepthConfig, Segment
 
 
 def parse_cron_hours(raw: str) -> set[int]:
@@ -40,10 +41,14 @@ def parse_cron_hours(raw: str) -> set[int]:
 
 
 def _load_settings() -> dict[str, Any]:
-    """Config do job de coleta — env `COLLECT_*` (segmento default: candles)."""
+    """Config do job de coleta — env `COLLECT_*` (sem mais `COLLECT_SEGMENT`).
+
+    Qual segmento processar sai de `active_segments()` por job — a env
+    antiga virou inerte e pode sair do compose junto do fim do
+    experimento de 3 workers.
+    """
     platforms = [p.strip() for p in os.getenv("COLLECT_PLATFORMS", "").split(",") if p.strip()]
     return {
-        "segment": os.getenv("COLLECT_SEGMENT", "candles"),
         "platforms": platforms,
         "limit": int(os.getenv("COLLECT_LIMIT", "10")),
     }
@@ -56,38 +61,82 @@ _research_impl: Callable[..., Awaitable[Any]] = run_research_cycle
 
 
 async def run_collect_job(ctx: dict[str, Any]) -> dict[str, Any]:
+    """Coleta de todos os segmentos com campanha ativa — 1 commit por segmento.
+
+    `COLLECT_SEGMENT` não é mais lido: a lista vem de
+    `ResearchCampaignRepository.active_segments()`. 1 segmento com erro
+    não reverte os outros (commit por iteração, mesmo princípio do
+    savepoint por candidato em `upsert_candidates`).
+    """
     cfg = _load_settings()
-    deps: CollectDeps = ctx["collect_deps"]  # buildado no startup do worker
-    platforms: list[str] = cfg["platforms"]
-    if not platforms:  # default: plataformas declaradas do segmento (fallback da CLI)
-        platforms = (await deps.segments.get_by_slug(cfg["segment"])).platforms
-    out = await _collect_impl(cfg["segment"], platforms, cfg["limit"], deps)
-    await ctx["app_deps"].commit()  # commit só no sucesso; falha ⇒ rollback no job_end
-    return {"ok": out.ok, "partial": out.partial, **out.counts}
+    deps: CollectDeps = ctx["collect_deps"]
+    campaigns: ResearchCampaignRepository = ctx["campaigns_deps"]
+    app_deps: AppDeps = ctx["app_deps"]
+    active = await campaigns.active_segments()
+    results: dict[str, Any] = {}
+    for segment in active:
+        platforms: list[str] = cfg["platforms"] or segment.platforms
+        out = await _collect_impl(segment.slug, platforms, cfg["limit"], deps)
+        await app_deps.commit()
+        results[segment.slug] = {"ok": out.ok, "partial": out.partial, **out.counts}
+    return {
+        "ok": all(r["ok"] for r in results.values()) if results else True,
+        "segments": results,
+    }
 
 
 async def run_score_job(ctx: dict[str, Any]) -> dict[str, Any]:
-    out = await _score_impl(ctx["score_deps"])
-    await ctx["app_deps"].commit()
-    return {"ok": out.ok, "scored": out.scored}
+    """Pontua todos os segmentos com campanha ativa — 1 commit por segmento.
+
+    `ScoreDeps` é barato de construir (sem I/O): monta 1 por segmento no
+    loop reaproveitando os MESMOS `videos`/`scores` (repositórios ligados
+    à sessão, não ao segmento). O `segment`/`keywords` do startup são
+    placeholder e nunca chegam aqui.
+    """
+    base: ScoreDeps = ctx["score_deps"]
+    campaigns: ResearchCampaignRepository = ctx["campaigns_deps"]
+    app_deps: AppDeps = ctx["app_deps"]
+    active = await campaigns.active_segments()
+    results: dict[str, Any] = {}
+    for segment in active:
+        deps = ScoreDeps(
+            videos=base.videos,
+            scores=base.scores,
+            segment=segment,
+            keywords=segment.keywords,
+            clock=base.clock,
+        )
+        out = await _score_impl(deps)
+        await app_deps.commit()
+        results[segment.slug] = {"ok": out.ok, "scored": out.scored}
+    return {
+        "ok": all(r["ok"] for r in results.values()) if results else True,
+        "segments": results,
+    }
 
 
 async def run_research_job(ctx: dict[str, Any]) -> dict[str, Any]:
-    """Ciclo diário do pipeline de pesquisa — só roda com campanha ativa.
+    """Ciclo diário do pipeline de pesquisa — para TODOS os segmentos ativos.
 
     O arq tem cron recorrente sem fim; a campanha (`research_campaigns`)
-    expressa "rodar por N semanas" — sem campanha ativa, skip silencioso.
+    expressa "rodar por N semanas" — sem campanha ativa, `active_segments()`
+    devolve lista vazia e o loop não roda nenhuma vez. A chave antiga
+    `"skipped"` saiu do envelope: vazio é `segments: {}`.
     """
-    cfg = _load_settings()
-    deps: ResearchDeps = ctx["research_deps"]
-    campaigns = ctx["campaigns_deps"]
-    segment = await deps.segments.get_by_slug(cfg["segment"])
-    campaign = await campaigns.active_for_segment(segment.id)
-    if campaign is None:
-        return {"ok": True, "skipped": "sem campanha ativa"}
-    out = await _research_impl(cfg["segment"], DepthConfig(), deps)
-    await ctx["app_deps"].commit()
-    return {"ok": out.ok, "partial": out.partial, **out.counts}
+    base: ResearchDeps = ctx["research_deps"]  # guard aqui é só placeholder — ver Task 5
+    campaigns: ResearchCampaignRepository = ctx["campaigns_deps"]
+    app_deps: AppDeps = ctx["app_deps"]
+    active = await campaigns.active_segments()
+    results: dict[str, Any] = {}
+    for segment in active:
+        deps = replace(base, guard=FanoutGuard(segment.research or DepthConfig()))
+        out = await _research_impl(segment.slug, DepthConfig(), deps)
+        await app_deps.commit()
+        results[segment.slug] = {"ok": out.ok, "partial": out.partial, **out.counts}
+    return {
+        "ok": all(r["ok"] for r in results.values()) if results else True,
+        "segments": results,
+    }
 
 
 @dataclass
@@ -106,8 +155,12 @@ class AppDeps:
 async def create_app_deps(settings: Settings) -> AppDeps:
     """Fábrica do worker: `register_defaults` + repositórios + lock/rate-limit.
 
-    Segmento precisa existir no banco (`cf segment load`) — senão o startup
-    falha rápido. Testes nunca passam por aqui (monkeypatch nos hooks).
+    Fase multi-segmento: NÃO resolve mais 1 segmento fixo aqui — cada job
+    resolve os segmentos ativos por conta própria
+    (`ResearchCampaignRepository.active_segments`) e reconstrói
+    `ScoreDeps.segment`/`.keywords`/`ResearchDeps.guard` por segmento.
+    Os placeholders abaixo são nunca lidos fora do loop dos jobs.
+    Startup não depende mais de `cf segment load` prévio.
 
     Decisão de composição (Fase D→B): `web` = WebSuggestProvider real
     (Google Suggest, ADR-0005); `trends` = TrendsGoogleProvider real;
@@ -138,7 +191,6 @@ async def create_app_deps(settings: Settings) -> AppDeps:
         client = await stack.enter_async_context(redis_client(settings.redis_url))
         session = await stack.enter_async_context(get_session_factory(settings)())
         register_defaults(settings)
-        segment = await SegmentRepositoryImpl(session).get_by_slug(_load_settings()["segment"])
         # socials: só collectors que implementam discover_by_keywords (Fase C+)
         socials: dict[str, SocialDiscoverer] = {}
         for name in registry.snapshot():
@@ -158,8 +210,9 @@ async def create_app_deps(settings: Settings) -> AppDeps:
             score=ScoreDeps(
                 videos=VideoRepositoryImpl(session),
                 scores=ScoreRepositoryImpl(session),
-                segment=segment,
-                keywords=segment.keywords,
+                # placeholder — run_score_job substitui por segmento
+                segment=Segment(id=0, slug="_placeholder", name="_", platforms=[], keywords=[]),
+                keywords=[],
             ),
             research=ResearchDeps(
                 web=WebSuggestProvider(),
@@ -172,7 +225,7 @@ async def create_app_deps(settings: Settings) -> AppDeps:
                 runs=CollectRunRepositoryImpl(session),
                 limiter=RedisRateLimiter(client),
                 lock=RedisLock(client),
-                guard=FanoutGuard(segment.research or DepthConfig()),
+                guard=FanoutGuard(DepthConfig()),  # placeholder — run_research_job substitui
             ),
             campaigns=ResearchCampaignRepositoryImpl(session),
             commit=session.commit,

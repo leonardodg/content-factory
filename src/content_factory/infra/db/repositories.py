@@ -436,6 +436,27 @@ class ResearchCampaignRepositoryImpl(ResearchCampaignRepository):
         row = (await self._s.execute(stmt)).scalar_one_or_none()
         return _campaign_model(row) if row is not None else None
 
+    async def active_segments(self) -> list[Segment]:
+        """Segmentos com campanha ativa e não vencida — fonte única do tick.
+
+        `.distinct()` evita duplicar se um dia existir mais de 1 campanha
+        ativa pro mesmo segmento (start() hoje não previne isso).
+        """
+        stmt = (
+            select(SegmentRow)
+            .join(ResearchCampaignRow, ResearchCampaignRow.segment_id == SegmentRow.id)
+            .where(
+                ResearchCampaignRow.active,
+                ResearchCampaignRow.ends_at > datetime.now(UTC),
+            )
+            .distinct()
+        )
+        rows = (await self._s.execute(stmt)).scalars().all()
+        return [
+            Segment(id=row.id, **SegmentConfig.model_validate(row.config).model_dump())
+            for row in rows
+        ]
+
 
 class TrendObservationRepositoryImpl(TrendObservationRepository):
     """Upsert por (segment_id, keyword, period_start, period_granularity) —

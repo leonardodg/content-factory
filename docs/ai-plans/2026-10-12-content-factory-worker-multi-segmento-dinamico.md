@@ -119,9 +119,9 @@ async def test_active_segments_returns_only_segments_with_active_campaign() -> N
     await engine.dispose()
 ```
 
-- [ ] RED → GREEN
-- [ ] `pytest tests/infra/test_repositories.py -v`
-- [ ] Commit: `feat(research): ResearchCampaignRepository.active_segments para worker multi-segmento`
+- [x] RED → GREEN
+- [x] `pytest tests/infra/test_repositories.py -v`
+- [x] Commit: `feat(research): ResearchCampaignRepository.active_segments para worker multi-segmento`
 
 ## Task 2 — `run_collect_job` processa todos os segmentos ativos
 
@@ -199,8 +199,8 @@ async def test_run_collect_job_noop_when_no_active_segment() -> None:
 (`_FakeCampaignsMultiSegment` e `_NoopAppDeps` são fixtures novas no
 arquivo de teste — ver Task 5.)
 
-- [ ] RED → GREEN
-- [ ] Commit: `feat(worker): run_collect_job processa todos os segmentos com campanha ativa`
+- [x] RED → GREEN
+- [x] Commit: `feat(worker): run_collect_job processa todos os segmentos com campanha ativa`
 
 ## Task 3 — `run_score_job` processa todos os segmentos ativos
 
@@ -232,9 +232,9 @@ async def run_score_job(ctx: dict[str, Any]) -> dict[str, Any]:
     return {"ok": all(r["ok"] for r in results.values()) if results else True, "segments": results}
 ```
 
-- [ ] RED → GREEN (mesmo padrão de teste da Task 2: 2 segmentos ativos,
+- [x] RED → GREEN (mesmo padrão de teste da Task 2: 2 segmentos ativos,
   0 segmentos ativos, 1 commit por segmento)
-- [ ] Commit: `feat(worker): run_score_job processa todos os segmentos com campanha ativa`
+- [x] Commit: `feat(worker): run_score_job processa todos os segmentos com campanha ativa`
 
 ## Task 4 — `run_research_job` processa todos os segmentos ativos
 
@@ -270,11 +270,11 @@ async def run_research_job(ctx: dict[str, Any]) -> dict[str, Any]:
     return {"ok": all(r["ok"] for r in results.values()) if results else True, "segments": results}
 ```
 
-- [ ] RED → GREEN (2 campanhas ativas processadas num tick só; 0 ativas
+- [x] RED → GREEN (2 campanhas ativas processadas num tick só; 0 ativas
   → `{"ok": True, "segments": {}}`, sem mais a chave `"skipped"` antiga —
   atualizar/remover `test_run_research_job_skips_without_active_campaign`
   pro novo formato)
-- [ ] Commit: `feat(worker): run_research_job processa todos os segmentos com campanha ativa`
+- [x] Commit: `feat(worker): run_research_job processa todos os segmentos com campanha ativa`
 
 ## Task 5 — `create_app_deps` para de resolver 1 segmento no startup
 
@@ -362,20 +362,20 @@ Ajustar os testes de `test_worker.py` que hoje fixam `_FakeCampaigns`
 pra `Segment` fake com esse slug, `platforms=["youtube"]`,
 `keywords=["k"]`, `research=None`).
 
-- [ ] RED → GREEN
-- [ ] `pyright` — 0 erros (ponto de atenção do `Segment | None`)
-- [ ] Commit: `refactor(worker): create_app_deps para de amarrar 1 segmento no startup`
+- [x] RED → GREEN
+- [x] `pyright` — 0 erros (ponto de atenção do `Segment | None`)
+- [x] Commit: `refactor(worker): create_app_deps para de amarrar 1 segmento no startup`
 
 ## Task 6 — gates completos + simplificar o compose do experimento
 
-- [ ] `pytest`, `ruff`, `pyright`, `bandit`, `pip-audit`, `mkdocs --strict`
-- [ ] `docs/HANDOFF.md` — registrar a mudança
-- [ ] **Não antes do fim do experimento de 7 dias em andamento**: trocar
+- [x] `pytest`, `ruff`, `pyright`, `bandit`, `pip-audit`, `mkdocs --strict`
+- [x] `docs/HANDOFF.md` — registrar a mudança
+- [ ] **ADIADO — fim do experimento de 7 dias:** trocar
   `.devcontainer/docker-compose.experimento-7dias.yml` (3 workers, 3
   índices de Redis) por 1 único `worker` (profile `worker` já existente)
   — adicionar segmento novo à operação passa a ser só `cf segment load`
   + `cf research start`, sem tocar em compose/env/restart.
-- [ ] Validar na prática: com o worker novo já no ar, rodar `cf segment
+- [ ] **ADIADO — pós-troca do compose:** Validar na prática: com o worker novo já no ar, rodar `cf segment
   load` + `cf research start --weeks 1` pra um 4º segmento SEM reiniciar
   o container, e confirmar que ele aparece no próximo tick de
   `collect_job`/`score_job`/`research_job` — esse é o teste de aceitação

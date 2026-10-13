@@ -5,15 +5,56 @@
 
 ## 🔄 EM ANDAMENTO
 
-_(nenhuma branch de feature aberta — roadmap A→C→D→E→B+web-suggest+F+
-G(parcial)+H COMPLETO. Pipeline com métricas persistidas, scoring que
-distingue ausência de zero, momentum por diff real, auditabilidade de
-score e runs, upserts idempotentes de trends. Próximo passo sugerido:
-sessão de design da Fase I (contrato `insta_kb`) — ver roadmap, ainda
-não iniciada. Validacao empirica do ranking (Ferramenta `cf score-sample`
+_Branch `feat/worker-multi-segmento` (6 commits, 232 passed + pyright 0 +
+todos os gates) pronta para merge FF — worker passa a processar TODOS os
+segmentos com campanha ativa por tick (não mais 1 `COLLECT_SEGMENT` fixo).
+Adiado até o fim do experimento de 7 dias: trocar o compose de 3 workers
+por 1 worker único + teste de aceitação (4º segmento sem restart) — ver
+"O que falta". Depois do merge: próximo passo sugerido é a sessão de
+design da Fase I (contrato `insta_kb`) — ver roadmap, ainda não
+iniciada. Validacao empirica do ranking (Ferramenta `cf score-sample`
 entregue; o veredito sobre os pesos é humano, com dados reais).)_
 
 ## ✅ CONCLUÍDO
+
+### Worker multi-segmento dinâmico (2026-10-12)
+
+Branch `feat/worker-multi-segmento` (6 commits, 232 passed + pyright 0 +
+todos os gates). Plano:
+`docs/ai-plans/2026-10-12-content-factory-worker-multi-segmento-dinamico.md`.
+Hoje o compose do experimento precisa de 3 workers (1 por segmento, cada
+um com `COLLECT_SEGMENT` fixo) — agora UM worker itera
+`ResearchCampaignRepository.active_segments()` nos 3 jobs; adicionar
+segmento à operação vira `cf segment load` + `cf research start` sem
+tocar em compose/env/restart.
+
+- [x] **Task 1** (`b7d94a6`): `ResearchCampaignRepository.active_segments()`
+  — join `research_campaigns`+`segments`, `.distinct()`, só campanha
+  ativa e não vencida; reconstrói `Segment` via `model_validate` do
+  config; CLI `_Repo` ganha o delegado. Commit inclui o plano da fase.
+- [x] **Task 2** (`014444d` + fix `0d3ee31`): `run_collect_job` itera
+  ativos — 1 commit por segmento (falha não reverte os outros);
+  envelope `{ok, segments: {slug: {ok, partial, **counts}}}`;
+  `COLLECT_PLATFORMS` vira override opcional (fallback
+  `segment.platforms`).
+- [x] **Task 3** (`c9f1e41`): `run_score_job` monta `ScoreDeps` por
+  segmento no loop (reaproveita os MESMOS `videos`/`scores` da sessão);
+  `segment`/`keywords` do startup são placeholder e nunca chegam lá.
+- [x] **Task 4** (`27a2cbd`): `run_research_job` itera ativos; chave
+  `"skipped"` sai do envelope (lista vazia = sem campanha); `guard`
+  trocado por segmento via `dataclasses.replace` +
+  `FanoutGuard(segment.research or DepthConfig())`.
+- [x] **Task 5** (`28d8c81`): `create_app_deps` para de resolver
+  `get_by_slug(COLLECT_SEGMENT)` no boot — placeholders `Segment(id=0,
+  slug="_placeholder")` e guard neutro; chave `segment` sai de
+  `_load_settings` (`COLLECT_SEGMENT` ficou inerte). ZERO mudança em
+  `app/score.py`/`app/collect.py`/`app/research_pipeline.py` (decisão:
+  placeholder > `Segment | None` + assert).
+- [x] **Task 6** (docs): 9 gates verdes (pytest 232, ruff, pyright,
+  alembic check, bandit, pip-audit, mkdocs --strict, privacy);
+  HANDOFF/roadmap/plan atualizados. **Adiado pós-experimento**: troca do
+  compose (3 workers → 1) e teste de aceitação real (4º segmento sem
+  restart).
 
 ### Fase H — Integridade operacional + auditabilidade do score (2026-10-12)
 
@@ -309,6 +350,14 @@ guard-rail, tabela e orquestrador; Fases B–E pendem de decisão do usuário.
    `docs/PLANO_TESTE_E2E.md` §Bug 4); (b) `TIKTOK_MS_TOKEN` vazio (por design)
 3. Fase de IA (replication/production + renormalização de pesos) e spec de
    segurança TOCTOU — próximos planos, não desta entrega
+4. **Worker multi-segmento — pós-experimento de 7 dias** (branch
+   `feat/worker-multi-segmento` já entrega o código; falta a operação):
+   (a) trocar `.devcontainer/docker-compose.experimento-7dias.yml` (3
+   workers, 3 índices Redis) por 1 único `worker` (profile `worker`
+   existente) — a env `COLLECT_SEGMENT` já é inerte e sai junto;
+   (b) teste de aceitação: `cf segment load` + `cf research start
+   --weeks 1` pra um 4º segmento SEM reiniciar container e confirmar no
+   próximo tick de `collect_job`/`score_job`/`research_job`
 
 ## Pendências / cuidados
 
