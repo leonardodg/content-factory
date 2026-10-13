@@ -2,7 +2,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 
-from content_factory.app.ports import ScoreRepository, VideoRepository
+from content_factory.app.ports import ScoreRepository, ScoreUpsertRow, VideoRepository
 from content_factory.domain.models import Segment, VideoSnapshot
 from content_factory.domain.scoring import viral_score
 
@@ -47,23 +47,33 @@ def relevance_of(snap: VideoSnapshot, keywords: list[str]) -> float:
 async def score(deps: ScoreDeps) -> ScoreOutcome:
     now = deps.clock()
     snaps = await deps.videos.latest_for_segment(deps.segment.id)
-    scored = 0
-    errors = 0
-    for snap in snaps:
-        rel = relevance_of(snap, deps.keywords)
-        result = viral_score(
-            snap.metrics,
-            rel,
-            now,
-            snap.published_at,
-            captured_at=snap.captured_at,
-            previous_metrics=snap.previous_metrics,
-            previous_captured_at=snap.previous_captured_at,
+    # fase pura: todos os ScoreResult calculados antes de qualquer I/O —
+    # viral_score é CPU trivial (~20 µs/vídeo, Task 12), sem paralelismo.
+    rows = [
+        ScoreUpsertRow(
+            video_id=snap.video_id,
+            segment_id=deps.segment.id,
+            result=viral_score(
+                snap.metrics,
+                relevance_of(snap, deps.keywords),
+                now,
+                snap.published_at,
+                captured_at=snap.captured_at,
+                previous_metrics=snap.previous_metrics,
+                previous_captured_at=snap.previous_captured_at,
+            ),
+            computed_at=now,
         )
-        try:
-            await deps.scores.upsert(snap.video_id, deps.segment.id, result, now)
-            scored += 1
-        except Exception:  # repo em falha não derruba o lote
-            errors += 1
+        for snap in snaps
+    ]
+    if not rows:
+        return ScoreOutcome(ok=True, partial=False, scored=0)
+    try:
+        # 1 round-trip por bloco (não por vídeo); linhas ruins são isoladas
+        # dentro do repo — o retorno diz quantas persistiram.
+        scored = await deps.scores.upsert_many(rows)
+    except Exception:  # falha do lote inteiro (ex.: conexão) — nada garantido
+        scored = 0
+    errors = len(rows) - scored
     ok = errors == 0
     return ScoreOutcome(ok=ok, partial=(not ok and scored > 0), scored=scored)

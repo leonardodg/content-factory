@@ -117,10 +117,37 @@ class VideoRepository(Protocol):
         ...
 
 
+@dataclass(frozen=True)
+class ScoreUpsertRow:
+    """Uma linha de `video_scores` a persistir em lote (Task 13).
+
+    `video_scores` é append-only (sem ON CONFLICT): o lote é direto. O
+    use-case calcula todos os `ScoreResult` (puro) e monta as linhas; o
+    impl persiste em blocos com fallback por linha. `result`/`computed_at`
+    vêm de domain (`ScoreResult`/`datetime`).
+    """
+
+    video_id: int
+    segment_id: int
+    result: ScoreResult
+    computed_at: datetime
+
+
 class ScoreRepository(Protocol):
     async def upsert(
         self, video_id: int, segment_id: int, result: ScoreResult, computed_at: datetime
-    ) -> None: ...
+    ) -> None:
+        """Upsert de um vídeo — mantido para a CLI/uso direto pontual."""
+        ...
+
+    async def upsert_many(self, rows: Sequence[ScoreUpsertRow]) -> int:
+        """Persiste o lote, isolando linhas ruins (fallback por linha).
+
+        Devolve quantas linhas persistiram; linhas com dado inválido são
+        puladas sem derrubar o lote. Erros que não são de dados da linha
+        (ex.: conexão) propagam para o caller.
+        """
+        ...
 
 
 class SegmentRepository(Protocol):

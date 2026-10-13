@@ -7,6 +7,7 @@ import pytest
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
+from content_factory.app.ports import ScoreUpsertRow
 from content_factory.app.score import ScoreDeps, score
 from content_factory.domain.models import (
     CandidateVideo,
@@ -367,6 +368,114 @@ async def test_score_partial_persists_healthy_rows_when_one_insert_fails(
             .all()
         )
         assert len(rows) == 2  # persistiram apesar do meio do lote ter falhado
+    await engine.dispose()
+
+
+@requires_infra
+async def test_score_upsert_many_persists_batch_in_one_block() -> None:
+    """Task 13: lote todo ok persiste N linhas (1 flush por bloco, não por linha)."""
+    engine = create_async_engine(os.environ["TEST_DATABASE_URL"])
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    async with factory() as s:
+        await s.rollback()
+        seg = await SegmentRepositoryImpl(s).upsert(
+            SegmentConfig(
+                slug=f"teste-batch-ok-{uuid4().hex[:8]}",
+                name="Teste batch ok",
+                platforms=["youtube"],
+                keywords=["k"],
+            )
+        )
+        cands = [candidate(40), candidate(41), candidate(42)]
+        await VideoRepositoryImpl(s).upsert_candidates(seg.id, "youtube", cands)
+        vids = [await video_id_of(s, c) for c in cands]
+        now = datetime(2026, 10, 7, 12, 0, tzinfo=UTC)
+
+        def row(video_id: int) -> ScoreUpsertRow:
+            return ScoreUpsertRow(
+                video_id=video_id,
+                segment_id=seg.id,
+                result=ScoreResult(
+                    total=42.5,
+                    performance=10.0,
+                    velocity=80.0,
+                    engagement=20.0,
+                    relevance=100.0,
+                    recency=100.0,
+                    trend_decay="low",
+                ),
+                computed_at=now,
+            )
+
+        saved = await ScoreRepositoryImpl(s).upsert_many([row(vid) for vid in vids])
+        assert saved == 3
+        assert await ScoreRepositoryImpl(s).upsert_many([]) == 0  # lote vazio é no-op
+        await s.commit()
+        rows = (
+            (await s.execute(select(VideoScoreRow).where(VideoScoreRow.segment_id == seg.id)))
+            .scalars()
+            .all()
+        )
+        assert len(rows) == 3
+        assert {r.video_id for r in rows} == set(vids)
+    await engine.dispose()
+
+
+@requires_infra
+async def test_score_upsert_many_isolates_bad_row_without_poisoning_txn() -> None:
+    """Task 13: 1 linha ruim no bloco ⇒ fallback linha-a-linha isola a ruim.
+
+    A linha do meio usa um video_id inexistente: o flush do bloco estoura
+    FK (IntegrityError real) e o fallback persiste as vizinhas. O rollback
+    é só até o savepoint do bloco — a transação externa segue viva e o
+    commit grava as saudáveis (prova contra PendingRollbackError).
+    """
+    engine = create_async_engine(os.environ["TEST_DATABASE_URL"])
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    async with factory() as s:
+        await s.rollback()
+        seg = await SegmentRepositoryImpl(s).upsert(
+            SegmentConfig(
+                slug=f"teste-batch-{uuid4().hex[:8]}",
+                name="Teste batch",
+                platforms=["youtube"],
+                keywords=["k"],
+            )
+        )
+        cands = [candidate(30), candidate(31)]
+        await VideoRepositoryImpl(s).upsert_candidates(seg.id, "youtube", cands)
+        vids = [await video_id_of(s, c) for c in cands]
+        now = datetime(2026, 10, 7, 12, 0, tzinfo=UTC)
+
+        def row(video_id: int) -> ScoreUpsertRow:
+            return ScoreUpsertRow(
+                video_id=video_id,
+                segment_id=seg.id,
+                result=ScoreResult(
+                    total=42.5,
+                    performance=10.0,
+                    velocity=80.0,
+                    engagement=20.0,
+                    relevance=100.0,
+                    recency=100.0,
+                    trend_decay="low",
+                ),
+                computed_at=now,
+            )
+
+        saved = await ScoreRepositoryImpl(s).upsert_many(
+            [row(vids[0]), row(2_147_483_647), row(vids[1])]
+        )
+        assert saved == 2
+        # transação externa viva: commit persiste as saudáveis
+        await s.commit()
+        rows = (
+            (await s.execute(select(VideoScoreRow).where(VideoScoreRow.segment_id == seg.id)))
+            .scalars()
+            .all()
+        )
+        assert len(rows) == 2
+        assert {r.video_id for r in rows} == set(vids)
     await engine.dispose()
 
 

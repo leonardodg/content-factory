@@ -1,5 +1,7 @@
+from collections.abc import Sequence
 from datetime import UTC, datetime, timedelta
 
+from content_factory.app.ports import ScoreUpsertRow
 from content_factory.app.score import ScoreDeps, relevance_of, score
 from content_factory.domain.models import (
     ScoreResult,
@@ -29,28 +31,47 @@ class FakeVideos:
 
 
 class FakeScores:
-    def __init__(self) -> None:
+    """Fake com contadores de round-trips (Task 13 — evidência do ganho).
+
+    Cada `upsert` = 1 flush (caminho antigo: N vídeos = N flushes); cada
+    `upsert_many` = 1 flush por chamada (caminho novo: N vídeos = 1 flush).
+    `fail_on` modela a linha ruim: como o fallback por linha do impl real,
+    a linha doente é isolada e as demais persistem.
+    """
+
+    def __init__(self, fail_on: set[int] | None = None) -> None:
         self.saved: list[tuple[int, ScoreResult]] = []
+        self.upsert_calls = 0
+        self.upsert_many_calls = 0
+        self.flushes = 0
+        self._fail_on = fail_on or set()
 
     async def upsert(
         self, video_id: int, segment_id: int, result: ScoreResult, computed_at: datetime
     ) -> None:
+        self.upsert_calls += 1
+        self.flushes += 1
+        if video_id in self._fail_on:
+            raise RuntimeError("repo indisponível")
         self.saved.append((video_id, result))
+
+    async def upsert_many(self, rows: Sequence[ScoreUpsertRow]) -> int:
+        self.upsert_many_calls += 1
+        self.flushes += 1
+        saved = 0
+        for row in rows:
+            if row.video_id in self._fail_on:
+                continue
+            self.saved.append((row.video_id, row.result))
+            saved += 1
+        return saved
 
 
 class FailingScores(FakeScores):
     """Fronteira falha num subconjunto de vídeos (repo em falha ≠ lote derrubado)."""
 
     def __init__(self, fail_on: set[int]) -> None:
-        super().__init__()
-        self._fail_on = fail_on
-
-    async def upsert(
-        self, video_id: int, segment_id: int, result: ScoreResult, computed_at: datetime
-    ) -> None:
-        if video_id in self._fail_on:
-            raise RuntimeError("repo indisponível")
-        await super().upsert(video_id, segment_id, result, computed_at)
+        super().__init__(fail_on=fail_on)
 
 
 SEG = Segment(
@@ -183,6 +204,59 @@ async def test_all_upserts_failing_is_not_partial() -> None:
     deps = ScoreDeps(
         videos=FakeVideos([snap(1, 100_000)]),
         scores=FailingScores(fail_on={1}),
+        segment=SEG,
+        keywords=["vela"],
+        clock=lambda: NOW,
+    )
+    out = await score(deps)
+    assert out.scored == 0
+    assert out.ok is False and out.partial is False
+
+
+async def test_score_persists_batch_in_single_round_trip() -> None:
+    """Task 13: N vídeos = 1 chamada upsert_many = 1 flush (antes: N/N)."""
+    scores = FakeScores()
+    deps = ScoreDeps(
+        videos=FakeVideos([snap(i, 100_000) for i in range(1, 6)]),
+        scores=scores,
+        segment=SEG,
+        keywords=["vela"],
+        clock=lambda: NOW,
+    )
+    out = await score(deps)
+    assert out.scored == 5 and out.ok is True and out.partial is False
+    assert len(scores.saved) == 5
+    assert scores.upsert_many_calls == 1  # o lote inteiro numa chamada
+    assert scores.upsert_calls == 0  # caminho por-vídeo não é mais usado
+    assert scores.flushes == 1  # era 5 no caminho antigo (1 flush por vídeo)
+
+
+async def test_score_partial_when_one_batch_row_is_bad() -> None:
+    """Task 13: 1 linha ruim no meio ⇒ demais persistem, partial=True."""
+    scores = FakeScores(fail_on={3})
+    deps = ScoreDeps(
+        videos=FakeVideos([snap(i, 100_000) for i in range(1, 6)]),
+        scores=scores,
+        segment=SEG,
+        keywords=["vela"],
+        clock=lambda: NOW,
+    )
+    out = await score(deps)
+    assert out.scored == 4
+    assert out.ok is False and out.partial is True
+    assert [vid for vid, _ in scores.saved] == [1, 2, 4, 5]
+
+
+async def test_score_batch_connection_failure_scores_nothing() -> None:
+    """Task 13: falha do lote inteiro (ex.: conexão) ⇒ scored=0, partial=False."""
+
+    class ExplodingScores(FakeScores):
+        async def upsert_many(self, rows: Sequence[ScoreUpsertRow]) -> int:
+            raise RuntimeError("conexão caiu")
+
+    deps = ScoreDeps(
+        videos=FakeVideos([snap(1, 100_000), snap(2, 50_000)]),
+        scores=ExplodingScores(),
         segment=SEG,
         keywords=["vela"],
         clock=lambda: NOW,
