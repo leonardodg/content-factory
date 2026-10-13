@@ -118,8 +118,28 @@ class VideoRepositoryImpl(VideoRepository):
                     )
                     stmt = stmt.on_conflict_do_update(
                         index_elements=["platform", "platform_video_id"],
+                        # Fase H Task 5: metadados são sobrescritos SÓ quando a
+                        # nova coleta tem dado melhor — texto vazio não apaga
+                        # descrição conhecida (NULLIF→COALESCE); campos opcionais
+                        # só quando o novo valor não é NULL; raw sempre vence
+                        # (payload bruto completo daquela coleta, não parcial).
                         set_={
-                            "title": stmt.excluded.title,
+                            "title": func.coalesce(
+                                func.nullif(stmt.excluded.title, ""), VideoRow.title
+                            ),
+                            "description": func.coalesce(
+                                func.nullif(stmt.excluded.description, ""), VideoRow.description
+                            ),
+                            "published_at": func.coalesce(
+                                stmt.excluded.published_at, VideoRow.published_at
+                            ),
+                            "duration_s": func.coalesce(
+                                stmt.excluded.duration_s, VideoRow.duration_s
+                            ),
+                            "thumbnail_url": func.coalesce(
+                                stmt.excluded.thumbnail_url, VideoRow.thumbnail_url
+                            ),
+                            "raw": stmt.excluded.raw,
                             "last_collected_at": stmt.excluded.last_collected_at,
                         },
                     )

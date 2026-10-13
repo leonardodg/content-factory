@@ -700,3 +700,72 @@ async def test_score_upsert_persists_metrics_available_and_formula_version() -> 
         assert row.formula_version == "fase-h"
         assert row.velocity == 80.0
     await engine.dispose()
+
+
+@requires_infra
+async def test_upsert_candidates_updates_metadata_on_conflict_when_new_value_present() -> None:
+    """Segunda coleta com descrição/duração reais atualiza o que a primeira deixou vazio.
+
+    Sem isso, relevance_of nunca vê a descrição real — title/description
+    alimentam relevance_of (app/score.py), então um título vazio que
+    nunca é corrigido deprime o score de relevância para sempre.
+    """
+    engine = create_async_engine(os.environ["TEST_DATABASE_URL"])
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    async with factory() as s:
+        await s.rollback()
+        seg = await SegmentRepositoryImpl(s).upsert(
+            SegmentConfig(
+                slug=f"teste-metadata-{uuid4().hex[:8]}",
+                name="Teste metadata",
+                platforms=["youtube"],
+                keywords=["k"],
+            )
+        )
+        repo = VideoRepositoryImpl(s)
+        c1 = candidate(7)  # title="", description="" (default), published_at=None
+        await repo.upsert_candidates(seg.id, "youtube", [c1])
+        vid = await video_id_of(s, c1)
+
+        c2 = c1.model_copy(
+            update={
+                "title": "Como fazer vela de soja",
+                "description": "Tutorial completo passo a passo",
+                "duration_s": 180,
+            }
+        )
+        await repo.upsert_candidates(seg.id, "youtube", [c2])
+
+        row = (await s.execute(select(VideoRow).where(VideoRow.id == vid))).scalar_one()
+        assert row.title == "Como fazer vela de soja"
+        assert row.description == "Tutorial completo passo a passo"
+        assert row.duration_s == 180
+    await engine.dispose()
+
+
+@requires_infra
+async def test_upsert_candidates_preserves_metadata_when_new_value_is_empty() -> None:
+    """Coleta posterior sem descrição não apaga a descrição já conhecida."""
+    engine = create_async_engine(os.environ["TEST_DATABASE_URL"])
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    async with factory() as s:
+        await s.rollback()
+        seg = await SegmentRepositoryImpl(s).upsert(
+            SegmentConfig(
+                slug=f"teste-preserva-{uuid4().hex[:8]}",
+                name="Teste preserva",
+                platforms=["youtube"],
+                keywords=["k"],
+            )
+        )
+        repo = VideoRepositoryImpl(s)
+        c1 = candidate(8).model_copy(update={"description": "descricao real"})
+        await repo.upsert_candidates(seg.id, "youtube", [c1])
+        vid = await video_id_of(s, c1)
+
+        c2 = c1.model_copy(update={"description": ""})  # coleta seguinte sem descrição
+        await repo.upsert_candidates(seg.id, "youtube", [c2])
+
+        row = (await s.execute(select(VideoRow).where(VideoRow.id == vid))).scalar_one()
+        assert row.description == "descricao real"  # não foi apagada
+    await engine.dispose()
