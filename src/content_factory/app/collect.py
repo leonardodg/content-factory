@@ -1,3 +1,4 @@
+import asyncio
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -34,6 +35,10 @@ class CollectDeps:
     # Mesmo padrão de ScoreDeps: clock injetável, default = agora em UTC —
     # chamadas existentes (worker/CLI) continuam funcionando sem mudança.
     clock: Callable[[], datetime] = field(default_factory=lambda: _utcnow)
+    # Teto de discover() simultâneos na fase de rede (Task 7). Ponto de
+    # partida para benchmark, não limite seguro universal — a persistência
+    # continua sempre sequencial na sessão compartilhada.
+    max_concurrent_discoveries: int = 2
 
 
 @dataclass
@@ -125,13 +130,35 @@ async def collect(
         }
         runs: list[CollectRun] = []
         errors = 0
-        # Fase de rede (Task 6: ainda sequencial — a Task 7 paraleliza com
-        # TaskGroup + semáforo; a ordem segue deps.collectors para a
-        # persistência permanecer determinística).
+        # Fase de rede (Task 7): TaskGroup + semáforo limitado. Cada task
+        # captura CollectorError na PRÓPRIA fronteira (dentro de
+        # _discover_one, que devolve DiscoverResult) — nenhuma exceção
+        # esperada escapa, para não cancelar as irmãs. Exceção
+        # não-CollectorError PROPAGA: cancela as irmãs e aborta antes de
+        # persistir (edge da Task 6 — worker faz rollback, estado final
+        # idêntico ao sequencial). Resultados indexados por posição: a
+        # persistência segue a ordem de deps.collectors, não a de término.
         wanted = [c for c in deps.collectors if c.platform in platforms]
-        discoveries: list[DiscoverResult] = []
-        for collector in wanted:
-            discoveries.append(await _discover_one(collector, segment, limit, deps))
+        slots: dict[int, DiscoverResult] = {}
+        semaphore = asyncio.Semaphore(max(1, deps.max_concurrent_discoveries))
+
+        async def _run(index: int, collector: Collector) -> None:
+            async with semaphore:
+                slots[index] = await _discover_one(collector, segment, limit, deps)
+
+        try:
+            async with asyncio.TaskGroup() as task_group:
+                for index, collector in enumerate(wanted):
+                    task_group.create_task(_run(index, collector))
+        except ExceptionGroup as group:
+            # Contrato pré-concorrência: erro isolado de 1 plataforma sobe
+            # nu, como no caminho sequencial (o worker registra str(exc) no
+            # envelope do segmento). Grupo com 2+ falhas distintas propaga
+            # como ExceptionGroup — caso sem equivalente sequencial.
+            if len(group.exceptions) == 1:
+                raise group.exceptions[0] from None
+            raise
+        discoveries: list[DiscoverResult] = [slots[index] for index in range(len(wanted))]
         # Fase de persistência (sempre sequencial: mesma sessão Postgres).
         for result in discoveries:
             started = deps.clock()

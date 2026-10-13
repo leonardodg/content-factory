@@ -1,12 +1,28 @@
+import asyncio
 from collections.abc import Sequence
 from datetime import UTC, datetime, timedelta
 from typing import ClassVar
 
-from tests.stubs import FakeCollector, FakeLimiter, FakeLock, FakeRepos
+import pytest
+from tests.stubs import (
+    ConcurrencyTracker,
+    FakeCollector,
+    FakeLimiter,
+    FakeLock,
+    FakeRepos,
+    FakeVideos,
+    TrackedCollector,
+)
 
-from content_factory.app.collect import CollectDeps, DiscoverResult, _discover_one, collect
+from content_factory.app.collect import (
+    CollectDeps,
+    CollectOutcome,
+    DiscoverResult,
+    _discover_one,  # pyright: ignore[reportPrivateUsage]
+    collect,
+)
 from content_factory.app.ports import Collector, VideoRepository
-from content_factory.domain.errors import CollectorError
+from content_factory.domain.errors import CollectorError, RateLimited
 from content_factory.domain.models import CandidateVideo, SegmentConfig, UpsertStats, VideoSnapshot
 
 
@@ -387,3 +403,180 @@ async def test_collect_gate_hits_is_per_run_delta_not_cumulative() -> None:
     second = await collect("candles", ["instagram"], limit=5, deps=deps)
     assert second.counts["instagram_gate_hits"] == 2
     assert collector.gate_hits == 4  # atributo do singleton continua acumulando
+
+
+async def test_collect_persist_order_follows_collectors_not_completion() -> None:
+    """Task 7: persistência determinística na ordem de deps.collectors.
+
+    O primeiro collector é lento (termina por último na rede); runs e
+    upserts precisam sair na ordem declarada — diffs de dados estáveis.
+    """
+    tracker = ConcurrencyTracker()
+    collectors: list[Collector] = [
+        TrackedCollector("slow", tracker, delay=0.05),
+        TrackedCollector("fast1", tracker),
+        TrackedCollector("fast2", tracker),
+    ]
+    videos = FakeVideos()
+    repos = FakeRepos()
+    deps = CollectDeps(
+        collectors=collectors,
+        videos=videos,
+        segments=repos.segments,
+        runs=repos.runs,
+        limiter=FakeLimiter(),
+        lock=FakeLock(),
+    )
+    out = await collect("candles", ["slow", "fast1", "fast2"], limit=5, deps=deps)
+    assert out.ok is True
+    assert [r.collector for r in out.runs] == ["slow", "fast1", "fast2"]
+    assert [u[1] for u in videos.upserts] == ["slow", "fast1", "fast2"]
+
+
+async def test_collect_partial_failure_matches_sequential_path() -> None:
+    """Task 7: falha parcial sob concorrência == caminho sequencial.
+
+    Mesmos collectors, 1 plataforma com CollectorError: counts e runs
+    (status/error_code/failed) idênticos com max_concurrent_discoveries=2
+    e =1 (série via semáforo — o caminho sequencial).
+    """
+
+    async def _run(max_concurrency: int) -> CollectOutcome:
+        repos = FakeRepos()
+        deps = CollectDeps(
+            collectors=[
+                FakeCollector("youtube", n=3),
+                FakeCollector("tiktok", fail=CollectorError("blocked", "tiktok")),
+            ],
+            videos=repos.videos,
+            segments=repos.segments,
+            runs=repos.runs,
+            limiter=FakeLimiter(),
+            lock=FakeLock(),
+            max_concurrent_discoveries=max_concurrency,
+        )
+        return await collect("candles", ["youtube", "tiktok"], limit=10, deps=deps)
+
+    def _sig(out: CollectOutcome) -> list[tuple[str, str | None, str | None, int]]:
+        return [(r.collector, r.status, r.error_code, r.failed) for r in out.runs]
+
+    concurrent = await _run(2)
+    sequential = await _run(1)
+    assert concurrent.ok is False and concurrent.partial is True
+    assert concurrent.counts == sequential.counts
+    assert _sig(concurrent) == _sig(sequential)
+
+
+async def test_collect_respects_max_concurrent_discoveries() -> None:
+    """Task 7: pico de discover() simultâneos == 2 (nem série, nem livre).
+
+    3 plataformas com I/O de 50ms: o semáforo deixa 2 sobrepostas (prova
+    que há concorrência real — falharia com pico 1 no código sequencial)
+    e nunca 3.
+    """
+    tracker = ConcurrencyTracker()
+    collectors: list[Collector] = [TrackedCollector(f"p{i}", tracker, delay=0.05) for i in range(3)]
+    repos = FakeRepos()
+    deps = CollectDeps(
+        collectors=collectors,
+        videos=repos.videos,
+        segments=repos.segments,
+        runs=repos.runs,
+        limiter=FakeLimiter(),
+        lock=FakeLock(),
+    )
+    out = await collect("candles", ["p0", "p1", "p2"], limit=5, deps=deps)
+    assert out.ok is True
+    assert tracker.peak == 2
+
+
+class _BoomCollector:
+    """Exceção fora do contrato: não é CollectorError, precisa propagar."""
+
+    platform: ClassVar[str] = "youtube"
+
+    async def discover(self, segment: SegmentConfig, limit: int) -> list[CandidateVideo]:
+        raise ValueError("boom")
+
+
+async def test_collect_non_collector_error_propagates_and_releases_lock() -> None:
+    """Task 7: ValueError numa plataforma propaga (cancela as irmãs).
+
+    Nada persiste (edge da Task 6: aborta antes da fase de persistência),
+    lock liberado, nenhuma task pendente no loop.
+    """
+    tracker = ConcurrencyTracker()
+    collectors: list[Collector] = [
+        _BoomCollector(),
+        TrackedCollector("tiktok", tracker, delay=30.0),
+    ]
+    videos = FakeVideos()
+    repos = FakeRepos()
+    lock = FakeLock()
+    deps = CollectDeps(
+        collectors=collectors,
+        videos=videos,
+        segments=repos.segments,
+        runs=repos.runs,
+        limiter=FakeLimiter(),
+        lock=lock,
+    )
+    before = {id(t) for t in asyncio.all_tasks()}
+    with pytest.raises(ValueError, match="boom"):
+        await collect("candles", ["youtube", "tiktok"], limit=5, deps=deps)
+    assert lock.released == ["collect:candles"]
+    assert videos.upserts == []
+    lingering = [t for t in asyncio.all_tasks() if id(t) not in before and not t.done()]
+    assert lingering == []
+
+
+async def test_collect_external_cancel_releases_lock() -> None:
+    """Task 7: cancelamento do pai cancela os filhos; finally libera o lock."""
+    tracker = ConcurrencyTracker()
+    collectors: list[Collector] = [
+        TrackedCollector("youtube", tracker, delay=30.0),
+        TrackedCollector("tiktok", tracker, delay=30.0),
+    ]
+    repos = FakeRepos()
+    lock = FakeLock()
+    deps = CollectDeps(
+        collectors=collectors,
+        videos=repos.videos,
+        segments=repos.segments,
+        runs=repos.runs,
+        limiter=FakeLimiter(),
+        lock=lock,
+    )
+    task = asyncio.create_task(collect("candles", ["youtube", "tiktok"], limit=5, deps=deps))
+    await asyncio.sleep(0.05)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert lock.released == ["collect:candles"]
+    assert tracker.current == 0
+
+
+async def test_collect_rate_limited_is_failed_without_api_call() -> None:
+    """Task 7: RateLimited É CollectorError → capturado na fronteira da task.
+
+    Janela estourada continua virando run failed (sem bater na API:
+    discover() nunca é chamado).
+    """
+    tracker = ConcurrencyTracker()
+    collectors: list[Collector] = [TrackedCollector("youtube", tracker)]
+    repos = FakeRepos()
+    deps = CollectDeps(
+        collectors=collectors,
+        videos=repos.videos,
+        segments=repos.segments,
+        runs=repos.runs,
+        limiter=FakeLimiter(fail=RateLimited("youtube")),
+        lock=FakeLock(),
+    )
+    out = await collect("candles", ["youtube"], limit=5, deps=deps)
+    assert out.ok is False and out.partial is False
+    assert out.counts["failed"] == 1
+    assert tracker.entered == []
+    run = out.runs[0]
+    assert run.status == "failed" and run.error_code == "rate_limited"
+    assert run.failed == 1

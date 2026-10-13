@@ -134,8 +134,9 @@ Fuso fixo `America/Sao_Paulo` (`ZoneInfo` no `WorkerSettings`) — os horários
 não dependem do TZ da máquina. Os dois cron jobs têm `unique=True`: um
 disparo pendente não é enfileirado duas vezes.
 
-**Envs do worker** (`COLLECT_SEGMENT`/`PLATFORMS`/`LIMIT` são relidas a cada
-job; `COLLECT_CRON_HOURS` vale do carregamento do processo):
+**Envs do worker** (`COLLECT_PLATFORMS`/`LIMIT` são relidas a cada
+job; `COLLECT_CRON_HOURS` e `COLLECT_MAX_CONCURRENCY` valem do carregamento
+do processo — trocar exige restart do worker):
 
 | Env | Default | Significado |
 |---|---|---|
@@ -143,6 +144,7 @@ job; `COLLECT_CRON_HOURS` vale do carregamento do processo):
 | `COLLECT_PLATFORMS` | vazio | vazio = plataformas declaradas do segmento |
 | `COLLECT_LIMIT` | `10` | limite de vídeos por plataforma na coleta |
 | `COLLECT_CRON_HOURS` | `08,20` | horas do collect em BRT; valor inválido cai no default |
+| `COLLECT_MAX_CONCURRENCY` | `2` | teto de `discover()` simultâneos por collect (Task 7); ponto de partida para benchmark, não limite seguro universal; valor inválido ou < 1 cai em `2`/`1` |
 
 Onde mudar: bloco `environment:` do serviço `worker` em
 `.devcontainer/docker-compose.yml` (ou `.devcontainer/env/app.env`, que os

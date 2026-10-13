@@ -816,3 +816,18 @@ async def test_startup_ok_without_collect_segment(
     await w.startup(ctx)
     assert "app_deps" in ctx
     await w.shutdown(ctx)
+
+
+def test_load_settings_max_concurrency_default_and_env(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Task 7: COLLECT_MAX_CONCURRENCY (default 2; inválido/<1 cai em 2/1)."""
+    load = w._load_settings  # pyright: ignore[reportPrivateUsage]
+    monkeypatch.delenv("COLLECT_MAX_CONCURRENCY", raising=False)
+    assert load()["max_concurrency"] == 2
+    monkeypatch.setenv("COLLECT_MAX_CONCURRENCY", "4")
+    assert load()["max_concurrency"] == 4
+    monkeypatch.setenv("COLLECT_MAX_CONCURRENCY", "lixo")
+    assert load()["max_concurrency"] == 2
+    monkeypatch.setenv("COLLECT_MAX_CONCURRENCY", "0")
+    assert load()["max_concurrency"] == 1

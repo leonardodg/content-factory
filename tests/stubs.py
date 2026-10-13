@@ -5,6 +5,7 @@ levantam `NotImplementedError` — para o pyright strict validar também a
 estrutura dos testes. Sem Redis, sem banco, sem rede.
 """
 
+import asyncio
 from collections.abc import Sequence
 from datetime import datetime
 from math import ceil
@@ -177,6 +178,68 @@ class FakeRepos:
 # aliases públicas p/ testes que precisam fazer isinstance/asserts
 FakeVideos = _FakeVideos
 FakeRuns = _FakeRuns
+
+
+class ConcurrencyTracker:
+    """Contador compartilhado de concorrência (Task 7).
+
+    Vários collectors instrumentados apontam para a mesma instância —
+    `peak` é o máximo de `discover()` simultâneos observados.
+    """
+
+    def __init__(self) -> None:
+        self.current = 0
+        self.peak = 0
+        self.entered: list[str] = []
+        self.exited: list[str] = []
+
+
+def TrackedCollector(
+    platform: str,
+    tracker: ConcurrencyTracker,
+    n: int = 2,
+    delay: float = 0.0,
+    fail: CollectorError | None = None,
+) -> Collector:
+    """Collector instrumentado: mede sobreposição real de discover().
+
+    Mesmo idioma de `FakeCollector` (classe com `platform: ClassVar` presa
+    por closure, para satisfazer o Protocol). `delay` simula I/O de rede;
+    `fail` levanta no lugar de devolver vídeos. Entradas/saídas vão para o
+    `tracker` compartilhado — `tracker.entered == []` prova "sem bater na API".
+    """
+    name = platform
+    count = n
+    wait = delay
+    error = fail
+
+    class Impl:
+        platform: ClassVar[str] = name
+
+        async def discover(self, segment: SegmentConfig, limit: int) -> list[CandidateVideo]:
+            tracker.current += 1
+            tracker.peak = max(tracker.peak, tracker.current)
+            tracker.entered.append(name)
+            try:
+                if wait:
+                    await asyncio.sleep(wait)
+                if error is not None:
+                    raise error
+                return [
+                    CandidateVideo(
+                        platform=name,
+                        platform_video_id=f"{name}-{i}",
+                        url=f"https://example.invalid/v/{i}",
+                        creator_handle="stub",
+                        title=f"video {i}",
+                    )
+                    for i in range(count)
+                ]
+            finally:
+                tracker.current -= 1
+                tracker.exited.append(name)
+
+    return Impl()
 
 
 class FakeTrendObservations(TrendObservationRepository):

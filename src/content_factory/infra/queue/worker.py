@@ -40,6 +40,20 @@ def parse_cron_hours(raw: str) -> set[int]:
     return hours or {8, 20}
 
 
+def _max_concurrency_from_env() -> int:
+    """Teto de discover() simultâneos por collect (env `COLLECT_MAX_CONCURRENCY`).
+
+    Default 2 (ponto de partida para benchmark, não limite seguro
+    universal). Valor inválido ou < 1 cai no default/1 — semáforo com 0
+    travaria a fase de rede para sempre.
+    """
+    try:
+        value = int(os.getenv("COLLECT_MAX_CONCURRENCY", "2"))
+    except ValueError:
+        return 2
+    return max(1, value)
+
+
 def _load_settings() -> dict[str, Any]:
     """Config do job de coleta — env `COLLECT_*` (sem mais `COLLECT_SEGMENT`).
 
@@ -51,6 +65,7 @@ def _load_settings() -> dict[str, Any]:
     return {
         "platforms": platforms,
         "limit": int(os.getenv("COLLECT_LIMIT", "10")),
+        "max_concurrency": _max_concurrency_from_env(),
     }
 
 
@@ -184,6 +199,13 @@ async def create_app_deps(settings: Settings) -> AppDeps:
     Os placeholders abaixo são nunca lidos fora do loop dos jobs.
     Startup não depende mais de `cf segment load` prévio.
 
+    Concorrência de descoberta (Task 7): `max_concurrent_discoveries` é
+    fixado AQUI, no startup, via `_load_settings()` — `CollectDeps` é
+    montado uma vez e reutilizado por todos os jobs via
+    `ctx["collect_deps"]`, então trocar `COLLECT_MAX_CONCURRENCY` exige
+    restart do worker (ao contrário de `COLLECT_PLATFORMS`/`COLLECT_LIMIT`,
+    relidos por `run_collect_job` a cada tick).
+
     Decisão de composição (Fase D→B): `web` = WebSuggestProvider real
     (Google Suggest, ADR-0005); `trends` = TrendsGoogleProvider real;
     `socials` = collectors reais que satisfazem
@@ -239,6 +261,7 @@ async def create_app_deps(settings: Settings) -> AppDeps:
                 runs=CollectRunRepositoryImpl(session),
                 limiter=RedisRateLimiter(shared),
                 lock=RedisLock(shared),
+                max_concurrent_discoveries=int(_load_settings()["max_concurrency"]),
             ),
             score=ScoreDeps(
                 videos=VideoRepositoryImpl(session),
