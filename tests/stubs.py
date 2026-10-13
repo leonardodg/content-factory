@@ -5,10 +5,11 @@ levantam `NotImplementedError` — para o pyright strict validar também a
 estrutura dos testes. Sem Redis, sem banco, sem rede.
 """
 
+import asyncio
 from collections.abc import Sequence
 from datetime import datetime
 from math import ceil
-from typing import ClassVar
+from typing import Any, ClassVar
 
 from content_factory.app.ports import (
     Collector,
@@ -129,9 +130,14 @@ class _FakeSegments:
 
 
 class _FakeRuns:
-    def __init__(self, status_counts: dict[str, int] | None = None) -> None:
+    def __init__(
+        self,
+        status_counts: dict[str, int] | None = None,
+        timing_stats: dict[str, dict[str, float | int | None]] | None = None,
+    ) -> None:
         self.recorded: list[CollectRun] = []
         self._status_counts = status_counts
+        self._timing_stats = timing_stats
 
     async def record(self, run: CollectRun) -> int:
         self.recorded.append(run)
@@ -142,6 +148,14 @@ class _FakeRuns:
         if self._status_counts is None:
             raise NotImplementedError("configure via FakeRepos(..., status_counts={...})")
         return dict(self._status_counts)
+
+    async def timing_stats(
+        self, segment_id: int, since: datetime
+    ) -> dict[str, dict[str, float | int | None]]:
+        _ = segment_id, since
+        if self._timing_stats is None:
+            raise NotImplementedError("configure via FakeRepos(..., timing_stats={...})")
+        return {k: dict(v) for k, v in self._timing_stats.items()}
 
 
 class FakeRepos:
@@ -154,15 +168,78 @@ class FakeRepos:
         updates_only: bool = False,
         skipped: int = 0,
         status_counts: dict[str, int] | None = None,
+        timing_stats: dict[str, dict[str, float | int | None]] | None = None,
     ) -> None:
         self.videos: VideoRepository = _FakeVideos(updates_only, skipped)
         self.segments: SegmentRepository = _FakeSegments(segment_id)
-        self.runs: CollectRunRepository = _FakeRuns(status_counts)
+        self.runs: CollectRunRepository = _FakeRuns(status_counts, timing_stats)
 
 
 # aliases públicas p/ testes que precisam fazer isinstance/asserts
 FakeVideos = _FakeVideos
 FakeRuns = _FakeRuns
+
+
+class ConcurrencyTracker:
+    """Contador compartilhado de concorrência (Task 7).
+
+    Vários collectors instrumentados apontam para a mesma instância —
+    `peak` é o máximo de `discover()` simultâneos observados.
+    """
+
+    def __init__(self) -> None:
+        self.current = 0
+        self.peak = 0
+        self.entered: list[str] = []
+        self.exited: list[str] = []
+
+
+def TrackedCollector(
+    platform: str,
+    tracker: ConcurrencyTracker,
+    n: int = 2,
+    delay: float = 0.0,
+    fail: CollectorError | None = None,
+) -> Collector:
+    """Collector instrumentado: mede sobreposição real de discover().
+
+    Mesmo idioma de `FakeCollector` (classe com `platform: ClassVar` presa
+    por closure, para satisfazer o Protocol). `delay` simula I/O de rede;
+    `fail` levanta no lugar de devolver vídeos. Entradas/saídas vão para o
+    `tracker` compartilhado — `tracker.entered == []` prova "sem bater na API".
+    """
+    name = platform
+    count = n
+    wait = delay
+    error = fail
+
+    class Impl:
+        platform: ClassVar[str] = name
+
+        async def discover(self, segment: SegmentConfig, limit: int) -> list[CandidateVideo]:
+            tracker.current += 1
+            tracker.peak = max(tracker.peak, tracker.current)
+            tracker.entered.append(name)
+            try:
+                if wait:
+                    await asyncio.sleep(wait)
+                if error is not None:
+                    raise error
+                return [
+                    CandidateVideo(
+                        platform=name,
+                        platform_video_id=f"{name}-{i}",
+                        url=f"https://example.invalid/v/{i}",
+                        creator_handle="stub",
+                        title=f"video {i}",
+                    )
+                    for i in range(count)
+                ]
+            finally:
+                tracker.current -= 1
+                tracker.exited.append(name)
+
+    return Impl()
 
 
 class FakeTrendObservations(TrendObservationRepository):
@@ -260,3 +337,22 @@ class FakeRedis:
             self.expires.pop(name, None)
             removed += int(existed)
         return removed
+
+    async def eval(self, script: str, numkeys: int, *keys_and_args: str) -> Any:
+        """Executa o CAS de release de forma atômica no dict em memória.
+
+        Espelha o Lua de `infra/lock` (`KEYS[1]` apagada só se o valor for
+        `ARGV[1]`); o `script` é registrado mas não interpretado — o único
+        chamador é `RedisLock.release`.
+        """
+        self.commands.append("eval")
+        _ = script
+        keys = keys_and_args[:numkeys]
+        args = keys_and_args[numkeys:]
+        if not keys or not args:
+            return 0
+        if self.values.get(keys[0]) == args[0]:
+            self.values.pop(keys[0], None)
+            self.expires.pop(keys[0], None)
+            return 1
+        return 0

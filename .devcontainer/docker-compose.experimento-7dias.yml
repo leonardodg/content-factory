@@ -1,3 +1,7 @@
+# LEGADO — janela do experimento até 2026-10-19. Não rebuildar nem reiniciar
+# estes 3 workers com a main atual (ver docs/HANDOFF.md: verificação empírica
+# 2026-10-13) — a troca pelo worker único está em
+# docker-compose.multi-segmento.yml (só aplicar após 2026-10-19).
 # Override pro experimento de 7 dias com 3 segmentos em paralelo.
 #
 # O worker base (`docker-compose.yml`) roda 1 único segmento por processo

@@ -5,15 +5,45 @@
 
 ## 🔄 EM ANDAMENTO
 
-_Branch `feat/worker-multi-segmento` (6 commits, 232 passed + pyright 0 +
-todos os gates) pronta para merge FF — worker passa a processar TODOS os
-segmentos com campanha ativa por tick (não mais 1 `COLLECT_SEGMENT` fixo).
-Adiado até o fim do experimento de 7 dias: trocar o compose de 3 workers
-por 1 worker único + teste de aceitação (4º segmento sem restart) — ver
-"O que falta". Depois do merge: próximo passo sugerido é a sessão de
-design da Fase I (contrato `insta_kb`) — ver roadmap, ainda não
-iniciada. Validacao empirica do ranking (Ferramenta `cf score-sample`
-entregue; o veredito sobre os pesos é humano, com dados reais).)_
+_Concorrência do pipeline — Etapas 0–C IMPLEMENTADAS na branch
+`feat/concorrencia-pipeline` (2026-10-13, plano
+`docs/ai-plans/2026-10-13-content-factory-concorrencia-pipeline.md`, 12
+commits, 285 passed com infra + todos os gates verdes). Troca de ambiente
+(3 workers → 1) SÓ após 2026-10-19; containers do experimento intocados a
+sessão inteira (só SELECT + 1 medição com rollback confirmado). Falta:
+revisão final da branch + merge + swap de compose pós-19._
+
+_Tasks: T1 guard COLLECT_SEGMENT no startup · T2 compose worker único
+preparado (`docker-compose.multi-segmento.yml`) · T3 cota/breaker/lock no
+Redis compartilhado (`rate_limit_redis_url`) · T4 `discover_ms/persist_ms`
+(migração 0009, `cf collect-timings`) · T5 baseline congelado em
+`docs/manual/baseline-concorrencia.md` · T6 collect em 2 fases · T7
+TaskGroup+semáforo na descoberta (`COLLECT_MAX_CONCURRENCY=2`) · T8 mesmo
+padrão no research · T9 RedisLock com token (Lua CAS) · T10 engine único +
+sessão por UoW (`ScoreDeps` dataclass) · T11 segmentos concorrentes
+(`WORKER_MAX_SEGMENTS=3`, `max_jobs=3`, `on_job_end` removido) · T12 perfil
+do score (CPU ~20µs/vídeo, Task 14 descartada) · T13 `upsert_many` em
+blocos de 500 (N flushes→1) · ADR-0006 (manter arq+Redis)._
+
+_Worker multi-segmento mergeado (`a4faf04`) e revisado (2026-10-13): teste
+real contra o Postgres/Redis do experimento achou 2 bugs de isolamento por
+segmento em `run_collect_job`/`run_research_job` (exceção não-`CollectorError`
+de 1 segmento abortava o tick inteiro dos outros) — corrigidos com
+try/except+rollback por segmento (mesmo tratamento aplicado a `run_score_job`
+por simetria), 3 testes novos, 233 passed + 9 gates verdes. Também achado e
+limpo: 9 campanhas `teste-ativo-*` órfãs (testes de aceitação antigos nunca
+parados) estavam ativas na base real — `cf research stop` rodado em todas,
+só `velas-artesanais`/`sabonetes-artesanais`/`resina-artesanal` seguem
+ativas. **Verificação empírica 2026-10-13 (corrige premissa do review externo):** os 3 containers rodam imagens criadas em `2026-10-12 23:26`, **anteriores** aos commits multi-segmento (`c9f1e41`+, `2026-10-13 00:01`). Dentro do container, `active_segments` tem **0 ocorrências** em `/app/content_factory/infra/queue/worker.py`, que ainda lê `os.getenv("COLLECT_SEGMENT")`; o md5 diverge do arquivo no repo. Conclusão: **não há coleta duplicada hoje**. O risco é latente — qualquer `docker compose up --build` ou restart com a `main` atual passa a triplicar. P0 rebaixado de "incidente em andamento" para "trava antes do próximo rebuild". **Data de corte: 2026-10-19** (fim do experimento de 7 dias) — código, testes e compose novo ficam prontos durante a semana; a troca 3 workers → 1 worker multi-segmento só é aplicada depois do dia 19. **Risco ainda não resolvido** (não é bug de código, é operacional):
+os 3 containers do experimento (`docker-compose.experimento-7dias.yml`)
+continuam na imagem PRÉ-merge (ainda lê `COLLECT_SEGMENT`) — não fazer
+`--build`/restart neles sem já ter trocado pelo worker único, senão cada um
+passa a processar TODOS os segmentos ativos sem lock compartilhado entre si
+(Redis separado por container) e tripli­ca o trabalho. Próximo passo sugerido
+depois do swap de compose: sessão de design da Fase I (contrato `insta_kb`)
+— ver roadmap, ainda não iniciada. Validação empírica do ranking (ferramenta
+`cf score-sample` entregue; o veredito sobre os pesos é humano, com dados
+reais).
 
 ## ✅ CONCLUÍDO
 
@@ -440,3 +470,22 @@ plano `docs/ai-plans/2026-10-12-fix-instagram-collector-fase0.md`.
   (`-` simples, confirmado contra o slug real do mkdocs) em
   `PLANO_TESTE_E2E.md` e `manual/chaves-api.md`; contagem de testes
   atualizada (117→120 passed, 1 failed ambiente).
+
+## Concorrência do pipeline — Etapa B (branch `feat/concorrencia-pipeline`, 2026-10-13)
+
+Plano: `docs/ai-plans/2026-10-13-content-factory-concorrencia-pipeline.md`.
+Troca 3 workers → 1 worker multi-segmento SÓ após 2026-10-19 (fim do
+experimento); não rebuildar/restartar `cf-worker-*` antes da Task 1 (já mergeada).
+
+- [x] **Task 9** (`7a366b0`): `RedisLock` com token de posse (Lua CAS) —
+  release de lock expirado-e-readquirido não apaga o do novo dono.
+- [x] **Task 10** (`42ac15c`): engine compartilhado + sessão por UoW —
+  `AppDeps.create_segment_deps` (1 segmento = 1 transação), jobs ainda sequenciais.
+- [x] **Task 11**: segmentos concorrentes (TaskGroup + semáforo
+  `WORKER_MAX_SEGMENTS`, default 3), 1 transação cada; `max_jobs` 1→3;
+  `job_end`/`on_job_end` e `commit`/`rollback` de startup REMOVIDOS (cada UoW
+  já reverte via `session_scope`); `campaigns` abre 1 sessão fresca por chamada
+  (`_FreshSessionCampaigns`) para jobs sobrepostos não disputarem sessão.
+  Templates `collect`/`score`/`research` do startup mantidos SÓ como templates
+  (jobs nunca os usam como sessão). CLI não usa `AppDeps` (deps próprios por
+  comando) — nada a aposentar lá. Próximo: Etapa C (lote no score).

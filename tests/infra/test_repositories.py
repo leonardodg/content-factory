@@ -7,6 +7,7 @@ import pytest
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
+from content_factory.app.ports import ScoreUpsertRow
 from content_factory.app.score import ScoreDeps, score
 from content_factory.domain.models import (
     CandidateVideo,
@@ -337,16 +338,30 @@ async def test_score_partial_persists_healthy_rows_when_one_insert_fails(
 
         # falha de INSERT só no vídeo do meio do lote: o objeto entra na
         # sessão, mas com segment_id nulado — o Postgres estoura NOT NULL
-        # no flush (IntegrityError real, que envenena a transação)
+        # no flush (IntegrityError real, que envenena a transação).
+        # Task 13: o caminho em lote usa add_all (que delega à sessão
+        # síncrona e não passa pelo patch de instância de add) — por isso
+        # o veneno é aplicado também em add_all; o fallback linha-a-linha
+        # continua passando por add e isola a linha doente.
         poison_id = vids[1]
+
+        def poison(obj: object) -> None:
+            if isinstance(obj, VideoScoreRow) and obj.video_id == poison_id:
+                cast(Any, obj).segment_id = None  # NOT NULL → IntegrityError real
+
         original_add = s.add
 
         def flaky_add(obj: object) -> None:
             original_add(obj)
-            if isinstance(obj, VideoScoreRow) and obj.video_id == poison_id:
-                cast(Any, obj).segment_id = None  # NOT NULL → IntegrityError real
+            poison(obj)
+
+        def flaky_add_all(objs: object) -> None:
+            for item in cast(Any, objs):
+                original_add(item)
+                poison(item)
 
         monkeypatch.setattr(s, "add", flaky_add)
+        monkeypatch.setattr(s, "add_all", flaky_add_all)
 
         outcome = await score(
             ScoreDeps(
@@ -367,6 +382,114 @@ async def test_score_partial_persists_healthy_rows_when_one_insert_fails(
             .all()
         )
         assert len(rows) == 2  # persistiram apesar do meio do lote ter falhado
+    await engine.dispose()
+
+
+@requires_infra
+async def test_score_upsert_many_persists_batch_in_one_block() -> None:
+    """Task 13: lote todo ok persiste N linhas (1 flush por bloco, não por linha)."""
+    engine = create_async_engine(os.environ["TEST_DATABASE_URL"])
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    async with factory() as s:
+        await s.rollback()
+        seg = await SegmentRepositoryImpl(s).upsert(
+            SegmentConfig(
+                slug=f"teste-batch-ok-{uuid4().hex[:8]}",
+                name="Teste batch ok",
+                platforms=["youtube"],
+                keywords=["k"],
+            )
+        )
+        cands = [candidate(40), candidate(41), candidate(42)]
+        await VideoRepositoryImpl(s).upsert_candidates(seg.id, "youtube", cands)
+        vids = [await video_id_of(s, c) for c in cands]
+        now = datetime(2026, 10, 7, 12, 0, tzinfo=UTC)
+
+        def row(video_id: int) -> ScoreUpsertRow:
+            return ScoreUpsertRow(
+                video_id=video_id,
+                segment_id=seg.id,
+                result=ScoreResult(
+                    total=42.5,
+                    performance=10.0,
+                    velocity=80.0,
+                    engagement=20.0,
+                    relevance=100.0,
+                    recency=100.0,
+                    trend_decay="low",
+                ),
+                computed_at=now,
+            )
+
+        saved = await ScoreRepositoryImpl(s).upsert_many([row(vid) for vid in vids])
+        assert saved == 3
+        assert await ScoreRepositoryImpl(s).upsert_many([]) == 0  # lote vazio é no-op
+        await s.commit()
+        rows = (
+            (await s.execute(select(VideoScoreRow).where(VideoScoreRow.segment_id == seg.id)))
+            .scalars()
+            .all()
+        )
+        assert len(rows) == 3
+        assert {r.video_id for r in rows} == set(vids)
+    await engine.dispose()
+
+
+@requires_infra
+async def test_score_upsert_many_isolates_bad_row_without_poisoning_txn() -> None:
+    """Task 13: 1 linha ruim no bloco ⇒ fallback linha-a-linha isola a ruim.
+
+    A linha do meio usa um video_id inexistente: o flush do bloco estoura
+    FK (IntegrityError real) e o fallback persiste as vizinhas. O rollback
+    é só até o savepoint do bloco — a transação externa segue viva e o
+    commit grava as saudáveis (prova contra PendingRollbackError).
+    """
+    engine = create_async_engine(os.environ["TEST_DATABASE_URL"])
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    async with factory() as s:
+        await s.rollback()
+        seg = await SegmentRepositoryImpl(s).upsert(
+            SegmentConfig(
+                slug=f"teste-batch-{uuid4().hex[:8]}",
+                name="Teste batch",
+                platforms=["youtube"],
+                keywords=["k"],
+            )
+        )
+        cands = [candidate(30), candidate(31)]
+        await VideoRepositoryImpl(s).upsert_candidates(seg.id, "youtube", cands)
+        vids = [await video_id_of(s, c) for c in cands]
+        now = datetime(2026, 10, 7, 12, 0, tzinfo=UTC)
+
+        def row(video_id: int) -> ScoreUpsertRow:
+            return ScoreUpsertRow(
+                video_id=video_id,
+                segment_id=seg.id,
+                result=ScoreResult(
+                    total=42.5,
+                    performance=10.0,
+                    velocity=80.0,
+                    engagement=20.0,
+                    relevance=100.0,
+                    recency=100.0,
+                    trend_decay="low",
+                ),
+                computed_at=now,
+            )
+
+        saved = await ScoreRepositoryImpl(s).upsert_many(
+            [row(vids[0]), row(2_147_483_647), row(vids[1])]
+        )
+        assert saved == 2
+        # transação externa viva: commit persiste as saudáveis
+        await s.commit()
+        rows = (
+            (await s.execute(select(VideoScoreRow).where(VideoScoreRow.segment_id == seg.id)))
+            .scalars()
+            .all()
+        )
+        assert len(rows) == 2
+        assert {r.video_id for r in rows} == set(vids)
     await engine.dispose()
 
 
@@ -846,6 +969,75 @@ async def test_collect_run_record_persists_skipped_separate_from_failed() -> Non
         ).scalar_one()
         assert row.skipped == 2
         assert row.failed == 0
+    await engine.dispose()
+
+
+@requires_infra
+async def test_collect_run_record_round_trips_timing_columns() -> None:
+    """Task 4 (baseline): discover_ms/persist_ms fazem round-trip em collect_runs."""
+    engine = create_async_engine(os.environ["TEST_DATABASE_URL"])
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    async with factory() as s:
+        await s.rollback()
+        run = CollectRun(
+            collector="youtube",
+            status="ok",
+            found=3,
+            inserted=3,
+            discover_ms=150,
+            persist_ms=40,
+            started_at=datetime.now(UTC),
+        )
+        run_id = await CollectRunRepositoryImpl(s).record(run)
+        await s.commit()
+        row = (
+            await s.execute(select(CollectRunRow).where(CollectRunRow.id == run_id))
+        ).scalar_one()
+        assert row.discover_ms == 150
+        assert row.persist_ms == 40
+    await engine.dispose()
+
+
+@requires_infra
+async def test_collect_run_timing_stats_aggregates_by_platform() -> None:
+    """Task 4 (baseline): timing_stats agrega média/p95 de cada fase por plataforma."""
+    engine = create_async_engine(os.environ["TEST_DATABASE_URL"])
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    async with factory() as s:
+        await s.rollback()
+        seg = await SegmentRepositoryImpl(s).upsert(
+            SegmentConfig(
+                slug=f"teste-timings-{uuid4().hex[:8]}",
+                name="Teste timings",
+                platforms=["youtube", "tiktok"],
+                keywords=["k"],
+            )
+        )
+        now = datetime.now(UTC)
+        repo = CollectRunRepositoryImpl(s)
+        for discover_ms, persist_ms in ((100, 10), (200, 30)):
+            await repo.record(
+                CollectRun(
+                    collector="youtube",
+                    segment_id=seg.id,
+                    status="ok",
+                    discover_ms=discover_ms,
+                    persist_ms=persist_ms,
+                    started_at=now,
+                )
+            )
+        # run pré-instrumentação: timings NULL entram na contagem, fora das médias
+        await repo.record(
+            CollectRun(collector="tiktok", segment_id=seg.id, status="ok", started_at=now)
+        )
+        stats = await repo.timing_stats(seg.id, now - timedelta(days=7))
+        assert stats["youtube"]["n"] == 2
+        assert stats["youtube"]["avg_discover_ms"] == 150.0
+        assert stats["youtube"]["avg_persist_ms"] == 20.0
+        assert stats["youtube"]["p95_discover_ms"] is not None
+        assert 100 <= stats["youtube"]["p95_discover_ms"] <= 200
+        assert stats["tiktok"]["n"] == 1
+        assert stats["tiktok"]["avg_discover_ms"] is None
     await engine.dispose()
 
 

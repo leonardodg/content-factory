@@ -89,7 +89,7 @@ docker exec cf-python uv run cf collect --segment candles --platform web --limit
 Saída esperada (exit `0`):
 
 ```console
-{"ok": true, "command": "collect", "found": 3, "inserted": 3, "updated": 0, "failed": 0}
+{"ok": true, "command": "collect", "found": 3, "inserted": 3, "updated": 0, "failed": 0, "skipped": 0}
 ```
 
 `inserted: 3` no primeiro run; num run seguinte com as mesmas URLs o upsert é
@@ -141,7 +141,7 @@ chaves ainda vazias (`youtube`/`tiktok`/`instagram` falham, `web` entrega):
 
 ```console
 $ docker exec cf-python uv run cf collect --segment candles --platform youtube,tiktok,instagram,web --limit 3
-{"ok": true, "command": "collect", "partial": true, "found": 3, "inserted": 3, "updated": 0, "failed": 3}
+{"ok": true, "command": "collect", "partial": true, "found": 3, "inserted": 3, "updated": 0, "failed": 3, "skipped": 0}
 # exit=2
 ```
 

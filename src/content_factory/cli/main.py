@@ -379,6 +379,49 @@ def status_cmd(segment: str = typer.Option(..., "--segment", help="slug do segme
     raise typer.Exit(exit_code_for(ok=True))
 
 
+@asynccontextmanager
+async def _timings_deps() -> AsyncGenerator[tuple[SegmentRepository, CollectRunRepository]]:
+    """Deps do `collect-timings`: só Postgres (sem Redis/registry — é leitura)."""
+    from content_factory.config import get_settings
+    from content_factory.infra.db.base import get_session_factory
+    from content_factory.infra.db.repositories import (
+        CollectRunRepositoryImpl,
+        SegmentRepositoryImpl,
+    )
+
+    factory: async_sessionmaker[AsyncSession] = get_session_factory(get_settings())
+    async with factory() as session:
+        yield SegmentRepositoryImpl(session), CollectRunRepositoryImpl(session)
+
+
+async def _acollect_timings(segment_slug: str) -> dict[str, dict[str, float | int | None]]:
+    """Agregado de discover_ms/persist_ms por plataforma nos últimos 7 dias."""
+    async with _timings_deps() as (segments, runs):
+        seg = await segments.get_by_slug(segment_slug)
+        since = datetime.now(UTC) - timedelta(days=7)
+        return await runs.timing_stats(seg.id, since)
+
+
+@app.command("collect-timings")
+def collect_timings_cmd(
+    segment: str = typer.Option(..., "--segment", help="slug do segmento"),
+) -> None:
+    """Baseline de duração por plataforma (collect_runs.discover_ms/persist_ms)."""
+    try:
+        timings = asyncio.run(_acollect_timings(segment))
+    except SegmentNotFound as exc:
+        print(dumps(envelope_err("collect-timings", "segment_not_found", redact(str(exc)))))
+        raise typer.Exit(exit_code_for(ok=False)) from exc
+    except DomainError as exc:
+        print(dumps(envelope_err("collect-timings", "usage_error", redact(str(exc)))))
+        raise typer.Exit(exit_code_for(ok=False)) from exc
+    except Exception as exc:
+        print(dumps(envelope_err("collect-timings", "internal_error", redact(str(exc)))))
+        raise typer.Exit(exit_code_for(ok=False)) from exc
+    print(dumps(envelope_ok("collect-timings", segment=segment, timings=timings)))
+    raise typer.Exit(exit_code_for(ok=True))
+
+
 # --- research campaign commands (Fase D) ---
 
 

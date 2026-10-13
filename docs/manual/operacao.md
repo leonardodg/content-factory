@@ -29,9 +29,11 @@ docker compose -f .devcontainer/docker-compose.yml --profile worker up -d worker
 ```
 
 Pré-condições do worker: `app.env` e `secrets.env` já criados (passo 2 do
-[Primeiro passo](guide-start.md)) e o segmento de `COLLECT_SEGMENT` (default
-`candles`) já carregado no banco — senão o container morre no startup
-([§6](#6-limitacoes-conhecidas)).
+[Primeiro passo](guide-start.md)). O worker é multi-segmento: os segmentos
+processados saem de `active_segments()` por job — sem campanha ativa, os
+jobs são noop. `COLLECT_SEGMENT` NÃO deve estar definido: a imagem nova sob
+o compose antigo falha no startup com `RuntimeError` (guard da Task 1, ver
+[experimento](experimento-7-dias.md)).
 
 Detalhe que muda a rotina de atualização: o serviço `python` roda com o
 repositório montado (`bind-mount` → código novo aparece sem rebuild), mas o
@@ -90,19 +92,20 @@ O que procurar:
 
 - `Starting worker for 3 functions: collect_job, score_job, research_job` — o worker subiu,
   conectou no Redis e registrou os 3 jobs. Atenção: essa linha é emitida
-  **antes** do `on_startup`; para confirmar que o startup terminou, procure a
-  **ausência** de traceback logo abaixo (o fail-fast `SegmentNotFound` vem
-  depois desta linha) ou confirme o estado via `cf status`;
+   **antes** do `on_startup`; para confirmar que o startup terminou, procure a
+   **ausência** de traceback logo abaixo ou confirme o estado via `cf status`;
 - **falha de job tratada** (`CollectorError` — plataforma bloqueada, cota,
   auth): capturada por plataforma dentro do `collect`, o job **retorna**
   normalmente e a sessão é commitada — auditada em `collect_runs` com
   `status`/`error_code` (queries em [Análise](analise.md));
-- **exceção não tratada no job** (bug): o job lança, `on_job_end` dá rollback
-  na sessão — a linha de auditoria **não** persiste em `collect_runs`; o que
-  sobra é o traceback no log do worker;
-- `SegmentNotFound` no startup (fail-fast): o segmento de `COLLECT_SEGMENT`
-  não existe no banco; o container morre com exit ≠ 0. Corrigir com
-  `cf segment load` e subir de novo ([§6](#6-limitacoes-conhecidas));
+- **exceção não tratada no job** (bug): capturada POR SEGMENTO dentro da task
+  do TaskGroup e registrada no envelope (`segments: {slug: {ok: false, error}}`)
+  — a UoW do segmento reverte sozinha (`session_scope`), as irmãs commitam
+  normal; o que sobra é o traceback no log do worker;
+- `RuntimeError` no startup (guard multi-segmento): `COLLECT_SEGMENT` está
+  definido no ambiente — a imagem nova não roda sob o compose antigo de 3
+  workers. Remova a env (troca pelo compose de worker único, só após
+  2026-10-19 — ver [experimento](experimento-7-dias.md));
 - `shutdown on SIGTERM ◆ … jobs complete …` — desligamento limpo via
   `stop`/`down`; sem essa linha, o processo foi morto e o lock Redis pode
   sobrar até o TTL de 30 min ([§6](#6-limitacoes-conhecidas)).
@@ -134,15 +137,18 @@ Fuso fixo `America/Sao_Paulo` (`ZoneInfo` no `WorkerSettings`) — os horários
 não dependem do TZ da máquina. Os dois cron jobs têm `unique=True`: um
 disparo pendente não é enfileirado duas vezes.
 
-**Envs do worker** (`COLLECT_SEGMENT`/`PLATFORMS`/`LIMIT` são relidas a cada
-job; `COLLECT_CRON_HOURS` vale do carregamento do processo):
+**Envs do worker** (`COLLECT_PLATFORMS`/`LIMIT` são relidas a cada
+job, assim como `WORKER_MAX_SEGMENTS`; `COLLECT_CRON_HOURS` e
+`COLLECT_MAX_CONCURRENCY` valem do carregamento
+do processo — trocar exige restart do worker):
 
 | Env | Default | Significado |
 |---|---|---|
-| `COLLECT_SEGMENT` | `candles` | slug do segmento coletado e pontuado pelo worker |
 | `COLLECT_PLATFORMS` | vazio | vazio = plataformas declaradas do segmento |
 | `COLLECT_LIMIT` | `10` | limite de vídeos por plataforma na coleta |
 | `COLLECT_CRON_HOURS` | `08,20` | horas do collect em BRT; valor inválido cai no default |
+| `COLLECT_MAX_CONCURRENCY` | `2` | teto de `discover()` simultâneos por collect (Task 7); ponto de partida para benchmark, não limite seguro universal; valor inválido ou < 1 cai em `2`/`1` |
+| `WORKER_MAX_SEGMENTS` | `3` | teto de segmentos simultâneos por job (Task 11); lido a cada tick, trocar não exige restart; valor inválido ou < 1 cai em `3`/`1` |
 
 Onde mudar: bloco `environment:` do serviço `worker` em
 `.devcontainer/docker-compose.yml` (ou `.devcontainer/env/app.env`, que os
@@ -150,9 +156,12 @@ dois serviços leem via `env_file`) — depois, recrie o container:
 `… --profile worker up -d worker`. Ver também [§6](#6-limitacoes-conhecidas)
 sobre o `defaults.env`.
 
-**`max_jobs=1` não é bug:** os jobs compartilham uma única sessão Postgres
-montada no startup do worker; mais de um job em paralelo quebraria a sessão
-(`IllegalStateChangeError`). Um job por vez, em série.
+**`max_jobs=3` (1 por tipo de job):** cada segmento roda na SUA sessão Postgres
+(1 UoW por segmento, revertida em exceção via `session_scope`); engine e
+clientes Redis são compartilhados por serem task-safe. O `max_jobs=1` anterior
+existia SÓ porque a sessão era compartilhada (quebraria com
+`IllegalStateChangeError`). Dentro de cada job, os segmentos rodam concorrentes
+sob TaskGroup + semáforo `WORKER_MAX_SEGMENTS` (default 3).
 
 ## 5. Campanhas de pesquisa (`cf research`)
 
@@ -230,10 +239,9 @@ manual no fim do período. O `research_job` no worker filtra
   `ja_em_execucao` (exit `1`) — não force. Se o worker morrer no meio da
   coleta, o lock expira sozinho em até 30 min (é o TTL cobrindo o processo
   morto sem `release`).
-- **Worker falha rápido se o segmento não existir.** O startup carrega
-  `COLLECT_SEGMENT` do banco; slug inexistente → `SegmentNotFound` e o
-  container morre (visível em `logs worker`, [§3](#3-logs)). Antes de subir o
-  worker: `docker exec cf-python uv run cf segment load segments/candles.yaml`.
+- **Worker falha rápido com compose antigo.** Se `COLLECT_SEGMENT` estiver
+  definido, o startup morre com `RuntimeError` (guard multi-segmento, visível
+  em `logs worker`, [§3](#3-logs)) — é proposital, não erro de config.
 
 ## 7. Parada, restart e atualização
 

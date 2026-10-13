@@ -10,9 +10,12 @@ erDiagram
     INTEGER inserted
     INTEGER updated
     INTEGER failed
+    INTEGER skipped
     INTEGER quota_used
     INTEGER retries
     VARCHAR error_code
+    INTEGER discover_ms
+    INTEGER persist_ms
   }
   creative_patterns {
     INTEGER id PK
@@ -41,6 +44,15 @@ erDiagram
     TEXT summary
     VARCHAR status
     VECTOR embedding
+    TIMESTAMP created_at
+  }
+  keyword_signals {
+    INTEGER id PK
+    INTEGER segment_id FK
+    VARCHAR keyword
+    VARCHAR source
+    FLOAT weight
+    INTEGER depth
     TIMESTAMP created_at
   }
   performance_metrics {
@@ -72,6 +84,13 @@ erDiagram
     TEXT url
     TIMESTAMP published_at
   }
+  research_campaigns {
+    INTEGER id PK
+    INTEGER segment_id FK
+    TIMESTAMP started_at
+    TIMESTAMP ends_at
+    BOOL active
+  }
   scripts {
     INTEGER id PK
     INTEGER idea_id FK
@@ -101,6 +120,15 @@ erDiagram
     JSONB segments
     TIMESTAMP created_at
   }
+  trend_observations {
+    INTEGER id PK
+    INTEGER segment_id FK
+    VARCHAR keyword
+    TIMESTAMP period_start
+    VARCHAR period_granularity
+    FLOAT interest
+    TIMESTAMP collected_at
+  }
   video_metrics {
     INTEGER id PK
     INTEGER video_id FK
@@ -124,6 +152,8 @@ erDiagram
     FLOAT relevance
     FLOAT recency
     VARCHAR trend_decay
+    JSONB metrics_available
+    VARCHAR formula_version
     FLOAT replication_score
     FLOAT production_score
   }
@@ -159,6 +189,9 @@ erDiagram
   scripts ||--o{ published_videos : "script_id"
   segments |o--o{ collect_runs : "segment_id"
   segments ||--o{ ideas : "segment_id"
+  segments ||--o{ keyword_signals : "segment_id"
+  segments ||--o{ research_campaigns : "segment_id"
+  segments ||--o{ trend_observations : "segment_id"
   segments ||--o{ video_scores : "segment_id"
   segments ||--o{ video_segments : "segment_id"
   transcripts |o--o{ videos : "transcript_id"

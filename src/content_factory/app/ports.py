@@ -1,6 +1,11 @@
+from __future__ import annotations
+
 from collections.abc import Sequence
+from contextlib import AbstractAsyncContextManager
+from dataclasses import dataclass
 from datetime import datetime
-from typing import ClassVar, Protocol
+from types import TracebackType
+from typing import TYPE_CHECKING, ClassVar, Protocol, Self
 
 from content_factory.domain.models import (
     CandidateVideo,
@@ -14,6 +19,59 @@ from content_factory.domain.models import (
     UpsertStats,
     VideoSnapshot,
 )
+
+if TYPE_CHECKING:
+    from content_factory.app.collect import CollectDeps
+    from content_factory.app.research_pipeline import ResearchDeps
+    from content_factory.app.score import ScoreDeps
+
+
+class UnitOfWork(Protocol):
+    """Sessão isolada por unidade de trabalho: 1 segmento = 1 UoW = 1 transação.
+
+    O engine é compartilhado (task-safe); a sessão nunca é (AsyncSession não
+    é task-safe). Implementada por `infra.db.base.SessionUnitOfWork`. Na
+    Task 10 os jobs ainda abrem 1 UoW por segmento em loop sequencial; a
+    Task 11 executa as UoWs sob `TaskGroup`.
+    """
+
+    async def __aenter__(self) -> Self: ...
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        tb: TracebackType | None,
+    ) -> bool | None: ...
+    async def commit(self) -> None: ...
+    async def rollback(self) -> None: ...
+
+
+@dataclass
+class SegmentDepsBundle:
+    """Deps com escopo de 1 segmento, nascidas da mesma UoW (Task 10).
+
+    Repositórios (`collect`/`score`/`research`) ligam a sessão da UoW;
+    o resto (collectors, limiter, lock, providers) continua compartilhado.
+    O caller commita via `uow` (1 commit por segmento, no job).
+    """
+
+    uow: UnitOfWork
+    collect: CollectDeps
+    score: ScoreDeps
+    research: ResearchDeps
+
+
+class SegmentDepsFactory(Protocol):
+    """Fábrica de bundles por segmento a partir de UoWs próprias (Task 10/11).
+
+    Implementada por `AppDeps` (worker). Cada chamada abre uma UoW própria;
+    `async with factory.create_segment_deps(segment) as bundle` delimita a
+    transação do segmento.
+    """
+
+    def create_segment_deps(
+        self, segment: Segment
+    ) -> AbstractAsyncContextManager[SegmentDepsBundle]: ...
 
 
 class Collector(Protocol):
@@ -59,10 +117,37 @@ class VideoRepository(Protocol):
         ...
 
 
+@dataclass(frozen=True)
+class ScoreUpsertRow:
+    """Uma linha de `video_scores` a persistir em lote (Task 13).
+
+    `video_scores` é append-only (sem ON CONFLICT): o lote é direto. O
+    use-case calcula todos os `ScoreResult` (puro) e monta as linhas; o
+    impl persiste em blocos com fallback por linha. `result`/`computed_at`
+    vêm de domain (`ScoreResult`/`datetime`).
+    """
+
+    video_id: int
+    segment_id: int
+    result: ScoreResult
+    computed_at: datetime
+
+
 class ScoreRepository(Protocol):
     async def upsert(
         self, video_id: int, segment_id: int, result: ScoreResult, computed_at: datetime
-    ) -> None: ...
+    ) -> None:
+        """Upsert de um vídeo — mantido para a CLI/uso direto pontual."""
+        ...
+
+    async def upsert_many(self, rows: Sequence[ScoreUpsertRow]) -> int:
+        """Persiste o lote, isolando linhas ruins (fallback por linha).
+
+        Devolve quantas linhas persistiram; linhas com dado inválido são
+        puladas sem derrubar o lote. Erros que não são de dados da linha
+        (ex.: conexão) propagam para o caller.
+        """
+        ...
 
 
 class SegmentRepository(Protocol):
@@ -82,6 +167,16 @@ class CollectRunRepository(Protocol):
     async def record(self, run: CollectRun) -> int: ...
     async def status_counts(self, segment_id: int, since: datetime) -> dict[str, int]:
         """Contagem de runs por status a partir de `since` (janela do `cf status`)."""
+        ...
+
+    async def timing_stats(
+        self, segment_id: int, since: datetime
+    ) -> dict[str, dict[str, float | int | None]]:
+        """Agregado de discover_ms/persist_ms por plataforma (baseline Task 4).
+
+        Janela do `cf collect-timings`: `{plataforma: {n, avg/p95 de cada fase}}`.
+        NULLs (runs pré-instrumentação) são ignorados nas médias.
+        """
         ...
 
 

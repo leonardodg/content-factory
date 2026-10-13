@@ -13,6 +13,7 @@ from content_factory.app.ports import (
     KeywordSignalRepository,
     ResearchCampaignRepository,
     ScoreRepository,
+    ScoreUpsertRow,
     SegmentRepository,
     TrendObservationRepository,
     VideoRepository,
@@ -271,6 +272,69 @@ class CollectRunRepositoryImpl(CollectRunRepository):
         rows = (await self._s.execute(stmt)).all()
         return {status: count for status, count in rows}
 
+    async def timing_stats(
+        self, segment_id: int, since: datetime
+    ) -> dict[str, dict[str, float | int | None]]:
+        """Agregado de discover_ms/persist_ms por plataforma (baseline Task 4).
+
+        `avg`/`percentile_cont` ignoram NULLs (runs pré-instrumentação) —
+        plataforma só com NULLs volta com médias None e `n` contando tudo.
+        """
+        stmt = (
+            select(
+                CollectRunRow.collector,
+                func.count(CollectRunRow.id).label("n"),
+                func.avg(CollectRunRow.discover_ms).label("avg_discover_ms"),
+                func.avg(CollectRunRow.persist_ms).label("avg_persist_ms"),
+                func.percentile_cont(0.95)
+                .within_group(CollectRunRow.discover_ms)
+                .label("p95_discover_ms"),
+                func.percentile_cont(0.95)
+                .within_group(CollectRunRow.persist_ms)
+                .label("p95_persist_ms"),
+            )
+            .where(CollectRunRow.segment_id == segment_id, CollectRunRow.started_at > since)
+            .group_by(CollectRunRow.collector)
+        )
+        stats: dict[str, dict[str, float | int | None]] = {}
+        for row in (await self._s.execute(stmt)).all():
+            collector, n, avg_d, avg_p, p95_d, p95_p = row
+            stats[collector] = {
+                "n": int(n),
+                "avg_discover_ms": float(avg_d) if avg_d is not None else None,
+                "p95_discover_ms": float(p95_d) if p95_d is not None else None,
+                "avg_persist_ms": float(avg_p) if avg_p is not None else None,
+                "p95_persist_ms": float(p95_p) if p95_p is not None else None,
+            }
+        return stats
+
+
+SCORE_UPSERT_BATCH_SIZE = 500
+"""Linhas por bloco em `ScoreRepositoryImpl.upsert_many` (Task 13).
+
+1 flush por bloco: N vídeos custam ~N/500 round-trips no caminho feliz.
+Bloco pequeno o bastante para o fallback linha-a-linha isolar a ruim sem
+repetir muito trabalho; grande o bastante para o ganho de lote valer.
+"""
+
+
+def _score_orm_row(row: ScoreUpsertRow) -> VideoScoreRow:
+    """Mapeia a linha do lote (porta) para a linha ORM append-only."""
+    return VideoScoreRow(
+        video_id=row.video_id,
+        segment_id=row.segment_id,
+        computed_at=row.computed_at,
+        viral_score=row.result.total,
+        performance=row.result.performance,
+        velocity=row.result.velocity,
+        engagement=row.result.engagement,
+        relevance=row.result.relevance,
+        recency=row.result.recency,
+        trend_decay=row.result.trend_decay,
+        metrics_available=row.result.metrics_available,
+        formula_version=FORMULA_VERSION,
+    )
+
 
 class ScoreRepositoryImpl(ScoreRepository):
     """`video_scores` é timeseries: 1 linha por captura (append, sem ON CONFLICT)."""
@@ -288,22 +352,48 @@ class ScoreRepositoryImpl(ScoreRepository):
         # continua "upsert de um vídeo" sem vazar transação para app/.
         async with self._s.begin_nested():
             self._s.add(
-                VideoScoreRow(
-                    video_id=video_id,
-                    segment_id=segment_id,
-                    computed_at=computed_at,
-                    viral_score=result.total,
-                    performance=result.performance,
-                    velocity=result.velocity,
-                    engagement=result.engagement,
-                    relevance=result.relevance,
-                    recency=result.recency,
-                    trend_decay=result.trend_decay,
-                    metrics_available=result.metrics_available,
-                    formula_version=FORMULA_VERSION,
+                _score_orm_row(
+                    ScoreUpsertRow(
+                        video_id=video_id,
+                        segment_id=segment_id,
+                        result=result,
+                        computed_at=computed_at,
+                    )
                 )
             )
             await self._s.flush()
+
+    async def upsert_many(self, rows: Sequence[ScoreUpsertRow]) -> int:
+        """1 flush por bloco de N; bloco quebrado cai para linha-a-linha.
+
+        Sem ON CONFLICT, `add_all` + 1 `flush` por bloco troca N round-trips
+        por 1 (Task 12 mediu ~0,7 ms/vídeo em begin_nested+flush por linha).
+        O SAVEPOINT por bloco existe pelo mesmo motivo do por-vídeo: no
+        Postgres um flush quebrado envenena a transação inteira — sem ele,
+        uma linha ruim reverteria o lote todo no commit. Em falha do bloco,
+        o fallback linha-a-linha (savepoint por linha) isola a ruim; o
+        rollback do bloco falho é só até o savepoint e não envenena a
+        transação externa. Só DataError/IntegrityError são isolados (dado
+        da linha); conexão e afins propagam para o caller.
+        """
+        saved = 0
+        for start in range(0, len(rows), SCORE_UPSERT_BATCH_SIZE):
+            block = list(rows[start : start + SCORE_UPSERT_BATCH_SIZE])
+            try:
+                async with self._s.begin_nested():
+                    self._s.add_all([_score_orm_row(row) for row in block])
+                    await self._s.flush()
+                saved += len(block)
+            except DataError, IntegrityError:
+                for row in block:
+                    try:
+                        async with self._s.begin_nested():
+                            self._s.add(_score_orm_row(row))
+                            await self._s.flush()
+                        saved += 1
+                    except DataError, IntegrityError:
+                        continue
+        return saved
 
 
 class ScoreSampleRepositoryImpl:

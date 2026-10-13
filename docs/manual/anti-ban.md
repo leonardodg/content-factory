@@ -19,7 +19,7 @@ Nada abaixo exige configuração — é o comportamento padrão do `cf collect`:
 | Janela fallback | 10 / 60 s para plataforma sem janela própria (ex.: `web`) | idem |
 | Backoff em janela estourada | exponencial `2**attempt` com jitter ±20%, espera o reset parcial da janela | `backoff_delay()` |
 | Teto de espera | máx. 5 tentativas; se a espera necessária passaria de 60 s, falha na hora com `rate_limited` (sem segurar o worker) | `acquire()` |
-| Lock de execução única | lock Redis por segmento — uma coleta por vez; a segunda vira `ja_em_execucao` sem bater na API (TTL 30 min cobre processo morto) | `infra/lock.py` |
+| Lock de execução única | lock Redis por segmento com token de posse (Lua CAS) — uma coleta por vez; a segunda vira `ja_em_execucao` sem bater na API (TTL 30 min cobre processo morto) | `infra/lock.py` |
 | Retry anti-bot do TikTok | só `EmptyResponseException` é retried: `2**attempt + jitter(0..2 s)`, máx. 5 tentativas → `blocked` no fim | `infra/collectors/tiktok.py` |
 | Fail-fast de `auth_expired` | token ausente/expirado falha na hora, **sem retry cego** | coletores TikTok/Instagram |
 | Redação de tokens | as mensagens de erro de `collect`/`ingest`/`score`/`status` passam por `redact` antes de imprimir — segredo não vaza em log/stdout | `cli/main.py` |

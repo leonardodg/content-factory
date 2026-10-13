@@ -20,8 +20,11 @@
   mesmo ele estando na lista de `platforms` do segmento. O compose do
   experimento (abaixo) zera essa variável por worker pra cair no fallback
   real (`segment.platforms`, que inclui tiktok).
-- **Achado de arquitetura**: o worker roda 1 único segmento por processo
-  (`COLLECT_SEGMENT`) e usa a fila default do `arq`. Rodar 3 cópias do
+- **Achado de arquitetura** (vale para as imagens **pré-concorrência** que
+  rodam este experimento — o código atual já é multi-segmento, sem
+  `COLLECT_SEGMENT`, ver [Operação](operacao.md)): o worker daqui roda 1
+  único segmento por processo (`COLLECT_SEGMENT`) e usa a fila default do
+  `arq`. Rodar 3 cópias do
   mesmo service sem separar faria elas competirem na mesma fila — o cron
   `unique=True` dispararia `research_job` só 1x no total, não 1x por
   segmento. `.devcontainer/docker-compose.experimento-7dias.yml` resolve
@@ -213,6 +216,25 @@ cf research stop --segment resina-artesanal
 docker compose -f .devcontainer/docker-compose.yml \
   -f .devcontainer/docker-compose.experimento-7dias.yml \
   --profile experimento stop worker-velas worker-sabonetes worker-resina
+```
+
+## Pós-2026-10-19 — troca para worker único multi-segmento
+
+> NÃO aplicar antes de 2026-10-19 (fim do experimento). Ver Task 1 (guard de
+> arranque) e `docs/HANDOFF.md`.
+
+```bash
+# 1. Exportar dados do experimento ANTES de parar os containers
+# 2. Parar os 3 workers legados
+docker compose -f .devcontainer/docker-compose.yml \
+  -f .devcontainer/docker-compose.experimento-7dias.yml \
+  --profile experimento stop worker-velas worker-sabonetes worker-resina
+# 3. Subir o worker único
+docker compose -f .devcontainer/docker-compose.yml \
+  -f .devcontainer/docker-compose.multi-segmento.yml \
+  --profile worker-multi up -d --build worker
+# 4. Conferir: guard da Task 1 não dispara (sem COLLECT_SEGMENT),
+#    os 3 crons registram e active_segments() devolve os 3 segmentos.
 ```
 
 ## Fase 4 — avaliar o ranking (depois de acumular dados)

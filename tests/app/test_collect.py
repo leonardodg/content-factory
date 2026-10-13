@@ -1,10 +1,29 @@
+import asyncio
+from collections.abc import Sequence
+from datetime import UTC, datetime, timedelta
 from typing import ClassVar
 
-from tests.stubs import FakeCollector, FakeLimiter, FakeLock, FakeRepos
+import pytest
+from tests.stubs import (
+    ConcurrencyTracker,
+    FakeCollector,
+    FakeLimiter,
+    FakeLock,
+    FakeRepos,
+    FakeVideos,
+    TrackedCollector,
+)
 
-from content_factory.app.collect import CollectDeps, collect
-from content_factory.domain.errors import CollectorError
-from content_factory.domain.models import CandidateVideo, SegmentConfig
+from content_factory.app.collect import (
+    CollectDeps,
+    CollectOutcome,
+    DiscoverResult,
+    _discover_one,  # pyright: ignore[reportPrivateUsage]
+    collect,
+)
+from content_factory.app.ports import Collector, VideoRepository
+from content_factory.domain.errors import CollectorError, RateLimited
+from content_factory.domain.models import CandidateVideo, SegmentConfig, UpsertStats, VideoSnapshot
 
 
 class _FakeGatedCollector:
@@ -185,6 +204,180 @@ async def test_collect_exposes_gate_hits_even_when_discover_fails() -> None:
     assert out.counts["instagram_gate_hits"] == 1
 
 
+class _FakeClock:
+    """Relógio manual: só avança quando o teste manda (discover/upsert)."""
+
+    def __init__(self) -> None:
+        self._now = datetime(2026, 10, 13, 12, 0, tzinfo=UTC)
+
+    def __call__(self) -> datetime:
+        return self._now
+
+    def advance_ms(self, ms: int) -> None:
+        self._now += timedelta(milliseconds=ms)
+
+
+def _TimedCollector(platform: str, clock: _FakeClock, discover_ms: int, n: int = 2) -> Collector:
+    """Collector que consome `discover_ms` do relógio fake durante discover()."""
+    name = platform
+
+    class Impl:
+        platform: ClassVar[str] = name
+
+        async def discover(self, segment: SegmentConfig, limit: int) -> list[CandidateVideo]:
+            clock.advance_ms(discover_ms)
+            return [
+                CandidateVideo(
+                    platform=name,
+                    platform_video_id=f"{name}-{i}",
+                    url=f"https://example.invalid/v/{i}",
+                    creator_handle="stub",
+                    title=f"video {i}",
+                )
+                for i in range(n)
+            ]
+
+    return Impl()
+
+
+def _TimedVideos(clock: _FakeClock, persist_ms: int) -> VideoRepository:
+    """Videos que consome `persist_ms` do relógio fake durante upsert_candidates()."""
+
+    class Impl:
+        async def upsert_candidates(
+            self, segment_id: int, source: str, candidates: Sequence[CandidateVideo]
+        ) -> UpsertStats:
+            clock.advance_ms(persist_ms)
+            return UpsertStats(inserted=len(candidates))
+
+        async def latest_for_segment(self, segment_id: int) -> list[VideoSnapshot]:
+            return []
+
+    return Impl()
+
+
+async def test_collect_records_discover_and_persist_ms_separately() -> None:
+    """Task 4 (baseline): tempo de rede vs tempo de persistência separados.
+
+    Clock fake avança 150ms em discover() e 40ms em upsert_candidates() —
+    o CollectRun gravado precisa carregar os dois campos separados, não um total.
+    """
+    clock = _FakeClock()
+    repos = FakeRepos()
+    deps = CollectDeps(
+        collectors=[_TimedCollector("youtube", clock, discover_ms=150)],
+        videos=_TimedVideos(clock, persist_ms=40),
+        segments=repos.segments,
+        runs=repos.runs,
+        limiter=FakeLimiter(),
+        lock=FakeLock(),
+        clock=clock,
+    )
+    out = await collect("candles", ["youtube"], limit=5, deps=deps)
+    assert out.ok is True
+    run = out.runs[0]
+    assert run.discover_ms == 150
+    assert run.persist_ms == 40
+
+
+async def test_collect_failure_still_records_discover_ms_without_persist_ms() -> None:
+    """discover() que levanta registra o custo da fase de rede; sem persistência."""
+    clock = _FakeClock()
+    repos = FakeRepos()
+    deps = CollectDeps(
+        collectors=[
+            _TimedCollector("youtube", clock, discover_ms=150),
+            FakeCollector("tiktok", fail=CollectorError("blocked", "tiktok")),
+        ],
+        videos=_TimedVideos(clock, persist_ms=40),
+        segments=repos.segments,
+        runs=repos.runs,
+        limiter=FakeLimiter(),
+        lock=FakeLock(),
+        clock=clock,
+    )
+    out = await collect("candles", ["youtube", "tiktok"], limit=5, deps=deps)
+    assert out.ok is False
+    run_ok = next(r for r in out.runs if r.collector == "youtube")
+    assert (run_ok.discover_ms, run_ok.persist_ms) == (150, 40)
+    run_bad = next(r for r in out.runs if r.collector == "tiktok")
+    assert run_bad.status == "blocked"
+    assert run_bad.persist_ms is None
+
+
+async def test_discover_one_returns_result_with_discover_ms() -> None:
+    """Task 6 (fronteira de rede): DiscoverResult carrega discover_ms e delta.
+
+    Escolha de temporização documentada: discover_ms é medido na fase de rede
+    (dentro de _discover_one) e transportado no DiscoverResult; started_at /
+    finished_at e persist_ms são medidos na fase de persistência de collect().
+    Com execução sequencial e clock fake que só avança em discover/upsert,
+    os valores são idênticos aos do caminho antigo entrelaçado.
+    """
+    clock = _FakeClock()
+    repos = FakeRepos()
+    segment = await repos.segments.get_by_slug("candles")
+    deps = CollectDeps(
+        collectors=[],
+        videos=repos.videos,
+        segments=repos.segments,
+        runs=repos.runs,
+        limiter=FakeLimiter(),
+        lock=FakeLock(),
+        clock=clock,
+    )
+    result = await _discover_one(
+        _TimedCollector("youtube", clock, discover_ms=150), segment, 5, deps
+    )
+    assert isinstance(result, DiscoverResult)
+    assert result.platform == "youtube"
+    assert result.found is not None and len(result.found) == 2
+    assert result.error is None
+    assert result.discover_ms == 150
+    assert result.gate_hits_delta == 0
+
+
+async def test_discover_one_captures_collector_error_without_losing_gate_delta() -> None:
+    """CollectorError na rede vira DiscoverResult com erro (não levanta).
+
+    Limiter bloqueado → discover_ms None (fase de rede nem abriu).
+    discover() que falha após gate_hits → discover_ms medido até o erro.
+    """
+    clock = _FakeClock()
+    repos = FakeRepos()
+    segment = await repos.segments.get_by_slug("candles")
+
+    blocked_deps = CollectDeps(
+        collectors=[],
+        videos=repos.videos,
+        segments=repos.segments,
+        runs=repos.runs,
+        limiter=FakeLimiter(fail=CollectorError("blocked", "youtube")),
+        lock=FakeLock(),
+        clock=clock,
+    )
+    blocked = await _discover_one(FakeCollector("youtube"), segment, 5, blocked_deps)
+    assert blocked.found is None
+    assert blocked.error is not None and blocked.error.code == "blocked"
+    assert blocked.discover_ms is None
+    assert blocked.gate_hits_delta == 0
+
+    net_deps = CollectDeps(
+        collectors=[],
+        videos=repos.videos,
+        segments=repos.segments,
+        runs=repos.runs,
+        limiter=FakeLimiter(),
+        lock=FakeLock(),
+        clock=clock,
+    )
+    failed = await _discover_one(_FakeGatedThenFailingCollector(), segment, 5, net_deps)
+    assert failed.found is None
+    assert failed.error is not None and failed.error.code == "failed"
+    assert failed.gate_hits_delta == 1
+    assert failed.discover_ms == 0
+
+
 async def test_collect_gate_hits_is_per_run_delta_not_cumulative() -> None:
     """Important #2: collector é singleton no registry — self.gate_hits
 
@@ -210,3 +403,180 @@ async def test_collect_gate_hits_is_per_run_delta_not_cumulative() -> None:
     second = await collect("candles", ["instagram"], limit=5, deps=deps)
     assert second.counts["instagram_gate_hits"] == 2
     assert collector.gate_hits == 4  # atributo do singleton continua acumulando
+
+
+async def test_collect_persist_order_follows_collectors_not_completion() -> None:
+    """Task 7: persistência determinística na ordem de deps.collectors.
+
+    O primeiro collector é lento (termina por último na rede); runs e
+    upserts precisam sair na ordem declarada — diffs de dados estáveis.
+    """
+    tracker = ConcurrencyTracker()
+    collectors: list[Collector] = [
+        TrackedCollector("slow", tracker, delay=0.05),
+        TrackedCollector("fast1", tracker),
+        TrackedCollector("fast2", tracker),
+    ]
+    videos = FakeVideos()
+    repos = FakeRepos()
+    deps = CollectDeps(
+        collectors=collectors,
+        videos=videos,
+        segments=repos.segments,
+        runs=repos.runs,
+        limiter=FakeLimiter(),
+        lock=FakeLock(),
+    )
+    out = await collect("candles", ["slow", "fast1", "fast2"], limit=5, deps=deps)
+    assert out.ok is True
+    assert [r.collector for r in out.runs] == ["slow", "fast1", "fast2"]
+    assert [u[1] for u in videos.upserts] == ["slow", "fast1", "fast2"]
+
+
+async def test_collect_partial_failure_matches_sequential_path() -> None:
+    """Task 7: falha parcial sob concorrência == caminho sequencial.
+
+    Mesmos collectors, 1 plataforma com CollectorError: counts e runs
+    (status/error_code/failed) idênticos com max_concurrent_discoveries=2
+    e =1 (série via semáforo — o caminho sequencial).
+    """
+
+    async def _run(max_concurrency: int) -> CollectOutcome:
+        repos = FakeRepos()
+        deps = CollectDeps(
+            collectors=[
+                FakeCollector("youtube", n=3),
+                FakeCollector("tiktok", fail=CollectorError("blocked", "tiktok")),
+            ],
+            videos=repos.videos,
+            segments=repos.segments,
+            runs=repos.runs,
+            limiter=FakeLimiter(),
+            lock=FakeLock(),
+            max_concurrent_discoveries=max_concurrency,
+        )
+        return await collect("candles", ["youtube", "tiktok"], limit=10, deps=deps)
+
+    def _sig(out: CollectOutcome) -> list[tuple[str, str | None, str | None, int]]:
+        return [(r.collector, r.status, r.error_code, r.failed) for r in out.runs]
+
+    concurrent = await _run(2)
+    sequential = await _run(1)
+    assert concurrent.ok is False and concurrent.partial is True
+    assert concurrent.counts == sequential.counts
+    assert _sig(concurrent) == _sig(sequential)
+
+
+async def test_collect_respects_max_concurrent_discoveries() -> None:
+    """Task 7: pico de discover() simultâneos == 2 (nem série, nem livre).
+
+    3 plataformas com I/O de 50ms: o semáforo deixa 2 sobrepostas (prova
+    que há concorrência real — falharia com pico 1 no código sequencial)
+    e nunca 3.
+    """
+    tracker = ConcurrencyTracker()
+    collectors: list[Collector] = [TrackedCollector(f"p{i}", tracker, delay=0.05) for i in range(3)]
+    repos = FakeRepos()
+    deps = CollectDeps(
+        collectors=collectors,
+        videos=repos.videos,
+        segments=repos.segments,
+        runs=repos.runs,
+        limiter=FakeLimiter(),
+        lock=FakeLock(),
+    )
+    out = await collect("candles", ["p0", "p1", "p2"], limit=5, deps=deps)
+    assert out.ok is True
+    assert tracker.peak == 2
+
+
+class _BoomCollector:
+    """Exceção fora do contrato: não é CollectorError, precisa propagar."""
+
+    platform: ClassVar[str] = "youtube"
+
+    async def discover(self, segment: SegmentConfig, limit: int) -> list[CandidateVideo]:
+        raise ValueError("boom")
+
+
+async def test_collect_non_collector_error_propagates_and_releases_lock() -> None:
+    """Task 7: ValueError numa plataforma propaga (cancela as irmãs).
+
+    Nada persiste (edge da Task 6: aborta antes da fase de persistência),
+    lock liberado, nenhuma task pendente no loop.
+    """
+    tracker = ConcurrencyTracker()
+    collectors: list[Collector] = [
+        _BoomCollector(),
+        TrackedCollector("tiktok", tracker, delay=30.0),
+    ]
+    videos = FakeVideos()
+    repos = FakeRepos()
+    lock = FakeLock()
+    deps = CollectDeps(
+        collectors=collectors,
+        videos=videos,
+        segments=repos.segments,
+        runs=repos.runs,
+        limiter=FakeLimiter(),
+        lock=lock,
+    )
+    before = {id(t) for t in asyncio.all_tasks()}
+    with pytest.raises(ValueError, match="boom"):
+        await collect("candles", ["youtube", "tiktok"], limit=5, deps=deps)
+    assert lock.released == ["collect:candles"]
+    assert videos.upserts == []
+    lingering = [t for t in asyncio.all_tasks() if id(t) not in before and not t.done()]
+    assert lingering == []
+
+
+async def test_collect_external_cancel_releases_lock() -> None:
+    """Task 7: cancelamento do pai cancela os filhos; finally libera o lock."""
+    tracker = ConcurrencyTracker()
+    collectors: list[Collector] = [
+        TrackedCollector("youtube", tracker, delay=30.0),
+        TrackedCollector("tiktok", tracker, delay=30.0),
+    ]
+    repos = FakeRepos()
+    lock = FakeLock()
+    deps = CollectDeps(
+        collectors=collectors,
+        videos=repos.videos,
+        segments=repos.segments,
+        runs=repos.runs,
+        limiter=FakeLimiter(),
+        lock=lock,
+    )
+    task = asyncio.create_task(collect("candles", ["youtube", "tiktok"], limit=5, deps=deps))
+    await asyncio.sleep(0.05)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert lock.released == ["collect:candles"]
+    assert tracker.current == 0
+
+
+async def test_collect_rate_limited_is_failed_without_api_call() -> None:
+    """Task 7: RateLimited É CollectorError → capturado na fronteira da task.
+
+    Janela estourada continua virando run failed (sem bater na API:
+    discover() nunca é chamado).
+    """
+    tracker = ConcurrencyTracker()
+    collectors: list[Collector] = [TrackedCollector("youtube", tracker)]
+    repos = FakeRepos()
+    deps = CollectDeps(
+        collectors=collectors,
+        videos=repos.videos,
+        segments=repos.segments,
+        runs=repos.runs,
+        limiter=FakeLimiter(fail=RateLimited("youtube")),
+        lock=FakeLock(),
+    )
+    out = await collect("candles", ["youtube"], limit=5, deps=deps)
+    assert out.ok is False and out.partial is False
+    assert out.counts["failed"] == 1
+    assert tracker.entered == []
+    run = out.runs[0]
+    assert run.status == "failed" and run.error_code == "rate_limited"
+    assert run.failed == 1

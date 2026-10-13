@@ -96,3 +96,43 @@ async def test_success_resets_failure_counter() -> None:
     await limiter.record_failure("tiktok")
     assert client.counters["cf:cb:tiktok:fails"] == 1
     assert "cf:cb:tiktok:blocked" not in client.values  # 1ª falha pós-sucesso nao bloqueia
+
+
+async def test_two_limiters_on_same_client_share_window() -> None:
+    """Mesmo Redis → mesma janela cf:rl:* (documenta o modo compartilhado)."""
+    client = FakeRedis()
+
+    async def no_sleep(seconds: float) -> None:
+        pass
+
+    windows = {"youtube": Window(limit=2, period_s=86_400)}
+    first = RedisRateLimiter(client, windows=windows, sleep=no_sleep)
+    second = RedisRateLimiter(client, windows=windows, sleep=no_sleep)
+    await first.acquire("youtube")
+    await first.acquire("youtube")
+    with pytest.raises(RateLimited):
+        await second.acquire("youtube")  # cota consumida pelo primeiro
+
+
+async def test_two_limiters_on_same_client_share_breaker() -> None:
+    """Mesmo Redis → breaker aberto por um protege o outro."""
+    client = FakeRedis()
+    first = RedisRateLimiter(client)
+    second = RedisRateLimiter(client)
+    for _ in range(3):
+        await first.record_failure("tiktok")
+    with pytest.raises(CollectorError) as excinfo:
+        await second.acquire("tiktok")
+    assert excinfo.value.code == "blocked"
+
+
+async def test_two_limiters_on_distinct_clients_do_not_share() -> None:
+    """Redises distintos → janelas e breakers isolados (modo de falha: cota 3x)."""
+    windows = {"youtube": Window(limit=1, period_s=86_400)}
+    first = RedisRateLimiter(FakeRedis(), windows=windows)
+    second = RedisRateLimiter(FakeRedis(), windows=windows)
+    await first.acquire("youtube")
+    await second.acquire("youtube")  # não vê a cota do primeiro: OK
+    for _ in range(3):
+        await first.record_failure("tiktok")
+    await second.acquire("tiktok")  # breaker do primeiro não protege: OK
