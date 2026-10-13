@@ -251,16 +251,18 @@ class ResearchCampaignRow(Base):
 
 
 class TrendObservationRow(Base):
-    """Série temporal append-only do Google Trends — separada de keyword_signals.
-
-    Sem unique constraint: o mesmo (segment_id, keyword, period_start) pode
-    legitimamente ser regravado pelo pytrends numa reexecução (decisão
-    ADR-0005 / plano Fase F3 — deduplicar na leitura se necessário).
-    """
+    """Série temporal do Google Trends — upsert por período (Fase H: mesmo
+    período medido de novo atualiza a observação, não duplica)."""
 
     __tablename__ = "trend_observations"
     __table_args__ = (
-        Index("ix_trend_obs_segment_keyword_period", "segment_id", "keyword", "period_start"),
+        UniqueConstraint(
+            "segment_id",
+            "keyword",
+            "period_start",
+            "period_granularity",
+            name="uq_trend_observation_period",
+        ),
     )
     id: Mapped[int] = mapped_column(primary_key=True)
     segment_id: Mapped[int] = mapped_column(ForeignKey("segments.id"))

@@ -391,35 +391,39 @@ class ResearchCampaignRepositoryImpl(ResearchCampaignRepository):
 
 
 class TrendObservationRepositoryImpl(TrendObservationRepository):
-    """Série temporal append-only — insert simples, sem ON CONFLICT.
-
-    Ao contrário de KeywordSignalRepositoryImpl (que faz upsert por
-    (segment_id, keyword, source)), aqui o mesmo periodo pode ser regravado
-    legitimamente pelo pytrends numa reexecução — o histórico é a soma das
-    observações, não o estado corrente. Deduplicar na leitura/Fase G se
-    necessário.
-    """
+    """Upsert por (segment_id, keyword, period_start, period_granularity) —
+    Fase H: mesmo período regravado atualiza `interest`/`collected_at`,
+    não duplica a linha (ver ADR-0005 revisado)."""
 
     def __init__(self, session: AsyncSession) -> None:
         self._s = session
 
     async def record_many(self, segment_id: int, points: Sequence[TrendPoint]) -> int:
         for p in points:
-            self._s.add(
-                TrendObservationRow(
-                    segment_id=segment_id,
-                    keyword=p.keyword,
-                    period_start=p.period_start,
-                    period_granularity=p.period_granularity,
-                    interest=p.interest,
-                )
+            stmt = pg_insert(TrendObservationRow).values(
+                segment_id=segment_id,
+                keyword=p.keyword,
+                period_start=p.period_start,
+                period_granularity=p.period_granularity,
+                interest=p.interest,
+                collected_at=datetime.now(UTC),
             )
+            stmt = stmt.on_conflict_do_update(
+                index_elements=["segment_id", "keyword", "period_start", "period_granularity"],
+                set_={
+                    "interest": stmt.excluded.interest,
+                    "collected_at": stmt.excluded.collected_at,
+                },
+            )
+            await self._s.execute(stmt)
         await self._s.flush()
         return len(points)
 
     async def history_for_keyword(
         self, segment_id: int, keyword: str, limit: int
     ) -> list[TrendPoint]:
+        # com a unique constraint do Passo 6.1 nunca mais devolve o mesmo
+        # período 2x
         stmt = (
             select(TrendObservationRow)
             .where(

@@ -14,6 +14,7 @@ from content_factory.domain.models import (
     KeywordSignal,
     ScoreResult,
     SegmentConfig,
+    TrendPoint,
 )
 from content_factory.infra.db.orm import (
     CollectRunRow,
@@ -28,6 +29,7 @@ from content_factory.infra.db.repositories import (
     ResearchCampaignRepositoryImpl,
     ScoreRepositoryImpl,
     SegmentRepositoryImpl,
+    TrendObservationRepositoryImpl,
     VideoRepositoryImpl,
 )
 from tests.conftest import requires_infra
@@ -768,4 +770,44 @@ async def test_upsert_candidates_preserves_metadata_when_new_value_is_empty() ->
 
         row = (await s.execute(select(VideoRow).where(VideoRow.id == vid))).scalar_one()
         assert row.description == "descricao real"  # não foi apagada
+    await engine.dispose()
+
+
+@requires_infra
+async def test_trend_observation_record_many_upserts_same_period() -> None:
+    """Reexecutar o ciclo de pesquisa na mesma semana atualiza a observação, não duplica.
+
+    Sem isso, history_for_keyword(limit=N) conta o mesmo período 2x e
+    infesta o histórico com a mesma medição repetida — distorce qualquer
+    cálculo de inclinação/crescimento do interesse pela keyword.
+    """
+    engine = create_async_engine(os.environ["TEST_DATABASE_URL"])
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    async with factory() as s:
+        await s.rollback()
+        seg = await SegmentRepositoryImpl(s).upsert(
+            SegmentConfig(
+                slug=f"teste-trend-{uuid4().hex[:8]}",
+                name="Teste trend",
+                platforms=["youtube"],
+                keywords=["k"],
+            )
+        )
+        repo = TrendObservationRepositoryImpl(s)
+        period = datetime(2026, 10, 1, tzinfo=UTC)
+        point = TrendPoint(
+            keyword="vela aromatica",
+            period_start=period,
+            period_granularity="week",
+            interest=40.0,
+        )
+        await repo.record_many(seg.id, [point])
+        # pytrends reconsultado no mesmo período, interesse mudou
+        point_atualizado = point.model_copy(update={"interest": 65.0})
+        await repo.record_many(seg.id, [point_atualizado])
+        await s.commit()
+
+        history = await repo.history_for_keyword(seg.id, "vela aromatica", limit=10)
+        assert len(history) == 1  # não duplicou
+        assert history[0].interest == 65.0  # valor mais recente venceu
     await engine.dispose()
