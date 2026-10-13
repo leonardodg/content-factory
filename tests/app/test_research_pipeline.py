@@ -370,3 +370,43 @@ async def test_run_research_cycle_records_trend_observations() -> None:
     assert len(trend_obs.recorded) == 1
     assert trend_obs.recorded[0].keyword == "vela relacionada"
     assert trend_obs.recorded[0].interest == 50.0
+
+
+class _FakeGatedSocial:
+    """Incrementa gate_hits durante discover_by_keywords (como instagram.py
+    faz ao cair no fallback do gate #10) — mesmo padrão de
+    `tests/app/test_collect.py::_FakeGatedCollector`, aqui pro caminho de
+    pesquisa por keyword, que até agora não lia esse contador."""
+
+    platform: ClassVar[str] = "instagram"
+
+    def __init__(self) -> None:
+        self.gate_hits = 0
+
+    async def discover_by_keywords(
+        self, keywords: list[str], hashtags: list[str], depth: int
+    ) -> list[CandidateVideo]:
+        self.gate_hits += 2
+        return []
+
+
+@pytest.mark.asyncio
+async def test_run_research_cycle_exposes_gate_hits_counter() -> None:
+    """Sem isso, o envelope da pesquisa por keyword não distingue busca
+    ampla por hashtag do fallback de conta própria (gate #10) do Instagram."""
+    repos = FakeRepos()
+    deps = ResearchDeps(
+        web=_FakeWeb(),
+        trends=_FakeTrends(),
+        socials={"instagram": _FakeGatedSocial()},
+        signals=_FakeSignalRepo(),
+        trend_observations=FakeTrendObservations(),
+        segments=_FakeSegmentsWithKeywords(),
+        videos=repos.videos,
+        runs=repos.runs,
+        lock=FakeLock(),
+        limiter=FakeLimiter(),
+        guard=FanoutGuard(DepthConfig()),
+    )
+    out = await run_research_cycle("candles", DepthConfig(), deps)
+    assert out.counts["instagram_gate_hits"] == 2

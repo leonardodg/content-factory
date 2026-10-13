@@ -219,6 +219,7 @@ async def test_run_research_job_runs_cycle_with_active_campaign(
 
         class _Out:
             ok = True
+            partial = False
             counts: ClassVar[dict[str, object]] = {"web_found": 3}
 
         return _Out()
@@ -239,7 +240,7 @@ async def test_run_research_job_runs_cycle_with_active_campaign(
         {"research_deps": deps, "campaigns_deps": campaigns, "app_deps": _AppDeps()}
     )
     assert calls == ["candles"]
-    assert out == {"ok": True, "web_found": 3}
+    assert out == {"ok": True, "partial": False, "web_found": 3}
     assert committed == ["commit"]
 
 

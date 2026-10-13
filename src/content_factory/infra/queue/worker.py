@@ -87,7 +87,7 @@ async def run_research_job(ctx: dict[str, Any]) -> dict[str, Any]:
         return {"ok": True, "skipped": "sem campanha ativa"}
     out = await _research_impl(cfg["segment"], DepthConfig(), deps)
     await ctx["app_deps"].commit()
-    return {"ok": out.ok, **out.counts}
+    return {"ok": out.ok, "partial": out.partial, **out.counts}
 
 
 @dataclass
