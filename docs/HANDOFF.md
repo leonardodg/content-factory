@@ -6,17 +6,20 @@
 ## 🔄 EM ANDAMENTO
 
 _(nenhuma branch de feature aberta — roadmap A→C→D→E→B+web-suggest+F+G
-PARCIAL COMPLETO. Pipeline com métricas persistidas, scoring que distingue
-ausência de zero, cobertura auditável. Fase G parcial: estrutural pronto;
-velocidade por diff e recalibração de pesos dependem de dados reais.)_
+PARCIAL COMPLETO + bugfix pós-code-review. Pipeline com métricas
+persistidas, scoring que distingue ausência de zero, cobertura auditável.
+Fase G parcial: estrutural pronto; velocidade por diff e recalibração de
+pesos dependem de dados reais. Próximo passo sugerido: sessão de design
+da Fase I (contrato `insta_kb`) — ver roadmap, ainda não iniciada.)_
 
 ## ✅ CONCLUÍDO
 
 ### Fase G (parcial) — Scoring v2: None vs Zero + cobertura (2026-10-12)
 
-Branch `feat/fase-g-scoring-v2` (2 commits, 193 passed + pyright 0).
-Escopo estrutural apenas — velocidade por diff entre snapshots e
-recalibração de pesos ficam para depois de dados reais em `video_metrics`.
+Branch `feat/fase-g-scoring-v2` (2 commits, 193 passed + pyright 0) +
+1 commit de bugfix pós-code-review. Escopo estrutural apenas — velocidade
+por diff entre snapshots e recalibração de pesos ficam para depois de
+dados reais em `video_metrics`. Plano: `docs/ai-plans/2026-10-12-content-factory-fase-g-scoring-v2.md`.
 
 - [x] **G1** (`9e5a8dd`): `VideoMetrics` campos mudam de `int = 0` para
   `int | None = None`. `_snapshot()` para de colapsar `None` em `0`.
@@ -25,6 +28,16 @@ recalibração de pesos ficam para depois de dados reais em `video_metrics`.
   métrica não é penalizado como desempenho zero.
 - [x] **G2** (`e3ea4a0`): `ScoreResult.metrics_available: list[str]` —
   quais métricas o snapshot tinha de verdade (auditável por plataforma).
+- [x] **G4 — bugfix pós-code-review** (2 achados, 1 crítico): (1)
+  `video_scores.performance`/`engagement` continuavam `NOT NULL` no
+  banco — `cf score` falhava com `NotNullViolation` para todo vídeo sem
+  métrica capturada ainda (reproduzido e confirmado contra Postgres real
+  antes do fix; migração `0005` + `VideoScoreRow` corrigidos). (2)
+  `engagement_rate` tratava "nenhuma submétrica de engajamento
+  reportada" como `0.0` em vez de `None` — corrigido só para o caso
+  simétrico e não-especulativo (todas ausentes); renormalização por peso
+  para cobertura parcial foi avaliada e rejeitada (infla ~3x sem
+  calibração real — ver plano Fase G, Task G4).
 
 ### Fase F — Integridade do pipeline (2026-10-12)
 

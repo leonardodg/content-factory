@@ -95,6 +95,16 @@ Plano: `docs/ai-plans/2026-10-12-content-factory-fase-g-scoring-v2.md`.
 componente, e vídeos sem uma métrica (ex.: Instagram sem views) não são
 penalizados como se tivessem desempenho zero.
 
+**Code review pós-G (2026-10-12):** achou e corrigiu 1 bug crítico
+(`video_scores.performance`/`engagement` NOT NULL vs `ScoreResult` com
+`None` — `cf score` falhava pra todo vídeo sem métrica capturada,
+reproduzido contra Postgres real) + 1 gap real de menor severidade
+(`engagement_rate` não tratava "nenhuma submétrica" como ausente). Ver
+`docs/ai-plans/2026-10-12-content-factory-fase-g-scoring-v2.md` Task G4.
+As duas pendências marcadas acima (velocidade por diff, separar
+performance/momentum) continuam de pé — não fazem parte do que foi
+corrigido.
+
 ### Fase H — Diversidade de descoberta (P1)
 
 Modos de descoberta complementares (recentes/emergentes), estrutura de
@@ -103,12 +113,35 @@ cobertura/limitação por plataforma no envelope operacional. Plano a
 escrever quando a Fase G já estiver medindo momentum (a descoberta
 "emergente" depende de ter crescimento calculável).
 
-### Fase I — Contrato com `insta_kb` (P1, decisão arquitetural)
+### Fase I — Contrato com `insta_kb` (P1, decisão arquitetural) — ⏳ PRÓXIMO PASSO SUGERIDO, NÃO INICIADA
 
 Não é uma tarefa de código isolada — precisa de uma sessão de
 brainstorming/design cruzando os dois repositórios antes de virar plano
 de execução (ids compartilhados, quem é dono de qual dado, como o
 content-factory consulta estado de processamento sem duplicar fila/LLM).
+
+**Perguntas que essa sessão precisa responder antes de qualquer código:**
+- Quem é dono do quê: `content-factory` descobre/rankeia, `insta_kb`
+  transcreve/resume — mas quem decide QUAL vídeo entra na fila do
+  `insta_kb`? É push (content-factory empurra) ou pull (insta_kb consulta
+  os top-ranked)?
+- Identificador compartilhado: `content-factory` usa `(platform,
+  platform_video_id)` como chave natural (`videos` table) — o `insta_kb`
+  usa o mesmo par ou tem seu próprio id? Precisa de uma tabela de mapa ou
+  o id natural basta?
+- Onde mora o estado "já processado por X"? Hoje não existe nenhuma
+  coluna/tabela em `content-factory` pra isso — precisa decidir se é uma
+  FK pra uma tabela do `insta_kb` consultada via API, ou um campo local
+  tipo `processing_status` espelhado por sync/webhook.
+- O `content-factory` lê resultado do `insta_kb` (transcrição/resumo) via
+  API síncrona, fila assíncrona, ou replica/copia os campos relevantes?
+  Cada opção tem trade-off de acoplamento vs. latência vs. duplicação.
+- `CreativePatternRow`/`IdeaRow` (Fase J/K) dependem do resultado do
+  `insta_kb` — a sessão de design precisa decidir o formato desse
+  contrato antes de qualquer schema novo nessas tabelas.
+
+Essa sessão **não é esta conversa** — fica marcada aqui como ponto de
+entrada para quando você quiser retomá-la com contexto fresco.
 
 ### Fase J — Análise criativa estruturada (P1, maior lacuna funcional)
 

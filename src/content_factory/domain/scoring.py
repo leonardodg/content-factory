@@ -12,11 +12,22 @@ WEIGHTS = {
 
 
 def engagement_rate(m: VideoMetrics) -> float | None:
-    """Taxa de engajamento ponderada. `None` se views ausente (não zero)."""
+    """Taxa de engajamento ponderada. `None` se views OU toda submétrica ausente.
+
+    Cobertura parcial (ex.: YouTube não reporta shares/saves) soma só o que
+    está disponível, SEM extrapolar pelo peso das submétricas ausentes —
+    extrapolar mudaria a escala do número (ver REVISÃO: renormalizar por
+    peso 1/2/3/4 infla ~3x um vídeo com só likes/comments conhecidos) e
+    exigiria calibração com dados reais, fora de escopo desta fase
+    (roadmap Fase G: "recalibração de pesos" pendente, não no escuro).
+    """
     if m.views is None:
         return None  # métrica ausente — não é zero
     if m.views <= 0:
         return 0.0
+    submetrics = (m.likes, m.comments, m.shares, m.saves)
+    if all(v is None for v in submetrics):
+        return None  # nenhum sinal de engajamento reportado — não é zero
     weighted = (m.likes or 0) * 1 + (m.comments or 0) * 2 + (m.shares or 0) * 3 + (m.saves or 0) * 4
     return round(weighted / m.views * 100, 2)
 

@@ -68,6 +68,30 @@ def test_engagement_rate_zero_views_still_zero() -> None:
     assert engagement_rate(m) == 0.0
 
 
+def test_engagement_rate_views_known_but_no_submetric_reported_returns_none() -> None:
+    """views conhecido mas likes/comments/shares/saves todos ausentes → None, não 0.0.
+
+    Simétrico ao caso de views=None: sem NENHUM sinal de engajamento
+    reportado, 0.0 mentiria "engajamento zero" quando a verdade é
+    "plataforma não informou nenhuma submétrica de engajamento".
+    """
+    from content_factory.domain.models import VideoMetrics
+
+    m = VideoMetrics(views=100_000, likes=None, comments=None, shares=None, saves=None)
+    assert engagement_rate(m) is None
+
+
+def test_engagement_rate_partial_submetrics_sums_only_available() -> None:
+    """Cobertura parcial (ex.: YouTube sem shares/saves): soma só o disponível,
+    sem extrapolar peso — extrapolar exigiria calibração com dados reais
+    (deliberadamente fora de escopo, ver roadmap Fase G)."""
+    from content_factory.domain.models import VideoMetrics
+
+    m = VideoMetrics(views=100_000, likes=5_000, comments=200, shares=None, saves=None)
+    # likes*1 + comments*2 = 5000 + 400 = 5400 / 100000 * 100
+    assert engagement_rate(m) == 5.4
+
+
 def test_viral_score_none_views_excludes_performance() -> None:
     """views=None → performance excluída da média (renormaliza pesos)."""
     from content_factory.domain.models import VideoMetrics

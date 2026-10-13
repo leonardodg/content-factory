@@ -244,6 +244,52 @@ async def test_score_upsert_appends_one_row_per_capture() -> None:
 
 
 @requires_infra
+async def test_score_upsert_accepts_none_performance_and_engagement() -> None:
+    """Fase G bugfix: performance/engagement None (métrica ausente) deve persistir.
+
+    video_scores.performance/engagement eram NOT NULL enquanto ScoreResult
+    passou a aceitar None — upsert() estourava NotNullViolation para todo
+    vídeo ainda sem captura em video_metrics (o caso normal entre a
+    descoberta e a primeira coleta de métricas).
+    """
+    engine = create_async_engine(os.environ["TEST_DATABASE_URL"])
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    async with factory() as s:
+        await s.rollback()
+        seg = await SegmentRepositoryImpl(s).upsert(
+            SegmentConfig(
+                slug=f"teste-score-none-{uuid4().hex[:8]}",
+                name="Teste score none",
+                platforms=["youtube"],
+                keywords=["k"],
+            )
+        )
+        c = candidate(6)
+        await VideoRepositoryImpl(s).upsert_candidates(seg.id, "youtube", [c])
+        vid = await video_id_of(s, c)
+        result = ScoreResult(
+            total=35.0,
+            performance=None,
+            velocity=20.0,
+            engagement=None,
+            relevance=0.0,
+            recency=50.0,
+            trend_decay="none",
+            metrics_available=[],
+        )
+        repo = ScoreRepositoryImpl(s)
+        await repo.upsert(vid, seg.id, result, datetime(2026, 10, 7, 12, 0, tzinfo=UTC))
+
+        row = (
+            await s.execute(select(VideoScoreRow).where(VideoScoreRow.video_id == vid))
+        ).scalar_one()
+        assert row.performance is None
+        assert row.engagement is None
+        assert row.viral_score == 35.0
+    await engine.dispose()
+
+
+@requires_infra
 async def test_score_partial_persists_healthy_rows_when_one_insert_fails(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
