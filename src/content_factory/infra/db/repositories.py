@@ -318,21 +318,24 @@ class ScoreSampleRepositoryImpl:
         self._s = session
 
     async def top_scored_for_segment(self, segment_id: int, limit: int) -> list[ScoreSampleRow]:
-        stmt = (
-            select(VideoScoreRow, VideoRow.url)
-            .join(VideoRow, VideoRow.id == VideoScoreRow.video_id)
+        # 1a passada: 1 linha por vídeo (DISTINCT ON — captura mais recente).
+        # 2a passada: ordena pelo viral_score e aplica o LIMIT em SQL — evita
+        # trazer todo o segmento pra memória só pra cortar em Python.
+        latest = (
+            select(VideoScoreRow)
             .where(VideoScoreRow.segment_id == segment_id)
             .ext(distinct_on(VideoScoreRow.video_id))
-            .order_by(
-                VideoScoreRow.video_id,
-                VideoScoreRow.computed_at.desc(),
-                VideoScoreRow.viral_score.desc(),
-            )
+            .order_by(VideoScoreRow.video_id, VideoScoreRow.computed_at.desc())
+            .subquery()
+        )
+        LatestScore = aliased(VideoScoreRow, latest)
+        stmt = (
+            select(LatestScore, VideoRow.url)
+            .join(VideoRow, VideoRow.id == LatestScore.video_id)
+            .order_by(LatestScore.viral_score.desc())
+            .limit(limit)
         )
         rows = (await self._s.execute(stmt)).all()
-        # ordena por viral_score desc e limita em Python: DISTINCT ON garante
-        # 1 linha/vídeo; o ORDER BY SQL do distinct_on é pelo partition key
-        rows = sorted(rows, key=lambda pair: pair[0].viral_score, reverse=True)[:limit]
         return [
             ScoreSampleRow(
                 video_id=score.video_id,
