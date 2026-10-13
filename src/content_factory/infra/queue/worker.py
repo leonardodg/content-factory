@@ -82,9 +82,33 @@ async def run_collect_job(ctx: dict[str, Any]) -> dict[str, Any]:
 
 
 async def run_score_job(ctx: dict[str, Any]) -> dict[str, Any]:
-    out = await _score_impl(ctx["score_deps"])
-    await ctx["app_deps"].commit()
-    return {"ok": out.ok, "scored": out.scored}
+    """Pontua todos os segmentos com campanha ativa — 1 commit por segmento.
+
+    `ScoreDeps` é barato de construir (sem I/O): monta 1 por segmento no
+    loop reaproveitando os MESMOS `videos`/`scores` (repositórios ligados
+    à sessão, não ao segmento). O `segment`/`keywords` do startup são
+    placeholder e nunca chegam aqui.
+    """
+    base: ScoreDeps = ctx["score_deps"]
+    campaigns: ResearchCampaignRepository = ctx["campaigns_deps"]
+    app_deps: AppDeps = ctx["app_deps"]
+    active = await campaigns.active_segments()
+    results: dict[str, Any] = {}
+    for segment in active:
+        deps = ScoreDeps(
+            videos=base.videos,
+            scores=base.scores,
+            segment=segment,
+            keywords=segment.keywords,
+            clock=base.clock,
+        )
+        out = await _score_impl(deps)
+        await app_deps.commit()
+        results[segment.slug] = {"ok": out.ok, "scored": out.scored}
+    return {
+        "ok": all(r["ok"] for r in results.values()) if results else True,
+        "segments": results,
+    }
 
 
 async def run_research_job(ctx: dict[str, Any]) -> dict[str, Any]:

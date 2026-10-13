@@ -4,6 +4,7 @@ from typing import Any, ClassVar
 import pytest
 
 from content_factory.app.research_pipeline import ResearchDeps
+from content_factory.app.score import ScoreDeps
 from content_factory.domain.errors import SegmentNotFound
 from content_factory.domain.fanout_guard import FanoutGuard
 from content_factory.domain.models import DepthConfig, ResearchCampaign, Segment
@@ -57,6 +58,25 @@ class _NoopAppDeps:
 def _collect_cfg(platforms: list[str], limit: int) -> dict[str, Any]:
     """`_load_settings` fake com tipos concretos (pyright strict)."""
     return {"platforms": platforms, "limit": limit}
+
+
+class _NoopScores:
+    async def upsert(
+        self, video_id: int, segment_id: int, result: object, computed_at: object
+    ) -> None:
+        pass
+
+
+def _score_deps_placeholder() -> ScoreDeps:
+    """ScoreDeps de startup: segment/keywords são placeholders (Task 5) —
+    run_score_job sempre substitui antes de chamar _score_impl."""
+    repos = FakeRepos()
+    return ScoreDeps(
+        videos=repos.videos,  # type: ignore[arg-type]
+        scores=_NoopScores(),  # type: ignore[arg-type]
+        segment=Segment(id=0, slug="_placeholder", name="_", platforms=[], keywords=[]),
+        keywords=[],
+    )
 
 
 async def test_run_collect_job_processes_all_active_segments(
@@ -128,6 +148,65 @@ async def test_run_collect_job_platforms_fall_back_to_segment(
         {"collect_deps": object(), "campaigns_deps": campaigns, "app_deps": _NoopAppDeps()}
     )
     assert calls == [["youtube", "tiktok"]]  # plataformas do segmento (stub)
+
+
+async def test_run_score_job_processes_all_active_segments(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """2 segmentos ativos → ScoreDeps reconstruído por segmento, 1 commit cada."""
+    calls: list[str] = []
+
+    async def fake_score(deps: ScoreDeps) -> object:
+        calls.append(deps.segment.slug)
+
+        class _Out:
+            ok = True
+            scored = 3
+
+        return _Out()
+
+    monkeypatch.setattr(w, "_score_impl", fake_score)
+    campaigns = _FakeCampaignsMultiSegment(slugs=["velas", "sabonetes"])
+    committed: list[str] = []
+
+    class _AppDeps:
+        async def commit(self) -> None:
+            committed.append("commit")
+
+    # base do startup: só videos/scores importam — segment/keywords são
+    # placeholder que o job substitui por segmento
+    base = _score_deps_placeholder()
+    out = await w.run_score_job(
+        {"score_deps": base, "campaigns_deps": campaigns, "app_deps": _AppDeps()}
+    )
+    assert calls == ["velas", "sabonetes"]
+    assert out == {
+        "ok": True,
+        "segments": {"velas": {"ok": True, "scored": 3}, "sabonetes": {"ok": True, "scored": 3}},
+    }
+    assert committed == ["commit", "commit"]
+
+
+async def test_run_score_job_noop_when_no_active_segment(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[object] = []
+
+    async def fake_score(deps: object) -> object:
+        calls.append(deps)
+        raise AssertionError("nao devia rodar")
+
+    monkeypatch.setattr(w, "_score_impl", fake_score)
+    campaigns = _FakeCampaignsMultiSegment(slugs=[])
+    out = await w.run_score_job(
+        {
+            "score_deps": _score_deps_placeholder(),
+            "campaigns_deps": campaigns,
+            "app_deps": _NoopAppDeps(),
+        }
+    )
+    assert out == {"ok": True, "segments": {}}
+    assert calls == []
 
 
 def test_cron_hours_parse() -> None:
