@@ -11,7 +11,7 @@ from content_factory.app.ports import (
     VideoRepository,
 )
 from content_factory.domain.errors import CollectorError
-from content_factory.domain.models import CollectRun
+from content_factory.domain.models import CandidateVideo, CollectRun, SegmentConfig
 
 
 def _utcnow() -> datetime:
@@ -37,11 +37,74 @@ class CollectDeps:
 
 
 @dataclass
+class DiscoverResult:
+    """Resultado da fase de rede para uma plataforma (Task 6).
+
+    Fronteira da concorrência (Task 7): só CollectorError é capturado aqui —
+    qualquer outra exceção propaga para o try/except por segmento do worker.
+    discover_ms é medido nesta fase e transportado; started_at/finished_at e
+    persist_ms são medidos na fase de persistência de collect().
+    """
+
+    platform: str
+    found: list[CandidateVideo] | None
+    error: CollectorError | None
+    gate_hits_delta: int
+    discover_ms: int | None
+
+
+@dataclass
 class CollectOutcome:
     ok: bool
     partial: bool
     counts: dict[str, int | bool]  # bool só no caso {"ja_em_execucao": True}
     runs: list[CollectRun] = field(default_factory=list[CollectRun])
+
+
+async def _discover_one(
+    collector: Collector, segment: SegmentConfig, limit: int, deps: CollectDeps
+) -> DiscoverResult:
+    """Fase de rede para uma plataforma: limiter.acquire + discover.
+
+    Devolve DiscoverResult em vez de levantar CollectorError — a fase de
+    persistência decide status/counts/runs. Outras exceções propagam.
+    gate_hits é lido como delta before/after porque o collector é singleton
+    no registry (self.gate_hits acumula entre runs).
+    """
+    gate_hits_before = getattr(collector, "gate_hits", 0)
+    try:
+        await deps.limiter.acquire(collector.platform)
+    except CollectorError as exc:
+        gate_hits_after = getattr(collector, "gate_hits", 0)
+        return DiscoverResult(
+            platform=collector.platform,
+            found=None,
+            error=exc,
+            gate_hits_delta=gate_hits_after - gate_hits_before,
+            discover_ms=None,
+        )
+    discover_start = deps.clock()
+    try:
+        found = await collector.discover(segment, limit)
+    except CollectorError as exc:
+        discover_ms = _ms_between(discover_start, deps.clock())
+        gate_hits_after = getattr(collector, "gate_hits", 0)
+        return DiscoverResult(
+            platform=collector.platform,
+            found=None,
+            error=exc,
+            gate_hits_delta=gate_hits_after - gate_hits_before,
+            discover_ms=discover_ms,
+        )
+    discover_ms = _ms_between(discover_start, deps.clock())
+    gate_hits_after = getattr(collector, "gate_hits", 0)
+    return DiscoverResult(
+        platform=collector.platform,
+        found=found,
+        error=None,
+        gate_hits_delta=gate_hits_after - gate_hits_before,
+        discover_ms=discover_ms,
+    )
 
 
 async def collect(
@@ -62,51 +125,52 @@ async def collect(
         }
         runs: list[CollectRun] = []
         errors = 0
-        for collector in deps.collectors:
-            if collector.platform not in platforms:
-                continue
+        # Fase de rede (Task 6: ainda sequencial — a Task 7 paraleliza com
+        # TaskGroup + semáforo; a ordem segue deps.collectors para a
+        # persistência permanecer determinística).
+        wanted = [c for c in deps.collectors if c.platform in platforms]
+        discoveries: list[DiscoverResult] = []
+        for collector in wanted:
+            discoveries.append(await _discover_one(collector, segment, limit, deps))
+        # Fase de persistência (sempre sequencial: mesma sessão Postgres).
+        for result in discoveries:
             started = deps.clock()
-            run = CollectRun(
-                collector=collector.platform, segment_id=segment.id, started_at=started
-            )
-            gate_hits_before = getattr(collector, "gate_hits", 0)
-            discover_start: datetime | None = None
+            run = CollectRun(collector=result.platform, segment_id=segment.id, started_at=started)
+            run.discover_ms = result.discover_ms
             try:
-                await deps.limiter.acquire(collector.platform)
-                discover_start = deps.clock()
-                found = await collector.discover(segment, limit)
-                run.discover_ms = _ms_between(discover_start, deps.clock())
-                persist_start = deps.clock()
-                stats = await deps.videos.upsert_candidates(segment.id, collector.platform, found)
-                run.persist_ms = _ms_between(persist_start, deps.clock())
-                run.status = "ok"
-                run.found = len(found)
-                run.inserted, run.updated = stats.inserted, stats.updated
-                run.skipped = stats.skipped  # Fase H: era run.failed = stats.skipped
-                counts["found"] = int(counts["found"]) + len(found)
-                counts["inserted"] = int(counts["inserted"]) + stats.inserted
-                counts["updated"] = int(counts["updated"]) + stats.updated
-                counts["skipped"] = int(counts["skipped"]) + stats.skipped
-            except CollectorError as exc:
-                if discover_start is not None and run.discover_ms is None:
-                    # discover() (ou o upsert) abriu a fase de rede antes de
-                    # falhar — registra o custo até o erro; sem persistência.
-                    run.discover_ms = _ms_between(discover_start, deps.clock())
-                run.status = "blocked" if exc.code == "blocked" else "failed"
-                run.error_code = exc.code
-                run.failed = 1  # Fase H: explícito no campo numérico, não só em status
-                errors += 1
-                counts["failed"] = int(counts["failed"]) + 1
+                if result.error is not None:
+                    exc = result.error
+                    run.status = "blocked" if exc.code == "blocked" else "failed"
+                    run.error_code = exc.code
+                    run.failed = 1  # Fase H: explícito no campo numérico
+                    errors += 1
+                    counts["failed"] = int(counts["failed"]) + 1
+                else:
+                    assert result.found is not None  # invariante: erro↔found None
+                    try:
+                        persist_start = deps.clock()
+                        stats = await deps.videos.upsert_candidates(
+                            segment.id, result.platform, result.found
+                        )
+                    except CollectorError as exc:
+                        run.status = "blocked" if exc.code == "blocked" else "failed"
+                        run.error_code = exc.code
+                        run.failed = 1
+                        errors += 1
+                        counts["failed"] = int(counts["failed"]) + 1
+                    else:
+                        run.persist_ms = _ms_between(persist_start, deps.clock())
+                        run.status = "ok"
+                        run.found = len(result.found)
+                        run.inserted, run.updated = stats.inserted, stats.updated
+                        run.skipped = stats.skipped
+                        counts["found"] = int(counts["found"]) + len(result.found)
+                        counts["inserted"] = int(counts["inserted"]) + stats.inserted
+                        counts["updated"] = int(counts["updated"]) + stats.updated
+                        counts["skipped"] = int(counts["skipped"]) + stats.skipped
             finally:
-                # Lido no finally (não só no caminho de sucesso) para não
-                # perder o contador quando discover() levanta exceção DEPOIS
-                # de já ter incrementado gate_hits (REVISÃO: Important #1).
-                # Delta before/after porque o collector é singleton no
-                # registry — self.gate_hits acumula entre runs (Important #2).
-                gate_hits_after = getattr(collector, "gate_hits", 0)
-                gate_hits_delta = gate_hits_after - gate_hits_before
-                if gate_hits_delta:
-                    counts[f"{collector.platform}_gate_hits"] = gate_hits_delta
+                if result.gate_hits_delta:
+                    counts[f"{result.platform}_gate_hits"] = result.gate_hits_delta
                 run.finished_at = deps.clock()
                 await deps.runs.record(run)
                 runs.append(run)

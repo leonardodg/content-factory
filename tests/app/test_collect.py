@@ -4,7 +4,7 @@ from typing import ClassVar
 
 from tests.stubs import FakeCollector, FakeLimiter, FakeLock, FakeRepos
 
-from content_factory.app.collect import CollectDeps, collect
+from content_factory.app.collect import CollectDeps, DiscoverResult, _discover_one, collect
 from content_factory.app.ports import Collector, VideoRepository
 from content_factory.domain.errors import CollectorError
 from content_factory.domain.models import CandidateVideo, SegmentConfig, UpsertStats, VideoSnapshot
@@ -287,6 +287,79 @@ async def test_collect_failure_still_records_discover_ms_without_persist_ms() ->
     run_bad = next(r for r in out.runs if r.collector == "tiktok")
     assert run_bad.status == "blocked"
     assert run_bad.persist_ms is None
+
+
+async def test_discover_one_returns_result_with_discover_ms() -> None:
+    """Task 6 (fronteira de rede): DiscoverResult carrega discover_ms e delta.
+
+    Escolha de temporização documentada: discover_ms é medido na fase de rede
+    (dentro de _discover_one) e transportado no DiscoverResult; started_at /
+    finished_at e persist_ms são medidos na fase de persistência de collect().
+    Com execução sequencial e clock fake que só avança em discover/upsert,
+    os valores são idênticos aos do caminho antigo entrelaçado.
+    """
+    clock = _FakeClock()
+    repos = FakeRepos()
+    segment = await repos.segments.get_by_slug("candles")
+    deps = CollectDeps(
+        collectors=[],
+        videos=repos.videos,
+        segments=repos.segments,
+        runs=repos.runs,
+        limiter=FakeLimiter(),
+        lock=FakeLock(),
+        clock=clock,
+    )
+    result = await _discover_one(
+        _TimedCollector("youtube", clock, discover_ms=150), segment, 5, deps
+    )
+    assert isinstance(result, DiscoverResult)
+    assert result.platform == "youtube"
+    assert result.found is not None and len(result.found) == 2
+    assert result.error is None
+    assert result.discover_ms == 150
+    assert result.gate_hits_delta == 0
+
+
+async def test_discover_one_captures_collector_error_without_losing_gate_delta() -> None:
+    """CollectorError na rede vira DiscoverResult com erro (não levanta).
+
+    Limiter bloqueado → discover_ms None (fase de rede nem abriu).
+    discover() que falha após gate_hits → discover_ms medido até o erro.
+    """
+    clock = _FakeClock()
+    repos = FakeRepos()
+    segment = await repos.segments.get_by_slug("candles")
+
+    blocked_deps = CollectDeps(
+        collectors=[],
+        videos=repos.videos,
+        segments=repos.segments,
+        runs=repos.runs,
+        limiter=FakeLimiter(fail=CollectorError("blocked", "youtube")),
+        lock=FakeLock(),
+        clock=clock,
+    )
+    blocked = await _discover_one(FakeCollector("youtube"), segment, 5, blocked_deps)
+    assert blocked.found is None
+    assert blocked.error is not None and blocked.error.code == "blocked"
+    assert blocked.discover_ms is None
+    assert blocked.gate_hits_delta == 0
+
+    net_deps = CollectDeps(
+        collectors=[],
+        videos=repos.videos,
+        segments=repos.segments,
+        runs=repos.runs,
+        limiter=FakeLimiter(),
+        lock=FakeLock(),
+        clock=clock,
+    )
+    failed = await _discover_one(_FakeGatedThenFailingCollector(), segment, 5, net_deps)
+    assert failed.found is None
+    assert failed.error is not None and failed.error.code == "failed"
+    assert failed.gate_hits_delta == 1
+    assert failed.discover_ms == 0
 
 
 async def test_collect_gate_hits_is_per_run_delta_not_cumulative() -> None:
