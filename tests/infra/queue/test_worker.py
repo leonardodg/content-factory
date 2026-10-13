@@ -1,5 +1,5 @@
 from datetime import UTC, datetime
-from typing import ClassVar
+from typing import Any, ClassVar
 
 import pytest
 
@@ -54,6 +54,11 @@ class _NoopAppDeps:
         pass
 
 
+def _collect_cfg(platforms: list[str], limit: int) -> dict[str, Any]:
+    """`_load_settings` fake com tipos concretos (pyright strict)."""
+    return {"platforms": platforms, "limit": limit}
+
+
 async def test_run_collect_job_processes_all_active_segments(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -71,7 +76,7 @@ async def test_run_collect_job_processes_all_active_segments(
         return _Out()
 
     monkeypatch.setattr(w, "_collect_impl", fake_collect)
-    monkeypatch.setattr(w, "_load_settings", lambda: {"platforms": [], "limit": 10})
+    monkeypatch.setattr(w, "_load_settings", lambda: _collect_cfg([], 10))
     campaigns = _FakeCampaignsMultiSegment(slugs=["velas", "sabonetes"])
     committed: list[str] = []
 
@@ -92,7 +97,7 @@ async def test_run_collect_job_noop_when_no_active_segment(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """0 segmentos ativos → noop ok=True, sem chamar collect."""
-    monkeypatch.setattr(w, "_load_settings", lambda: {"platforms": [], "limit": 10})
+    monkeypatch.setattr(w, "_load_settings", lambda: _collect_cfg([], 10))
     campaigns = _FakeCampaignsMultiSegment(slugs=[])
     out = await w.run_collect_job(
         {"collect_deps": object(), "campaigns_deps": campaigns, "app_deps": _NoopAppDeps()}
@@ -117,7 +122,7 @@ async def test_run_collect_job_platforms_fall_back_to_segment(
         return _Out()
 
     monkeypatch.setattr(w, "_collect_impl", fake_collect)
-    monkeypatch.setattr(w, "_load_settings", lambda: {"platforms": [], "limit": 5})
+    monkeypatch.setattr(w, "_load_settings", lambda: _collect_cfg([], 5))
     campaigns = _FakeCampaignsMultiSegment(slugs=["candles"], platforms=["youtube", "tiktok"])
     await w.run_collect_job(
         {"collect_deps": object(), "campaigns_deps": campaigns, "app_deps": _NoopAppDeps()}
