@@ -5,25 +5,13 @@
 
 ## 🔄 EM ANDAMENTO
 
-_Concorrência do pipeline — Etapas 0–C IMPLEMENTADAS na branch
-`feat/concorrencia-pipeline` (2026-10-13, plano
-`docs/ai-plans/2026-10-13-content-factory-concorrencia-pipeline.md`, 12
-commits, 285 passed com infra + todos os gates verdes). Troca de ambiente
-(3 workers → 1) SÓ após 2026-10-19; containers do experimento intocados a
-sessão inteira (só SELECT + 1 medição com rollback confirmado). Falta:
-revisão final da branch + merge + swap de compose pós-19._
-
-_Tasks: T1 guard COLLECT_SEGMENT no startup · T2 compose worker único
-preparado (`docker-compose.multi-segmento.yml`) · T3 cota/breaker/lock no
-Redis compartilhado (`rate_limit_redis_url`) · T4 `discover_ms/persist_ms`
-(migração 0009, `cf collect-timings`) · T5 baseline congelado em
-`docs/manual/baseline-concorrencia.md` · T6 collect em 2 fases · T7
-TaskGroup+semáforo na descoberta (`COLLECT_MAX_CONCURRENCY=2`) · T8 mesmo
-padrão no research · T9 RedisLock com token (Lua CAS) · T10 engine único +
-sessão por UoW (`ScoreDeps` dataclass) · T11 segmentos concorrentes
-(`WORKER_MAX_SEGMENTS=3`, `max_jobs=3`, `on_job_end` removido) · T12 perfil
-do score (CPU ~20µs/vídeo, Task 14 descartada) · T13 `upsert_many` em
-blocos de 500 (N flushes→1) · ADR-0006 (manter arq+Redis)._
+_Experimento de 7 dias em curso (até **2026-10-19**): 3 containers na imagem
+pré-concorrência — não fazer `--build`/restart neles; a troca 3 workers → 1
+worker único (`docker-compose.multi-segmento.yml`, já na main) SÓ após o
+dia 19, com dados exportados antes. Depois do swap: sessão de design da
+Fase I (contrato `insta_kb`) — ver roadmap, ainda não iniciada. Validação
+empírica do ranking (ferramenta `cf score-sample` entregue; o veredito
+sobre os pesos é humano, com dados reais)._
 
 _Worker multi-segmento mergeado (`a4faf04`) e revisado (2026-10-13): teste
 real contra o Postgres/Redis do experimento achou 2 bugs de isolamento por
@@ -46,6 +34,44 @@ depois do swap de compose: sessão de design da Fase I (contrato `insta_kb`)
 reais).
 
 ## ✅ CONCLUÍDO
+
+### Concorrência do pipeline — Etapas 0–C (2026-10-13)
+
+**PR #8 MERGED** (`25839fa`, 20 commits). Plano:
+`docs/ai-plans/2026-10-13-content-factory-concorrencia-pipeline.md`.
+TDD por task, review por task + revisão final APROVADA (3 minors de docs
+corrigidos antes do merge). 251 passed (+285 com infra descartável) +
+todos os gates verdes. Containers do experimento intocados (só SELECT + 1
+medição com rollback confirmado).
+
+- [x] **Etapa 0** — T1 guard `COLLECT_SEGMENT` no startup (`RuntimeError`
+  sob compose antigo) · T2 compose de worker único preparado
+  (`docker-compose.multi-segmento.yml`, aplicar SÓ após 2026-10-19) ·
+  T3 cota/breaker/lock no Redis compartilhado (`rate_limit_redis_url`,
+  default = `redis_url`)
+- [x] **Etapa 1** — T4 `discover_ms`/`persist_ms` (migração 0009,
+  `timing_stats`, `cf collect-timings`) · T5 baseline congelado em
+  `docs/manual/baseline-concorrencia.md`
+- [x] **Etapa A** — T6 collect em 2 fases (rede + persistência) · T7
+  TaskGroup+semáforo na descoberta (`COLLECT_MAX_CONCURRENCY=2`) · T8
+  mesmo padrão no fan-out de socials. Verificação fim-a-fim: speedup
+  2.95x (soma → máximo das plataformas)
+- [x] **Etapa B** — T9 RedisLock com token de posse (Lua CAS) · T10 engine
+  único + sessão por UoW (`ScoreDeps` virou dataclass) · T11 segmentos
+  concorrentes (`WORKER_MAX_SEGMENTS=3`, `max_jobs=3`, `on_job_end`
+  removido — cada UoW reverte sozinha)
+- [x] **Etapa C** — T12 perfil com dados reais (CPU ~20µs/vídeo;
+  **Task 14 descartada** com evidência) · T13 `upsert_many` em blocos de
+  500 (N flushes → 1, fallback linha-a-linha) · ADR-0006 (manter arq+Redis)
+- [x] **Docs** — ER + data-model regenerados (migrações até 0009:
+  `keyword_signals`, `research_campaigns`, `trend_observations`,
+  `skipped`, timings, `metrics_available`, `formula_version`) · nova
+  página [fluxos da pipeline](diagram/fluxos.md) (cron, jobs, UoW, CLI,
+  Redis) · manual atualizado (`fluxo-busca`, `operacao`, `analise`,
+  `agentes`, `index`, `experimento-7-dias`, `anti-ban`, arquitetura)
+- [x] **Pendente pós-2026-10-19**: swap 3 workers → 1 (procedimento em
+  `docs/manual/experimento-7-dias.md` § Pós-2026-10-19; exportar dados
+  antes de parar os containers)
 
 ### Worker multi-segmento dinâmico (2026-10-12)
 
