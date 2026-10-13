@@ -212,3 +212,31 @@ async def test_empty_segment_scores_nothing_and_is_ok() -> None:
     out = await score(deps)
     assert out.ok is True and out.partial is False and out.scored == 0
     assert scores.saved == []
+
+
+def test_score_deps_is_replaceable_dataclass() -> None:
+    """Task 10: ScoreDeps é @dataclass — o worker usa `replace` por segmento.
+
+    Paridade com ResearchDeps em run_research_job: os campos do startup são
+    placeholders e cada UoW troca videos/scores/segment/keywords. Todos os
+    campos e defaults são preservados (construção posicional e nomeada).
+    """
+    import dataclasses
+
+    scores = FakeScores()
+    deps = ScoreDeps(FakeVideos([]), scores, SEG, ["vela"])
+    assert dataclasses.is_dataclass(deps)
+    assert deps.keywords == ["vela"]
+    assert deps.clock() is not None  # default = agora em UTC
+    other = Segment(
+        id=2,
+        **SegmentConfig(
+            slug="sabonetes", name="Sabonetes", platforms=["youtube"], keywords=["sabonete"]
+        ).model_dump(),
+    )
+    swapped = dataclasses.replace(deps, segment=other, keywords=["sabonete"])
+    assert swapped.segment is other
+    assert swapped.keywords == ["sabonete"]
+    assert swapped.videos is deps.videos
+    assert swapped.scores is deps.scores
+    assert swapped.clock is deps.clock

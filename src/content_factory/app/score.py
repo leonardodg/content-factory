@@ -1,4 +1,5 @@
 from collections.abc import Callable
+from dataclasses import dataclass
 from datetime import UTC, datetime
 
 from content_factory.app.ports import ScoreRepository, VideoRepository
@@ -6,20 +7,26 @@ from content_factory.domain.models import Segment, VideoSnapshot
 from content_factory.domain.scoring import viral_score
 
 
+def _utcnow() -> datetime:
+    return datetime.now(UTC)
+
+
+@dataclass
 class ScoreDeps:
-    def __init__(
-        self,
-        videos: VideoRepository,
-        scores: ScoreRepository,
-        segment: Segment,
-        keywords: list[str],
-        clock: Callable[[], datetime] = lambda: datetime.now(UTC),
-    ) -> None:
-        self.videos = videos
-        self.scores = scores
-        self.segment = segment
-        self.keywords = keywords
-        self.clock = clock
+    """Deps do score — @dataclass para permitir `dataclasses.replace` por segmento.
+
+    Paridade com ResearchDeps/CollectDeps: o worker monta 1 por UoW trocando
+    videos/scores/segment/keywords. Mesmos campos, mesma ordem e mesmo default
+    do `__init__` anterior (construção posicional e nomeada preservadas).
+    """
+
+    videos: VideoRepository
+    scores: ScoreRepository
+    segment: Segment
+    keywords: list[str]
+    # default é o CHAMÁVEL (não default_factory — a factory seria chamada e
+    # viraria datetime): mesma semântica do `lambda` do `__init__` anterior.
+    clock: Callable[[], datetime] = _utcnow
 
 
 class ScoreOutcome:

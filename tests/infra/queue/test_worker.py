@@ -1,3 +1,6 @@
+from collections.abc import AsyncGenerator, Callable
+from contextlib import asynccontextmanager
+from dataclasses import dataclass
 from typing import Any, ClassVar, cast
 
 import pytest
@@ -54,6 +57,95 @@ class _NoopAppDeps:
         pass
 
 
+class _FakeSession:
+    """Sessão fake com identidade própria: 1 por segmento (Task 10)."""
+
+    def __init__(self) -> None:
+        self.events: list[str] = []
+
+    async def commit(self) -> None:
+        self.events.append("commit")
+
+    async def rollback(self) -> None:
+        self.events.append("rollback")
+
+
+class _FakeUoW:
+    """UoW fake: commit/rollback delegam à sessão do segmento + hooks de contagem."""
+
+    def __init__(
+        self,
+        session: _FakeSession,
+        on_commit: Callable[[], None],
+        on_rollback: Callable[[], None],
+    ) -> None:
+        self.session = session
+        self._on_commit = on_commit
+        self._on_rollback = on_rollback
+
+    async def commit(self) -> None:
+        await self.session.commit()
+        self._on_commit()
+
+    async def rollback(self) -> None:
+        await self.session.rollback()
+        self._on_rollback()
+
+
+@dataclass
+class _FakeScorePart:
+    segment: Segment
+
+
+@dataclass
+class _FakeResearchPart:
+    guard: FanoutGuard
+
+
+@dataclass
+class _FakeSegmentBundle:
+    uow: _FakeUoW
+    collect: object
+    score: _FakeScorePart
+    research: _FakeResearchPart
+
+
+class _FakeAppDeps:
+    """Fake de AppDeps (Task 10): `create_segment_deps` abre 1 UoW/sessão por segmento.
+
+    Mesma política do real: exceção dentro do escopo → rollback da sessão
+    do segmento, sem tocar nas demais. `committed`/`rolled_back` são injetados
+    pelos testes para os asserts de envelope continuarem idênticos.
+    """
+
+    def __init__(self, committed: list[str], rolled_back: list[str]) -> None:
+        self.sessions: list[_FakeSession] = []
+        self._committed = committed
+        self._rolled_back = rolled_back
+
+    @asynccontextmanager
+    async def create_segment_deps(self, segment: Segment) -> AsyncGenerator[_FakeSegmentBundle]:
+        session = _FakeSession()
+        self.sessions.append(session)
+        committed = self._committed
+        rolled_back = self._rolled_back
+        uow = _FakeUoW(
+            session,
+            on_commit=lambda: committed.append("commit"),
+            on_rollback=lambda: rolled_back.append("rollback"),
+        )
+        try:
+            yield _FakeSegmentBundle(
+                uow=uow,
+                collect=object(),
+                score=_FakeScorePart(segment=segment),
+                research=_FakeResearchPart(guard=FanoutGuard(segment.research or DepthConfig())),
+            )
+        except BaseException:
+            await uow.rollback()
+            raise
+
+
 def _collect_cfg(platforms: list[str], limit: int) -> dict[str, Any]:
     """`_load_settings` fake com tipos concretos (pyright strict)."""
     return {"platforms": platforms, "limit": limit}
@@ -98,18 +190,17 @@ async def test_run_collect_job_processes_all_active_segments(
     monkeypatch.setattr(w, "_load_settings", lambda: _collect_cfg([], 10))
     campaigns = _FakeCampaignsMultiSegment(slugs=["velas", "sabonetes"])
     committed: list[str] = []
-
-    class _AppDeps:
-        async def commit(self) -> None:
-            committed.append("commit")
+    rolled_back: list[str] = []
+    app_deps = _FakeAppDeps(committed, rolled_back)
 
     out = await w.run_collect_job(
-        {"collect_deps": object(), "campaigns_deps": campaigns, "app_deps": _AppDeps()}
+        {"collect_deps": object(), "campaigns_deps": campaigns, "app_deps": app_deps}
     )
     assert calls == ["velas", "sabonetes"]
     assert out["ok"] is True
     assert set(out["segments"]) == {"velas", "sabonetes"}
     assert committed == ["commit", "commit"]  # 1 commit por segmento
+    assert rolled_back == []
 
 
 async def test_run_collect_job_noop_when_no_active_segment(
@@ -143,8 +234,14 @@ async def test_run_collect_job_platforms_fall_back_to_segment(
     monkeypatch.setattr(w, "_collect_impl", fake_collect)
     monkeypatch.setattr(w, "_load_settings", lambda: _collect_cfg([], 5))
     campaigns = _FakeCampaignsMultiSegment(slugs=["candles"], platforms=["youtube", "tiktok"])
+    committed: list[str] = []
+    rolled_back: list[str] = []
     await w.run_collect_job(
-        {"collect_deps": object(), "campaigns_deps": campaigns, "app_deps": _NoopAppDeps()}
+        {
+            "collect_deps": object(),
+            "campaigns_deps": campaigns,
+            "app_deps": _FakeAppDeps(committed, rolled_back),
+        }
     )
     assert calls == [["youtube", "tiktok"]]  # plataformas do segmento (stub)
 
@@ -177,16 +274,10 @@ async def test_run_collect_job_isolates_segment_exception(
     campaigns = _FakeCampaignsMultiSegment(slugs=["velas", "sabonetes"])
     committed: list[str] = []
     rolled_back: list[str] = []
-
-    class _AppDeps:
-        async def commit(self) -> None:
-            committed.append("commit")
-
-        async def rollback(self) -> None:
-            rolled_back.append("rollback")
+    app_deps = _FakeAppDeps(committed, rolled_back)
 
     out = await w.run_collect_job(
-        {"collect_deps": object(), "campaigns_deps": campaigns, "app_deps": _AppDeps()}
+        {"collect_deps": object(), "campaigns_deps": campaigns, "app_deps": app_deps}
     )
     assert calls == ["velas", "sabonetes"]  # ambos tentados, 1 não trava o outro
     assert out["ok"] is False
@@ -215,16 +306,14 @@ async def test_run_score_job_processes_all_active_segments(
     monkeypatch.setattr(w, "_score_impl", fake_score)
     campaigns = _FakeCampaignsMultiSegment(slugs=["velas", "sabonetes"])
     committed: list[str] = []
-
-    class _AppDeps:
-        async def commit(self) -> None:
-            committed.append("commit")
+    rolled_back: list[str] = []
+    app_deps = _FakeAppDeps(committed, rolled_back)
 
     # base do startup: só videos/scores importam — segment/keywords são
     # placeholder que o job substitui por segmento
     base = _score_deps_placeholder()
     out = await w.run_score_job(
-        {"score_deps": base, "campaigns_deps": campaigns, "app_deps": _AppDeps()}
+        {"score_deps": base, "campaigns_deps": campaigns, "app_deps": app_deps}
     )
     assert calls == ["velas", "sabonetes"]
     assert out == {
@@ -255,19 +344,13 @@ async def test_run_score_job_isolates_segment_exception(
     campaigns = _FakeCampaignsMultiSegment(slugs=["velas", "sabonetes"])
     committed: list[str] = []
     rolled_back: list[str] = []
-
-    class _AppDeps:
-        async def commit(self) -> None:
-            committed.append("commit")
-
-        async def rollback(self) -> None:
-            rolled_back.append("rollback")
+    app_deps = _FakeAppDeps(committed, rolled_back)
 
     out = await w.run_score_job(
         {
             "score_deps": _score_deps_placeholder(),
             "campaigns_deps": campaigns,
-            "app_deps": _AppDeps(),
+            "app_deps": app_deps,
         }
     )
     assert calls == ["velas", "sabonetes"]
@@ -378,7 +461,6 @@ async def test_create_app_deps_startup_resolves_no_segment(
     ScoreDeps/ResearchDeps com placeholders que os jobs sempre
     substituem antes de usar. `get_by_slug` boom = guarda de regressão.
     """
-    from collections.abc import AsyncGenerator
     from contextlib import asynccontextmanager
 
     import content_factory.infra.collectors as collectors_mod
@@ -556,16 +638,14 @@ async def test_run_research_job_processes_all_active_segments(
 
     monkeypatch.setattr(w, "_research_impl", fake_research)
     committed: list[str] = []
-
-    class _AppDeps:
-        async def commit(self) -> None:
-            committed.append("commit")
+    rolled_back: list[str] = []
+    app_deps = _FakeAppDeps(committed, rolled_back)
 
     out = await w.run_research_job(
         {
             "research_deps": _research_deps(),
             "campaigns_deps": _Campaigns(),
-            "app_deps": _AppDeps(),
+            "app_deps": app_deps,
         }
     )
     assert calls == ["velas", "sabonetes"]
@@ -623,16 +703,10 @@ async def test_run_research_job_isolates_segment_exception(
     monkeypatch.setattr(w, "_research_impl", fake_research)
     committed: list[str] = []
     rolled_back: list[str] = []
-
-    class _AppDeps:
-        async def commit(self) -> None:
-            committed.append("commit")
-
-        async def rollback(self) -> None:
-            rolled_back.append("rollback")
+    app_deps = _FakeAppDeps(committed, rolled_back)
 
     out = await w.run_research_job(
-        {"research_deps": _research_deps(), "campaigns_deps": _Campaigns(), "app_deps": _AppDeps()}
+        {"research_deps": _research_deps(), "campaigns_deps": _Campaigns(), "app_deps": app_deps}
     )
     assert calls == ["velas", "sabonetes"]
     assert out["ok"] is False
@@ -656,7 +730,6 @@ async def test_create_app_deps_single_redis_when_urls_equal(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """URLs iguais ⇒ um único cliente Redis (comportamento pré-Task 3)."""
-    from collections.abc import AsyncGenerator
     from contextlib import asynccontextmanager
 
     import content_factory.infra.collectors as collectors_mod
@@ -721,7 +794,6 @@ async def test_create_app_deps_two_redis_when_urls_differ(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """URLs diferentes ⇒ dois clientes; ambos fechados no shutdown."""
-    from collections.abc import AsyncGenerator
     from contextlib import asynccontextmanager
 
     import content_factory.infra.collectors as collectors_mod
@@ -831,3 +903,190 @@ def test_load_settings_max_concurrency_default_and_env(
     assert load()["max_concurrency"] == 2
     monkeypatch.setenv("COLLECT_MAX_CONCURRENCY", "0")
     assert load()["max_concurrency"] == 1
+
+
+async def test_run_collect_job_segments_get_distinct_sessions(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Task 10: cada segmento recebe UMA sessão própria; commits independentes."""
+    seen_collect_deps: list[object] = []
+
+    async def fake_collect(slug: str, platforms: list[str], limit: int, deps: object) -> object:
+        seen_collect_deps.append(deps)
+
+        class _Out:
+            ok = True
+            partial = False
+            counts: ClassVar[dict[str, object]] = {"found": 1}
+
+        return _Out()
+
+    monkeypatch.setattr(w, "_collect_impl", fake_collect)
+    monkeypatch.setattr(w, "_load_settings", lambda: _collect_cfg([], 10))
+    campaigns = _FakeCampaignsMultiSegment(slugs=["velas", "sabonetes"])
+    committed: list[str] = []
+    rolled_back: list[str] = []
+    app_deps = _FakeAppDeps(committed, rolled_back)
+    out = await w.run_collect_job(
+        {"collect_deps": object(), "campaigns_deps": campaigns, "app_deps": app_deps}
+    )
+    assert out["ok"] is True
+    assert len(app_deps.sessions) == 2  # 1 UoW por segmento, ainda sequencial
+    assert app_deps.sessions[0] is not app_deps.sessions[1]  # sessão NUNCA compartilhada
+    assert [s.events for s in app_deps.sessions] == [["commit"], ["commit"]]
+    assert committed == ["commit", "commit"]
+    assert rolled_back == []
+
+
+async def test_run_collect_job_failed_segment_rolls_back_only_its_session(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Task 10: falha de 1 segmento → rollback só da sua sessão; a outra comita."""
+    calls: list[str] = []
+
+    async def fake_collect(slug: str, platforms: list[str], limit: int, deps: object) -> object:
+        calls.append(slug)
+        if slug == "velas":
+            raise RuntimeError("boom")
+
+        class _Out:
+            ok = True
+            partial = False
+            counts: ClassVar[dict[str, object]] = {"found": 1}
+
+        return _Out()
+
+    monkeypatch.setattr(w, "_collect_impl", fake_collect)
+    monkeypatch.setattr(w, "_load_settings", lambda: _collect_cfg([], 10))
+    campaigns = _FakeCampaignsMultiSegment(slugs=["velas", "sabonetes"])
+    committed: list[str] = []
+    rolled_back: list[str] = []
+    app_deps = _FakeAppDeps(committed, rolled_back)
+    out = await w.run_collect_job(
+        {"collect_deps": object(), "campaigns_deps": campaigns, "app_deps": app_deps}
+    )
+    assert calls == ["velas", "sabonetes"]
+    assert out["ok"] is False
+    assert out["segments"]["velas"]["ok"] is False
+    assert len(app_deps.sessions) == 2
+    assert app_deps.sessions[0] is not app_deps.sessions[1]
+    assert app_deps.sessions[0].events == ["rollback"]  # commit de um não depende do outro
+    assert app_deps.sessions[1].events == ["commit"]
+    assert committed == ["commit"]
+    assert rolled_back == ["rollback"]
+
+
+async def test_create_segment_deps_builds_per_segment_bundle(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Task 10: bundle real por segmento — ScoreDeps/ResearchDeps re-resolvidos na UoW.
+
+    Repositórios nascem por unidade de trabalho (não no startup); engine e
+    clientes Redis continuam compartilhados. Seam igual ao de
+    test_create_app_deps_startup_resolves_no_segment, mas com sessões
+    gravadas para provar o isolamento.
+    """
+    from contextlib import asynccontextmanager
+
+    import content_factory.infra.collectors as collectors_mod
+    import content_factory.infra.db.base as db_base
+    import content_factory.infra.redis_ops as redis_ops
+    from content_factory.config import Settings
+
+    created: list[_FakeSession] = []
+
+    @asynccontextmanager
+    async def _session() -> AsyncGenerator[_FakeSession]:
+        session = _FakeSession()
+        created.append(session)
+        yield session
+
+    @asynccontextmanager
+    async def _redis(_url: str) -> AsyncGenerator[Any]:
+        yield object()
+
+    def _factory(_settings: Settings) -> Any:
+        return _session
+
+    def _register(_settings: Settings) -> None:
+        pass
+
+    class _Registry:
+        def snapshot(self) -> list[str]:
+            return []
+
+        def resolve(self, names: list[str]) -> list[object]:
+            return []
+
+    monkeypatch.setattr(db_base, "get_session_factory", _factory)
+    monkeypatch.setattr(redis_ops, "redis_client", _redis)
+    monkeypatch.setattr(collectors_mod, "register_defaults", _register)
+    monkeypatch.setattr(collectors_mod, "registry", _Registry())
+
+    deps = await w.create_app_deps(Settings())
+    seg_a = Segment(
+        id=1,
+        slug="velas",
+        name="Velas",
+        platforms=["youtube"],
+        keywords=["k1"],
+        research=DepthConfig(max_depth=5),
+    )
+    seg_b = Segment(id=2, slug="sabonetes", name="Sabonetes", platforms=["youtube"], keywords=["k"])
+    async with deps.create_segment_deps(seg_a) as bundle_a:
+        assert bundle_a.score.segment.slug == "velas"
+        assert bundle_a.score.keywords == ["k1"]
+        assert bundle_a.research.guard.admit("x", depth=4) is True
+        await bundle_a.uow.commit()
+    async with deps.create_segment_deps(seg_b) as bundle_b:
+        assert bundle_b.score.segment.slug == "sabonetes"
+        assert bundle_b.research.guard.admit("x", depth=4) is False
+        await bundle_b.uow.commit()
+    assert len(created) == 3  # 1 sessão de startup (legado, Task 11 aposenta) + 1 UoW/segmento
+    assert created[1] is not created[2]
+    assert [s.events for s in created] == [[], ["commit"], ["commit"]]
+    await deps.close()
+
+
+async def test_create_app_deps_close_disposes_engine(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Task 10: shutdown fecha o engine (dispose), além da sessão/Redis."""
+    from contextlib import asynccontextmanager
+
+    from sqlalchemy.ext.asyncio import AsyncEngine
+
+    import content_factory.infra.collectors as collectors_mod
+    import content_factory.infra.redis_ops as redis_ops
+    from content_factory.config import Settings
+
+    @asynccontextmanager
+    async def _redis(_url: str) -> AsyncGenerator[Any]:
+        yield object()
+
+    def _register(_settings: Settings) -> None:
+        pass
+
+    class _Registry:
+        def snapshot(self) -> list[str]:
+            return []
+
+        def resolve(self, names: list[str]) -> list[object]:
+            return []
+
+    monkeypatch.setattr(redis_ops, "redis_client", _redis)
+    monkeypatch.setattr(collectors_mod, "register_defaults", _register)
+    monkeypatch.setattr(collectors_mod, "registry", _Registry())
+
+    # get_session_factory REAL (não monkeypatchado): engine lazy, sem conexões.
+    disposed: list[str] = []
+
+    async def _recording_dispose(self: AsyncEngine) -> None:
+        disposed.append("dispose")
+
+    monkeypatch.setattr(AsyncEngine, "dispose", _recording_dispose)
+    deps = await w.create_app_deps(Settings())
+    assert deps.engine is not None
+    assert deps.engine is deps.session_factory.kw["bind"]  # 1 engine compartilhado
+    await deps.close()
+    assert disposed == ["dispose"]
