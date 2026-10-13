@@ -650,3 +650,38 @@ def test_workersettings_registers_research_job_and_cron() -> None:
     coroutines = [cj.coroutine for cj in settings.cron_jobs]
     assert coroutines == [w.run_research_job, w.run_collect_job, w.run_score_job]
     assert settings.cron_jobs[0].hour == {7}
+
+
+async def test_startup_fails_when_collect_segment_set(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Guard P0: imagem multi-segmento sob compose antigo (COLLECT_SEGMENT) falha no startup."""
+    monkeypatch.setenv("COLLECT_SEGMENT", "velas-artesanais")
+    ctx: dict[str, object] = {}
+    with pytest.raises(RuntimeError, match="multi-segmento"):
+        await w.startup(ctx)
+
+
+async def test_startup_ok_without_collect_segment(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Sem COLLECT_SEGMENT o startup segue normal (injeta app_deps)."""
+    monkeypatch.delenv("COLLECT_SEGMENT", raising=False)
+
+    class _Deps:
+        collect = object()
+        score = object()
+        research = object()
+        campaigns = object()
+
+        async def close(self) -> None:
+            pass
+
+    async def _fake_create(_settings: object) -> object:
+        return _Deps()
+
+    monkeypatch.setattr(w, "create_app_deps", _fake_create)
+    ctx: dict[str, object] = {}
+    await w.startup(ctx)
+    assert "app_deps" in ctx
+    await w.shutdown(ctx)

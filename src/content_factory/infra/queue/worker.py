@@ -261,6 +261,14 @@ async def create_app_deps(settings: Settings) -> AppDeps:
 
 async def startup(ctx: dict[str, Any]) -> None:
     """Injeta deps no `ctx` do arq (hook `on_startup`)."""
+    segment = os.getenv("COLLECT_SEGMENT")
+    if segment:
+        raise RuntimeError(
+            "worker agora é multi-segmento e COLLECT_SEGMENT está definido "
+            f"({segment!r}): o compose do experimento de 3 workers "
+            "(docker-compose.experimento-7dias.yml) deve ser substituído pelo "
+            "compose de worker único (docker-compose.multi-segmento.yml, só após 2026-10-19)"
+        )
     deps = await create_app_deps(get_settings())
     ctx["app_deps"] = deps
     ctx["collect_deps"] = deps.collect

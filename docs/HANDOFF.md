@@ -14,7 +14,7 @@ por simetria), 3 testes novos, 233 passed + 9 gates verdes. Também achado e
 limpo: 9 campanhas `teste-ativo-*` órfãs (testes de aceitação antigos nunca
 parados) estavam ativas na base real — `cf research stop` rodado em todas,
 só `velas-artesanais`/`sabonetes-artesanais`/`resina-artesanal` seguem
-ativas. **Risco ainda não resolvido** (não é bug de código, é operacional):
+ativas. **Verificação empírica 2026-10-13 (corrige premissa do review externo):** os 3 containers rodam imagens criadas em `2026-10-12 23:26`, **anteriores** aos commits multi-segmento (`c9f1e41`+, `2026-10-13 00:01`). Dentro do container, `active_segments` tem **0 ocorrências** em `/app/content_factory/infra/queue/worker.py`, que ainda lê `os.getenv("COLLECT_SEGMENT")`; o md5 diverge do arquivo no repo. Conclusão: **não há coleta duplicada hoje**. O risco é latente — qualquer `docker compose up --build` ou restart com a `main` atual passa a triplicar. P0 rebaixado de "incidente em andamento" para "trava antes do próximo rebuild". **Data de corte: 2026-10-19** (fim do experimento de 7 dias) — código, testes e compose novo ficam prontos durante a semana; a troca 3 workers → 1 worker multi-segmento só é aplicada depois do dia 19. **Risco ainda não resolvido** (não é bug de código, é operacional):
 os 3 containers do experimento (`docker-compose.experimento-7dias.yml`)
 continuam na imagem PRÉ-merge (ainda lê `COLLECT_SEGMENT`) — não fazer
 `--build`/restart neles sem já ter trocado pelo worker único, senão cada um
