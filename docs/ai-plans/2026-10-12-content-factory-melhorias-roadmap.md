@@ -84,12 +84,15 @@ Plano: `docs/ai-plans/2026-10-12-content-factory-fase-g-scoring-v2.md`.
   propagado até `VideoSnapshot` (hoje `_snapshot()` colapsa `None` em `0`).
 - [x] Registrar cobertura de métricas por plataforma no resultado do score
   (`ScoreResult.metrics_available`).
-- [ ] Velocidade calculada por diferença entre snapshots reais, não por
-  idade — **pendente de dados reais** (Fase F recém-mergeada; precisa de
-  `video_metrics` acumulado).
-- [ ] Separar performance (alcance acumulado) de momentum (crescimento) de
-  relevância, como dimensões auditáveis independentes — **pendente de
-  dados reais** para calibrar sem recalibrar pesos no escuro.
+- [x] Velocidade calculada por diferença entre snapshots reais, não por
+  idade — **ENTREGUE pela Fase H Task 3** (`momentum_score` +
+  `previous_metrics` em `VideoSnapshot`; matou o fake `age_days=999`).
+- [x] Separar performance (alcance acumulado) de momentum (crescimento) de
+  relevância, como dimensões auditáveis independentes — **parcialmente
+  entregue pela Fase H**: `ScoreResult` expõe `performance`/`velocity`/
+  `engagement`/`relevance`/`recency` como campos separados e
+  `metrics_available`+`formula_version` são persistidos (Task 2). A
+  recalibração dos pesos continua pendente de dados reais.
 
 **Critério de conclusão:** o ranking pode ser explicado componente a
 componente, e vídeos sem uma métrica (ex.: Instagram sem views) não são
@@ -102,16 +105,32 @@ reproduzido contra Postgres real) + 1 gap real de menor severidade
 (`engagement_rate` não tratava "nenhuma submétrica" como ausente). Ver
 `docs/ai-plans/2026-10-12-content-factory-fase-g-scoring-v2.md` Task G4.
 As duas pendências marcadas acima (velocidade por diff, separar
-performance/momentum) continuam de pé — não fazem parte do que foi
-corrigido.
+performance/momentum) foram tratadas pela Fase H.
 
-### Fase H — Diversidade de descoberta (P1)
+### Fase H — Integridade operacional + auditabilidade do score ✅ (2026-10-12)
 
-Modos de descoberta complementares (recentes/emergentes), estrutura de
-segmento com sinônimos/subnichos/exclusões, registro explícito de
-cobertura/limitação por plataforma no envelope operacional. Plano a
-escrever quando a Fase G já estiver medindo momentum (a descoberta
-"emergente" depende de ter crescimento calculável).
+**CONCLUÍDA** (branch `feat/fase-h-integridade`, 8 commits, 226 passed).
+Plano: `2026-10-12-content-factory-fase-h-integridade-operacional-scoring.md`.
+
+Fechou as pendências estruturais deixadas pela Fase G: estado
+`ok`/`partial` real em `run_research_cycle` (Task 1); `metrics_available`/
+`formula_version` persistidos em `video_scores` (Task 2, mig `0006`);
+`velocity` por diff real de snapshots via `momentum_score` — matou o fake
+`age_days=999` (Task 3); `latest_for_segment` traz o snapshot anterior
+com `row_number()` (Task 4); `upsert_candidates` atualiza metadados no
+conflito via `COALESCE`/`NULLIF` (Task 5); `trend_observations` faz
+upsert por período em vez de acumular duplicata (Task 6, mig `0007`);
+`CollectRun.skipped` separado de `failed` com backfill (Task 7, mig
+`0008`); e as ferramentas `cf score-sample`/`cf score-correlation`
+(Spearman em stdlib, sem scipy) para validação empírica do ranking —
+o veredito sobre os pesos continua sendo humano, com dados reais
+(Task 8).
+
+_O conteúdo original desta fase no roadmap anterior ("Diversidade de
+descoberta" — modos complementares, sinônimos/subnichos/exclusões,
+registro de cobertura por plataforma) NÃO foi implementado aqui. Ele
+depende de momentum calculável (agora pronto) e foi adiado para uma
+futura fase — renumerar quando for planejado._
 
 ### Fase I — Contrato com `insta_kb` (P1, decisão arquitetural) — ⏳ PRÓXIMO PASSO SUGERIDO, NÃO INICIADA
 

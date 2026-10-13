@@ -5,14 +5,70 @@
 
 ## 🔄 EM ANDAMENTO
 
-_(nenhuma branch de feature aberta — roadmap A→C→D→E→B+web-suggest+F+G
-PARCIAL COMPLETO + bugfix pós-code-review. Pipeline com métricas
-persistidas, scoring que distingue ausência de zero, cobertura auditável.
-Fase G parcial: estrutural pronto; velocidade por diff e recalibração de
-pesos dependem de dados reais. Próximo passo sugerido: sessão de design
-da Fase I (contrato `insta_kb`) — ver roadmap, ainda não iniciada.)_
+_(nenhuma branch de feature aberta — roadmap A→C→D→E→B+web-suggest+F+
+G(parcial)+H COMPLETO. Pipeline com métricas persistidas, scoring que
+distingue ausência de zero, momentum por diff real, auditabilidade de
+score e runs, upserts idempotentes de trends. Próximo passo sugerido:
+sessão de design da Fase I (contrato `insta_kb`) — ver roadmap, ainda
+não iniciada. Validacao empirica do ranking (Ferramenta `cf score-sample`
+entregue; o veredito sobre os pesos é humano, com dados reais).)_
 
 ## ✅ CONCLUÍDO
+
+### Fase H — Integridade operacional + auditabilidade do score (2026-10-12)
+
+Branch `feat/fase-h-integridade` (5 commits, 226 passed + pyright 0 +
+todos os gates). Plano: `docs/ai-plans/2026-10-12-content-factory-fase-h-integridade-operacional-scoring.md`.
+Fecha as pendências estruturais deixadas pela Fase G (velocidade por
+diff, estado ok/partial real, auditabilidade de score/runs) e adiciona
+a ferramenta de validação empírica do ranking.
+
+- [x] **Task 1** (`9425f92`): `ResearchOutcome` ganha `partial` real —
+  `run_research_cycle` calcula `ok` (0 erros de plataforma social) e
+  `partial` (erros mas com inserções/atualizações). Counts novos:
+  `social_platforms_attempted`/`social_platform_errors`. Envelope do
+  worker já expunha `{ok, partial, **counts}`.
+- [x] **Task 2** (`8ba4211`): migração `0006` — `video_scores` ganha
+  `metrics_available JSONB` + `formula_version VARCHAR(16)` (default
+  `fase-h`), `velocity` vira nullable. `ScoreRepositoryImpl.upsert`
+  persiste os campos; `FORMULA_VERSION` centralizado em
+  `domain/scoring.py`.
+- [x] **Task 3** (`9e93db3`): `momentum_score(metrics, previous,
+  captured_at, previous_captured_at)` — views/hora ÷ cap 1000 → 0-100,
+  `None` sem par de snapshots. `viral_score` ganha kwargs `captured_at`/
+  `previous_metrics`/`previous_captured_at` e usa momentum real no lugar
+  do fake `age_days=999`. `ScoreResult.velocity: float | None`.
+  `VideoSnapshot` ganha `captured_at`/`previous_metrics`/
+  `previous_captured_at`.
+- [x] **Task 4** (`b38bd21`): `latest_for_segment` reescrito com
+  `row_number()` window — busca a captura `rn==2` (anterior) por vídeo
+  e alimenta `_snapshot()`. `app/score.py` repassa os novos kwargs.
+- [x] **Task 5** (`38b2870`): `upsert_candidates` — metadados atualizam
+  no conflito via `COALESCE(NULLIF(excluded,'',VideoRow.*))`
+  (`title`/`description`) e `COALESCE(excluded, VideoRow.*)`
+  (`published_at`/`duration_s`/`thumbnail_url`); `raw` sempre vence;
+  `last_collected_at` sempre atualiza.
+- [x] **Task 6** (`3583326`): migração `0007` — `trend_observations`
+  ganha unique constraint `(segment_id, keyword, period_start,
+  period_granularity)` (dedupe antes: mantém a mais recente; empate de
+  `collected_at` mantém a de maior id). `record_many` troca `session.add`
+  por `pg_insert(...).on_conflict_do_update(...)` em
+  `interest`/`collected_at` — reverte a decisão "append-only" da Fase F3
+  (mesmo período medido de novo atualiza, não duplica).
+- [x] **Task 7** (`d762f22`): migração `0008` — `collect_runs` ganha
+  `skipped INTEGER NOT NULL DEFAULT 0` + backfill (`failed→skipped`
+  onde `status=ok`). `CollectRun`/`CollectRunRow` ganham o campo;
+  `collect()` e `research_pipeline()` gravam `run.skipped = stats.skipped`
+  (era `run.failed = stats.skipped`); `except` de plataforma grava
+  `failed = 1` explícito.
+- [x] **Task 8** (`026ee19`): `cf score-sample --segment <slug> --limit N
+  --out <path>.csv` exporta o ranking com todos os componentes do
+  `ScoreResult` + coluna `avaliacao_manual` vazia; `cf score-correlation
+  --csv <path>.csv` devolve Spearman (stdlib, sem scipy) entre o rank
+  do sistema e o rank humano. `CorrelationResult` é dataclass (pyright
+  desta versão não discrimina TypedDict via `result.ok`). Veredito
+  sobre os pesos continua sendo humano, com dados reais — a task entrega
+  o ferramental, não o veredito.
 
 ### Fase G (parcial) — Scoring v2: None vs Zero + cobertura (2026-10-12)
 

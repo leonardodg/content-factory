@@ -226,10 +226,10 @@ async def test_run_research_cycle_ok_when_no_social_platform_configured() -> Non
     assert out.partial is False
 ```
 
-- [ ] RED (os 2 testes novos falham; `test_run_research_cycle_social_failure_records_failed_run` falha na asserção corrigida contra o código atual)
-- [ ] GREEN
-- [ ] `pytest tests/app/test_research_pipeline.py -v`
-- [ ] Commit: `fix(research): run_research_cycle reporta ok/partial real, nao sempre ok=True`
+- [x] RED (os 2 testes novos falham; `test_run_research_cycle_social_failure_records_failed_run` falha na asserção corrigida contra o código atual)
+- [x] GREEN
+- [x] `pytest tests/app/test_research_pipeline.py -v`
+- [x] Commit: `fix(research): run_research_cycle reporta ok/partial real, nao sempre ok=True`
 
 ## Task 2 — schema: `video_scores` ganha `metrics_available`, `formula_version`, `velocity` nullable
 
@@ -379,10 +379,10 @@ async def test_score_upsert_persists_metrics_available_and_formula_version() -> 
     await engine.dispose()
 ```
 
-- [ ] `alembic upgrade head` local contra `TEST_DATABASE_URL`
-- [ ] `alembic check` → sem novas operações
-- [ ] RED → GREEN no teste novo
-- [ ] Commit: `feat(scoring): persiste metrics_available e formula_version em video_scores`
+- [x] `alembic upgrade head` local contra `TEST_DATABASE_URL`
+- [x] `alembic check` → sem novas operações
+- [x] RED → GREEN no teste novo
+- [x] Commit: `feat(scoring): persiste metrics_available e formula_version em video_scores`
 
 ## Task 3 — `velocity` deixa de inventar idade; passa a medir crescimento real
 
@@ -625,10 +625,10 @@ def test_viral_score_missing_published_at_does_not_invent_velocity() -> None:
     assert r.velocity is None
 ```
 
-- [ ] RED (testes novos falham contra o `viral_score` atual — `momentum_score` não existe, assinatura sem os 3 kwargs novos)
-- [ ] GREEN
-- [ ] `pytest tests/domain/test_scoring.py -v`
-- [ ] Commit: `fix(scoring): velocity mede crescimento real entre snapshots, nao idade`
+- [x] RED (testes novos falham contra o `viral_score` atual — `momentum_score` não existe, assinatura sem os 3 kwargs novos)
+- [x] GREEN
+- [x] `pytest tests/domain/test_scoring.py -v`
+- [x] Commit: `fix(scoring): velocity mede crescimento real entre snapshots, nao idade`
 
 ## Task 4 — `latest_for_segment` traz o snapshot anterior; `app/score.py` repassa pro `viral_score`
 
@@ -763,11 +763,11 @@ Estender o teste já existente `test_latest_for_segment_picks_newest_metric_and_
         assert snaps[vid_vazio].metrics.views is None
 ```
 
-- [ ] RED (asserções novas falham: `VideoSnapshot` ainda não tem `previous_metrics`/`captured_at` preenchidos de verdade antes do Passo 4.1)
-- [ ] GREEN
-- [ ] `pytest tests/infra/test_repositories.py -v` (requer `TEST_DATABASE_URL`)
-- [ ] `pyright` (o `aliased(VideoMetricsRow, ranked)` precisa tipar limpo — se o pyright reclamar do retorno de `aliased`, usar `cast` explícito documentando o motivo, não `# type: ignore`)
-- [ ] Commit: `feat(scoring): latest_for_segment traz snapshot anterior para calculo de momentum`
+- [x] RED (asserções novas falham: `VideoSnapshot` ainda não tem `previous_metrics`/`captured_at` preenchidos de verdade antes do Passo 4.1)
+- [x] GREEN
+- [x] `pytest tests/infra/test_repositories.py -v` (requer `TEST_DATABASE_URL`)
+- [x] `pyright` (o `aliased(VideoMetricsRow, ranked)` precisa tipar limpo — se o pyright reclamar do retorno de `aliased`, usar `cast` explícito documentando o motivo, não `# type: ignore`)
+- [x] Commit: `feat(scoring): latest_for_segment traz snapshot anterior para calculo de momentum`
 
 ## Task 5 — `upsert_candidates` atualiza metadados em conflito
 
@@ -893,9 +893,9 @@ async def test_upsert_candidates_preserves_metadata_when_new_value_is_empty() ->
     await engine.dispose()
 ```
 
-- [ ] RED → GREEN
-- [ ] `pytest tests/infra/test_repositories.py -v`
-- [ ] Commit: `fix(repositories): upsert_candidates atualiza metadados quando a nova coleta tem dado melhor`
+- [x] RED → GREEN
+- [x] `pytest tests/infra/test_repositories.py -v`
+- [x] Commit: `fix(repositories): upsert_candidates atualiza metadados quando a nova coleta tem dado melhor`
 
 ## Task 6 — `trend_observations` não acumula o mesmo período duplicado
 
@@ -1102,10 +1102,10 @@ async def test_trend_observation_record_many_upserts_same_period() -> None:
     await engine.dispose()
 ```
 
-- [ ] `alembic upgrade head`, `alembic check`
-- [ ] RED → GREEN
-- [ ] `pytest tests/infra/test_repositories.py -v`
-- [ ] Commit: `fix(trends): trend_observations faz upsert por periodo em vez de acumular duplicata`
+- [x] `alembic upgrade head`, `alembic check`
+- [x] RED → GREEN
+- [x] `pytest tests/infra/test_repositories.py -v`
+- [x] Commit: `fix(trends): trend_observations faz upsert por periodo em vez de acumular duplicata`
 
 ## Task 7 — `CollectRun` separa candidatos ignorados de falha de plataforma
 
@@ -1343,11 +1343,11 @@ async def test_collect_run_record_persists_skipped_separate_from_failed() -> Non
     await engine.dispose()
 ```
 
-- [ ] RED (testes renomeados/novos falham contra o código atual — `CollectRun` ainda não tem `skipped`)
-- [ ] GREEN
-- [ ] `alembic upgrade head`, `alembic check`
-- [ ] `pytest tests/app/test_collect.py tests/app/test_research_pipeline.py tests/infra/test_repositories.py -v`
-- [ ] Commit: `fix(audit): CollectRun separa candidatos ignorados (skipped) de falha de plataforma (failed)`
+- [x] RED (testes renomeados/novos falham contra o código atual — `CollectRun` ainda não tem `skipped`)
+- [x] GREEN
+- [x] `alembic upgrade head`, `alembic check`
+- [x] `pytest tests/app/test_collect.py tests/app/test_research_pipeline.py tests/infra/test_repositories.py -v`
+- [x] Commit: `fix(audit): CollectRun separa candidatos ignorados (skipped) de falha de plataforma (failed)`
 
 ## Task 8 — metodologia de avaliação empírica do ranking (P2)
 
@@ -1431,19 +1431,19 @@ sintética com correlação conhecida). A VALIDAÇÃO EM SI — rodar contra
 dados reais e decidir se o ranking é bom — é trabalho humano
 pós-plano, não uma asserção de teste.
 
-- [ ] RED → GREEN (testes do use-case puro com dados sintéticos)
-- [ ] `pytest tests/app/test_score_sample.py -v`
-- [ ] Commit: `feat(score): cf score-sample + cf score-correlation para validacao empirica do ranking`
+- [x] RED → GREEN (testes do use-case puro com dados sintéticos)
+- [x] `pytest tests/app/test_score_sample.py -v`
+- [x] Commit: `feat(score): cf score-sample + cf score-correlation para validacao empirica do ranking`
 
 ## Gates finais (todas as tasks)
 
-- [ ] `pytest` completo (unit + `@requires_infra` com `TEST_DATABASE_URL`)
-- [ ] `ruff check` / `ruff format --check`
-- [ ] `pyright` strict — 0 erros
-- [ ] `alembic check` — sem operações pendentes
-- [ ] `bandit` — 0
-- [ ] `pip-audit` — 0 vulnerabilidades
-- [ ] `mkdocs build --strict`
-- [ ] teste de privacidade (spec §10)
-- [ ] Atualizar `docs/HANDOFF.md` (seção "Fase H'") e marcar os itens
+- [x] `pytest` completo (unit + `@requires_infra` com `TEST_DATABASE_URL`)
+- [x] `ruff check` / `ruff format --check`
+- [x] `pyright` strict — 0 erros
+- [x] `alembic check` — sem operações pendentes
+- [x] `bandit` — 0
+- [x] `pip-audit` — 0 vulnerabilidades
+- [x] `mkdocs build --strict`
+- [x] teste de privacidade (spec §10)
+- [x] Atualizar `docs/HANDOFF.md` (seção "Fase H'") e marcar os itens
   correspondentes no roadmap (`docs/ai-plans/2026-10-12-content-factory-melhorias-roadmap.md`)
