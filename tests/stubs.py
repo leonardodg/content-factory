@@ -9,7 +9,7 @@ import asyncio
 from collections.abc import Sequence
 from datetime import datetime
 from math import ceil
-from typing import ClassVar
+from typing import Any, ClassVar
 
 from content_factory.app.ports import (
     Collector,
@@ -337,3 +337,22 @@ class FakeRedis:
             self.expires.pop(name, None)
             removed += int(existed)
         return removed
+
+    async def eval(self, script: str, numkeys: int, *keys_and_args: str) -> Any:
+        """Executa o CAS de release de forma atômica no dict em memória.
+
+        Espelha o Lua de `infra/lock` (`KEYS[1]` apagada só se o valor for
+        `ARGV[1]`); o `script` é registrado mas não interpretado — o único
+        chamador é `RedisLock.release`.
+        """
+        self.commands.append("eval")
+        _ = script
+        keys = keys_and_args[:numkeys]
+        args = keys_and_args[numkeys:]
+        if not keys or not args:
+            return 0
+        if self.values.get(keys[0]) == args[0]:
+            self.values.pop(keys[0], None)
+            self.expires.pop(keys[0], None)
+            return 1
+        return 0

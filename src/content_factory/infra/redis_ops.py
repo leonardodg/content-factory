@@ -11,7 +11,7 @@ quebraria o structural typing em pyright strict.
 
 from collections.abc import AsyncGenerator, Awaitable
 from contextlib import asynccontextmanager
-from typing import Protocol
+from typing import Any, Protocol
 
 
 class RedisOps(Protocol):
@@ -34,6 +34,11 @@ class RedisOps(Protocol):
     ) -> Awaitable[bool | None]: ...
 
     def delete(self, *names: str) -> Awaitable[int]: ...
+
+    # `eval` real devolve `Awaitable[str] | str` (não o `ResponseT` genérico
+    # dos outros comandos) — a união espelha o stub do redis-py para o
+    # protocolo estrutural fechar; `await` sobre `Any` continua válido.
+    def eval(self, script: str, numkeys: int, *keys_and_args: str) -> Awaitable[Any] | Any: ...
 
 
 @asynccontextmanager
