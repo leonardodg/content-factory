@@ -35,6 +35,7 @@ class ResearchDeps:
 @dataclass
 class ResearchOutcome:
     ok: bool
+    partial: bool = False
     counts: dict[str, int | bool] = field(default_factory=dict[str, int | bool])
 
 
@@ -82,9 +83,12 @@ async def run_research_cycle(
 
         keywords_for_social = [s.keyword for s in all_signals]
         social_found = social_inserted = social_updated = social_skipped = 0
+        social_platforms_attempted = 0
+        social_platform_errors = 0
         for platform, discoverer in deps.socials.items():
             if platform not in segment.platforms:
                 continue
+            social_platforms_attempted += 1
             started = datetime.now(UTC)
             run = CollectRun(
                 collector=f"research:{platform}", segment_id=segment.id, started_at=started
@@ -109,6 +113,7 @@ async def run_research_cycle(
                 # collect(), que captura por coletor); visível no envelope
                 run.status = "failed"
                 run.error_code = getattr(exc, "code", "internal_error")
+                social_platform_errors += 1
                 counts[f"{platform}_failed"] = int(counts.get(f"{platform}_failed", 0)) + 1
             finally:
                 run.finished_at = datetime.now(UTC)
@@ -117,7 +122,14 @@ async def run_research_cycle(
         counts["social_inserted"] = social_inserted
         counts["social_updated"] = social_updated
         counts["social_skipped"] = social_skipped
+        counts["social_platforms_attempted"] = social_platforms_attempted
+        counts["social_platform_errors"] = social_platform_errors
 
-        return ResearchOutcome(ok=True, counts=counts)
+        # Mesmo contrato de collect(): ok = nenhuma plataforma social
+        # configurada falhou; partial = falhou alguma mas outras
+        # inseriram/atualizaram candidato.
+        ok = social_platform_errors == 0
+        partial = (not ok) and (social_inserted + social_updated > 0)
+        return ResearchOutcome(ok=ok, partial=partial, counts=counts)
     finally:
         await deps.lock.release(lock_key)

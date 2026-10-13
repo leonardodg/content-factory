@@ -258,11 +258,91 @@ async def test_run_research_cycle_social_failure_records_failed_run() -> None:
         guard=FanoutGuard(DepthConfig()),
     )
     out = await run_research_cycle("candles", DepthConfig(), deps)
-    assert out.ok is True  # ciclo não aborta
+    assert out.ok is False  # falha TOTAL da única plataforma social configurada
+    assert out.partial is False  # nada foi inserido/atualizado
     assert out.counts.get("instagram_failed") == 1
     assert isinstance(repos.runs, FakeRuns)
     assert repos.runs.recorded[0].status == "failed"
     assert repos.runs.recorded[0].error_code == "blocked"
+
+
+@pytest.mark.asyncio
+async def test_run_research_cycle_partial_when_one_of_two_social_fails() -> None:
+    """1 plataforma falha, outra insere candidato → ok=False, partial=True."""
+
+    class _BoomSocial:
+        platform: ClassVar[str] = "tiktok"
+
+        async def discover_by_keywords(
+            self, keywords: list[str], hashtags: list[str], depth: int
+        ) -> list[CandidateVideo]:
+            from content_factory.domain.errors import CollectorError
+
+            raise CollectorError("blocked", "tiktok", "rate limit")
+
+    cands = [
+        CandidateVideo(
+            platform="instagram",
+            platform_video_id="ig1",
+            url="https://instagram.com/reel/ig1",
+            creator_handle="u",
+        )
+    ]
+
+    class _SegmentsWithTwoPlatforms:
+        async def get_by_slug(self, slug: str) -> Segment:
+            return Segment(
+                id=1,
+                slug=slug,
+                name=slug,
+                platforms=["instagram", "tiktok"],
+                keywords=["vela"],
+            )
+
+        async def upsert(self, cfg: SegmentConfig) -> Segment:
+            raise NotImplementedError
+
+    repos = FakeRepos()
+    deps = ResearchDeps(
+        web=_FakeWeb(),
+        trends=_FakeTrends(),
+        socials={"instagram": _FakeSocial(cands), "tiktok": _BoomSocial()},
+        signals=_FakeSignalRepo(),
+        trend_observations=FakeTrendObservations(),
+        segments=_SegmentsWithTwoPlatforms(),
+        videos=repos.videos,
+        runs=repos.runs,
+        lock=FakeLock(),
+        limiter=FakeLimiter(),
+        guard=FanoutGuard(DepthConfig()),
+    )
+    out = await run_research_cycle("candles", DepthConfig(), deps)
+    assert out.ok is False
+    assert out.partial is True
+    assert out.counts["social_inserted"] == 1
+    assert out.counts.get("tiktok_failed") == 1
+
+
+@pytest.mark.asyncio
+async def test_run_research_cycle_ok_when_no_social_platform_configured() -> None:
+    """Segmento sem rede social configurada: ausência de coleta social não é falha."""
+    repos = FakeRepos()
+    deps = ResearchDeps(
+        web=_FakeWeb(),
+        trends=_FakeTrends(),
+        socials={},
+        signals=_FakeSignalRepo(),
+        trend_observations=FakeTrendObservations(),
+        segments=_FakeSegmentsWithKeywords(),  # platforms=["instagram"], mas deps.socials={}
+        videos=repos.videos,
+        runs=repos.runs,
+        lock=FakeLock(),
+        limiter=FakeLimiter(),
+        guard=FanoutGuard(DepthConfig()),
+    )
+    out = await run_research_cycle("candles", DepthConfig(), deps)
+    assert out.ok is True
+    assert out.partial is False
 
 
 @pytest.mark.asyncio
