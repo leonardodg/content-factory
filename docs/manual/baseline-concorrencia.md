@@ -56,3 +56,21 @@ equivalente e comparar: a duração total por segmento deve cair
 aproximadamente para o **máximo** das plataformas em vez da **soma**, com
 `found`/`inserted`/`updated` equivalentes. O `discover_ms`/`persist_ms` em
 `collect_runs` separa então o ganho de rede do custo de persistência.
+
+## Task 12 — perfil do score (2026-10-13, dados reais do experimento)
+
+Medido contra o Postgres do experimento (só leitura + upserts revertidos
+por rollback — `video_scores` sem linhas novas confirmado após a medição).
+28 vídeos únicos nos 3 segmentos.
+
+| Segmento | n | `latest_for_segment` | `viral_score` CPU total | CPU/vídeo | `upsert` total | upsert/vídeo |
+| --- | --- | --- | --- | --- | --- | --- |
+| velas-artesanais | 11 | 6,0 ms | 0,2 ms | 21 µs | 10,1 ms | 0,92 ms |
+| sabonetes-artesanais | 9 | 2,2 ms | 0,2 ms | 18 µs | 5,6 ms | 0,62 ms |
+| resina-artesanal | 8 | 1,9 ms | 0,2 ms | 20 µs | 5,9 ms | 0,74 ms |
+
+Veredito: `viral_score` é CPU trivial (~20 µs/vídeo) — **não há
+paralelismo de CPU a fazer, Task 14 descartada**. O custo real é **um
+round-trip ao Postgres por vídeo** (`begin_nested()` + `flush()` por linha
+em `ScoreRepositoryImpl.upsert`) — ~0,7 ms/vídeo, 100% do tempo de
+persistência. Task 13 (lote) confirmada como o único ganho.

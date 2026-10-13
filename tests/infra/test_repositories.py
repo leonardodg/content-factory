@@ -338,16 +338,30 @@ async def test_score_partial_persists_healthy_rows_when_one_insert_fails(
 
         # falha de INSERT só no vídeo do meio do lote: o objeto entra na
         # sessão, mas com segment_id nulado — o Postgres estoura NOT NULL
-        # no flush (IntegrityError real, que envenena a transação)
+        # no flush (IntegrityError real, que envenena a transação).
+        # Task 13: o caminho em lote usa add_all (que delega à sessão
+        # síncrona e não passa pelo patch de instância de add) — por isso
+        # o veneno é aplicado também em add_all; o fallback linha-a-linha
+        # continua passando por add e isola a linha doente.
         poison_id = vids[1]
+
+        def poison(obj: object) -> None:
+            if isinstance(obj, VideoScoreRow) and obj.video_id == poison_id:
+                cast(Any, obj).segment_id = None  # NOT NULL → IntegrityError real
+
         original_add = s.add
 
         def flaky_add(obj: object) -> None:
             original_add(obj)
-            if isinstance(obj, VideoScoreRow) and obj.video_id == poison_id:
-                cast(Any, obj).segment_id = None  # NOT NULL → IntegrityError real
+            poison(obj)
+
+        def flaky_add_all(objs: object) -> None:
+            for item in cast(Any, objs):
+                original_add(item)
+                poison(item)
 
         monkeypatch.setattr(s, "add", flaky_add)
+        monkeypatch.setattr(s, "add_all", flaky_add_all)
 
         outcome = await score(
             ScoreDeps(
