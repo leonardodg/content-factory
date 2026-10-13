@@ -652,6 +652,137 @@ def test_workersettings_registers_research_job_and_cron() -> None:
     assert settings.cron_jobs[0].hour == {7}
 
 
+async def test_create_app_deps_single_redis_when_urls_equal(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """URLs iguais ⇒ um único cliente Redis (comportamento pré-Task 3)."""
+    from collections.abc import AsyncGenerator
+    from contextlib import asynccontextmanager
+
+    import content_factory.infra.collectors as collectors_mod
+    import content_factory.infra.db.base as db_base
+    import content_factory.infra.redis_ops as redis_ops
+    from content_factory.config import Settings
+
+    opened: list[str] = []
+    closed: list[str] = []
+
+    class _Client:
+        def __init__(self, url: str) -> None:
+            self.url = url
+
+    @asynccontextmanager
+    async def _redis(url: str) -> AsyncGenerator[object]:
+        client = _Client(url)
+        opened.append(url)
+        try:
+            yield client
+        finally:
+            closed.append(url)
+
+    class _Session:
+        async def commit(self) -> None:
+            pass
+
+        async def rollback(self) -> None:
+            pass
+
+    @asynccontextmanager
+    async def _session() -> AsyncGenerator[Any]:
+        yield _Session()
+
+    def _factory(_settings: Settings) -> Any:
+        return _session
+
+    def _register(_settings: Settings) -> None:
+        pass
+
+    class _Registry:
+        def snapshot(self) -> list[str]:
+            return []
+
+        def resolve(self, names: list[str]) -> list[object]:
+            return []
+
+    monkeypatch.setattr(db_base, "get_session_factory", _factory)
+    monkeypatch.setattr(redis_ops, "redis_client", _redis)
+    monkeypatch.setattr(collectors_mod, "register_defaults", _register)
+    monkeypatch.setattr(collectors_mod, "registry", _Registry())
+
+    settings = Settings()
+    assert settings.rate_limit_redis_url is None
+    deps = await w.create_app_deps(settings)
+    assert opened == [settings.redis_url]  # um cliente só
+    await deps.close()
+    assert closed == [settings.redis_url]
+
+
+async def test_create_app_deps_two_redis_when_urls_differ(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """URLs diferentes ⇒ dois clientes; ambos fechados no shutdown."""
+    from collections.abc import AsyncGenerator
+    from contextlib import asynccontextmanager
+
+    import content_factory.infra.collectors as collectors_mod
+    import content_factory.infra.db.base as db_base
+    import content_factory.infra.redis_ops as redis_ops
+    from content_factory.config import Settings
+
+    opened: list[str] = []
+    closed: list[str] = []
+
+    class _Client:
+        def __init__(self, url: str) -> None:
+            self.url = url
+
+    @asynccontextmanager
+    async def _redis(url: str) -> AsyncGenerator[object]:
+        client = _Client(url)
+        opened.append(url)
+        try:
+            yield client
+        finally:
+            closed.append(url)
+
+    class _Session:
+        async def commit(self) -> None:
+            pass
+
+        async def rollback(self) -> None:
+            pass
+
+    @asynccontextmanager
+    async def _session() -> AsyncGenerator[Any]:
+        yield _Session()
+
+    def _factory(_settings: Settings) -> Any:
+        return _session
+
+    def _register(_settings: Settings) -> None:
+        pass
+
+    class _Registry:
+        def snapshot(self) -> list[str]:
+            return []
+
+        def resolve(self, names: list[str]) -> list[object]:
+            return []
+
+    monkeypatch.setattr(db_base, "get_session_factory", _factory)
+    monkeypatch.setattr(redis_ops, "redis_client", _redis)
+    monkeypatch.setattr(collectors_mod, "register_defaults", _register)
+    monkeypatch.setattr(collectors_mod, "registry", _Registry())
+
+    settings = Settings(
+        redis_url="redis://redis:6379/1", rate_limit_redis_url="redis://redis:6379/0"
+    )
+    deps = await w.create_app_deps(settings)
+    assert opened == ["redis://redis:6379/1", "redis://redis:6379/0"]
+    await deps.close()
+    assert sorted(closed) == ["redis://redis:6379/0", "redis://redis:6379/1"]
+
+
 async def test_startup_fails_when_collect_segment_set(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

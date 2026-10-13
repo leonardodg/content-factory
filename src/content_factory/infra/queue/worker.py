@@ -211,6 +211,17 @@ async def create_app_deps(settings: Settings) -> AppDeps:
     stack = AsyncExitStack()
     try:
         client = await stack.enter_async_context(redis_client(settings.redis_url))
+        # Cota de API e breaker são globais por chave de API, não por fila
+        # (Task 3): com /1, /2, /3 cada worker teria sua própria janela
+        # cf:rl:youtube e seu próprio breaker — a cota real seria consumida
+        # em até 3x. Operacionalmente rate_limit_redis_url aponta para /0.
+        # Locks de segmento vão no mesmo cliente compartilhado, porque lock
+        # por fila não protege nada entre workers.
+        shared_url = settings.rate_limit_redis_url or settings.redis_url
+        if shared_url == settings.redis_url:
+            shared = client
+        else:
+            shared = await stack.enter_async_context(redis_client(shared_url))
         session = await stack.enter_async_context(get_session_factory(settings)())
         register_defaults(settings)
         # socials: só collectors que implementam discover_by_keywords (Fase C+)
@@ -226,8 +237,8 @@ async def create_app_deps(settings: Settings) -> AppDeps:
                 videos=VideoRepositoryImpl(session),
                 segments=SegmentRepositoryImpl(session),
                 runs=CollectRunRepositoryImpl(session),
-                limiter=RedisRateLimiter(client),
-                lock=RedisLock(client),
+                limiter=RedisRateLimiter(shared),
+                lock=RedisLock(shared),
             ),
             score=ScoreDeps(
                 videos=VideoRepositoryImpl(session),
@@ -245,8 +256,8 @@ async def create_app_deps(settings: Settings) -> AppDeps:
                 segments=SegmentRepositoryImpl(session),
                 videos=VideoRepositoryImpl(session),
                 runs=CollectRunRepositoryImpl(session),
-                limiter=RedisRateLimiter(client),
-                lock=RedisLock(client),
+                limiter=RedisRateLimiter(shared),
+                lock=RedisLock(shared),
                 guard=FanoutGuard(DepthConfig()),  # placeholder — run_research_job substitui
             ),
             campaigns=ResearchCampaignRepositoryImpl(session),
