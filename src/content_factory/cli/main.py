@@ -17,7 +17,7 @@ from content_factory.app.ports import (
 from content_factory.app.score import ScoreDeps, ScoreOutcome, score
 from content_factory.cli.output import dumps, envelope_err, envelope_ok, exit_code_for
 from content_factory.domain.errors import CollectorError, DomainError, SegmentNotFound
-from content_factory.domain.models import CandidateVideo, ResearchCampaign
+from content_factory.domain.models import CandidateVideo, ResearchCampaign, Segment
 from content_factory.infra.redact import redact
 
 app = typer.Typer(no_args_is_help=True)
@@ -420,6 +420,10 @@ def _research_campaigns() -> ResearchCampaignRepository:
         async def active_for_segment(self, segment_id: int) -> ResearchCampaign | None:
             async with factory() as session:
                 return await ResearchCampaignRepositoryImpl(session).active_for_segment(segment_id)
+
+        async def active_segments(self) -> list[Segment]:
+            async with factory() as session:
+                return await ResearchCampaignRepositoryImpl(session).active_segments()
 
     return _Repo()
 

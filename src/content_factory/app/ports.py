@@ -92,6 +92,14 @@ class ResearchCampaignRepository(Protocol):
         """Campanha ativa e não vencida (ends_at > now) do segmento, se houver."""
         ...
 
+    async def active_segments(self) -> list[Segment]:
+        """Todos os segmentos com campanha ativa e não vencida (ends_at > now).
+
+        Fonte única de "quais segmentos o worker deve processar neste
+        tick" — vale pros 3 jobs (collect/score/research), não só pesquisa.
+        """
+        ...
+
 
 class TrendObservationRepository(Protocol):
     async def record_many(self, segment_id: int, points: Sequence[TrendPoint]) -> int: ...
