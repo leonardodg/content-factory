@@ -647,3 +647,48 @@ async def test_upsert_candidates_skips_metrics_row_when_no_metric_reported() -> 
         )
         assert rows == []  # sem métrica reportada → sem linha
     await engine.dispose()
+
+
+@requires_infra
+async def test_score_upsert_persists_metrics_available_and_formula_version() -> None:
+    """ScoreResult.metrics_available e formula_version são persistidos em video_scores.
+
+    Fase H: a cobertura de métricas calculada em domain/scoring.py nunca
+    chegava ao banco — video_scores não tinha a coluna, então qualquer
+    análise posterior do score não conseguia distinguir "engagement=0
+    porque views=0" de "engagement ausente porque views não reportada".
+    """
+    engine = create_async_engine(os.environ["TEST_DATABASE_URL"])
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    async with factory() as s:
+        await s.rollback()
+        seg = await SegmentRepositoryImpl(s).upsert(
+            SegmentConfig(
+                slug=f"teste-coverage-{uuid4().hex[:8]}",
+                name="Teste coverage",
+                platforms=["youtube"],
+                keywords=["k"],
+            )
+        )
+        c = candidate(6)
+        await VideoRepositoryImpl(s).upsert_candidates(seg.id, "youtube", [c])
+        vid = await video_id_of(s, c)
+        result = ScoreResult(
+            total=42.5,
+            performance=10.0,
+            velocity=80.0,
+            engagement=20.0,
+            relevance=100.0,
+            recency=100.0,
+            trend_decay="low",
+            metrics_available=["views", "likes"],
+        )
+        await ScoreRepositoryImpl(s).upsert(vid, seg.id, result, datetime.now(UTC))
+        await s.commit()
+        row = (
+            await s.execute(select(VideoScoreRow).where(VideoScoreRow.video_id == vid))
+        ).scalar_one()
+        assert row.metrics_available == ["views", "likes"]
+        assert row.formula_version == "fase-h"
+        assert row.velocity == 80.0
+    await engine.dispose()

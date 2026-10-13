@@ -30,6 +30,7 @@ from content_factory.domain.models import (
     VideoMetrics,
     VideoSnapshot,
 )
+from content_factory.domain.scoring import FORMULA_VERSION
 from content_factory.infra.db.orm import (
     CollectRunRow,
     KeywordSignalRow,
@@ -240,6 +241,8 @@ class ScoreRepositoryImpl(ScoreRepository):
                     relevance=result.relevance,
                     recency=result.recency,
                     trend_decay=result.trend_decay,
+                    metrics_available=result.metrics_available,
+                    formula_version=FORMULA_VERSION,
                 )
             )
             await self._s.flush()

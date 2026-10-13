@@ -109,11 +109,15 @@ class VideoScoreRow(Base):
     viral_score: Mapped[float] = mapped_column(Float, index=True)
     # Fase G: None = métrica ausente no snapshot (não "zero reportado")
     performance: Mapped[float | None] = mapped_column(Float)
-    velocity: Mapped[float] = mapped_column(Float)
+    # Fase H: None = sem par de snapshots comparável (momentum_score)
+    velocity: Mapped[float | None] = mapped_column(Float)
     engagement: Mapped[float | None] = mapped_column(Float)
     relevance: Mapped[float] = mapped_column(Float)
     recency: Mapped[float] = mapped_column(Float)
     trend_decay: Mapped[str] = mapped_column(String(8))
+    # Fase H: cobertura de métricas e versão da fórmula — auditáveis no banco
+    metrics_available: Mapped[list[str]] = mapped_column(JSONB, default=list)
+    formula_version: Mapped[str] = mapped_column(String(16), default="fase-h")
     replication_score: Mapped[float | None] = mapped_column(Float)  # fase IA
     production_score: Mapped[float | None] = mapped_column(Float)  # fase IA
 

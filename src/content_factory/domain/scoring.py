@@ -9,6 +9,7 @@ WEIGHTS = {
     "relevance": 0.20,
     "recency": 0.20,
 }
+FORMULA_VERSION = "fase-h"  # bump quando WEIGHTS ou a fórmula de um componente mudar
 
 
 def engagement_rate(m: VideoMetrics) -> float | None:
