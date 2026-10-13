@@ -39,6 +39,7 @@ nav:
       - Estado e fases: architecture/estado-e-proximas-fases.md
   - Data model: data-model/README.md
   - Diagramas: diagram/README.md
+  - Fluxos da pipeline: diagram/fluxos.md
   - Dev:
       - Índice: dev/index.md
       - Ambiente: dev/dev-environment.md

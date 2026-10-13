@@ -9,3 +9,5 @@
 - [PNG (2x)](er.png) · [HTML interativo](er.html) ·
   [Fonte mermaid (.mmd)](er.mmd)
 - Colunas, tipos e notas: [data model](../data-model/README.md)
+- Comportamento em runtime: [fluxos da pipeline](fluxos.md) (cron, jobs,
+  segmentos e plataformas concorrentes, startup/shutdown, CLI, Redis)
