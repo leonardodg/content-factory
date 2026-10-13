@@ -1,3 +1,4 @@
+import asyncio
 from collections.abc import AsyncGenerator, Callable
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
@@ -5,13 +6,16 @@ from typing import Any, ClassVar, cast
 
 import pytest
 
+from content_factory.app.collect import CollectDeps, collect
+from content_factory.app.ports import Collector
 from content_factory.app.research_pipeline import ResearchDeps
 from content_factory.app.score import ScoreDeps
 from content_factory.domain.errors import SegmentNotFound
 from content_factory.domain.fanout_guard import FanoutGuard
 from content_factory.domain.models import DepthConfig, ResearchCampaign, Segment
 from content_factory.infra.queue import worker as w
-from tests.stubs import FakeLimiter, FakeLock, FakeRepos
+from content_factory.infra.ratelimit import RedisRateLimiter, Window
+from tests.stubs import FakeCollector, FakeLimiter, FakeLock, FakeRedis, FakeRepos
 
 
 class CountingDeps:
@@ -405,13 +409,17 @@ def test_workersettings_registers_jobs_and_cron() -> None:
     assert [cj.minute for cj in settings.cron_jobs] == [0, 0, 30]
     assert all(cj.unique for cj in settings.cron_jobs)
     assert settings.on_startup is w.startup
-    assert settings.on_job_end is w.job_end
+    # Task 11: on_job_end REMOVIDO — cada UoW já reverte em exceção via
+    # session_scope; não há mais sessão global a limpar após o job.
+    assert getattr(settings, "on_job_end", None) is None
     assert settings.on_shutdown is w.shutdown
 
 
-def test_workersettings_max_jobs_is_one() -> None:
-    """Sessão única compartilhada: 1 job por vez (arq default é 10)."""
-    assert w.WorkerSettings.max_jobs == 1
+def test_workersettings_max_jobs_allows_concurrency() -> None:
+    """Task 11: sessões por UoW — jobs podem se sobrepor (era 1 pela sessão global)."""
+    # 3 = 1 por tipo de job (collect/score/research); engine e clientes Redis
+    # são task-safe, AsyncSession nunca é compartilhada.
+    assert w.WorkerSettings.max_jobs == 3
 
 
 def test_workersettings_timezone_is_sao_paulo() -> None:
@@ -1090,3 +1098,328 @@ async def test_create_app_deps_close_disposes_engine(
     assert deps.engine is deps.session_factory.kw["bind"]  # 1 engine compartilhado
     await deps.close()
     assert disposed == ["dispose"]
+
+
+def test_max_segments_from_env_default_and_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Task 11: WORKER_MAX_SEGMENTS (default 3; inválido/<1 cai em 3/1)."""
+    load = w._max_segments_from_env  # pyright: ignore[reportPrivateUsage]
+    monkeypatch.delenv("WORKER_MAX_SEGMENTS", raising=False)
+    assert load() == 3
+    monkeypatch.setenv("WORKER_MAX_SEGMENTS", "2")
+    assert load() == 2
+    monkeypatch.setenv("WORKER_MAX_SEGMENTS", "lixo")
+    assert load() == 3
+    monkeypatch.setenv("WORKER_MAX_SEGMENTS", "0")
+    assert load() == 1
+
+
+async def test_run_collect_job_runs_segments_concurrently_with_limit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Task 11: 3 segmentos sob TaskGroup + semáforo WORKER_MAX_SEGMENTS=2.
+
+    Pico de `_collect_impl` simultâneos == 2 (o sleep força a sobreposição);
+    o envelope tem TODOS os slugs — nenhum segmento silenciosamente abandonado.
+    """
+    monkeypatch.setenv("WORKER_MAX_SEGMENTS", "2")
+    state: dict[str, int] = {"current": 0, "peak": 0}
+    entered: list[str] = []
+
+    async def fake_collect(slug: str, platforms: list[str], limit: int, deps: object) -> object:
+        state["current"] += 1
+        state["peak"] = max(state["peak"], state["current"])
+        entered.append(slug)
+        try:
+            await asyncio.sleep(0.02)
+        finally:
+            state["current"] -= 1
+
+        class _Out:
+            ok = True
+            partial = False
+            counts: ClassVar[dict[str, object]] = {"found": 1}
+
+        return _Out()
+
+    monkeypatch.setattr(w, "_collect_impl", fake_collect)
+    monkeypatch.setattr(w, "_load_settings", lambda: _collect_cfg([], 10))
+    campaigns = _FakeCampaignsMultiSegment(slugs=["velas", "sabonetes", "resina"])
+    committed: list[str] = []
+    rolled_back: list[str] = []
+    app_deps = _FakeAppDeps(committed, rolled_back)
+    out = await w.run_collect_job(
+        {"collect_deps": object(), "campaigns_deps": campaigns, "app_deps": app_deps}
+    )
+    assert state["peak"] == 2  # semáforo segurou o 3o enquanto 2 rodavam
+    assert set(out["segments"]) == {"velas", "sabonetes", "resina"}
+    assert out["ok"] is True
+    assert len(app_deps.sessions) == 3
+    assert len({id(s) for s in app_deps.sessions}) == 3  # sessão NUNCA compartilhada
+    assert committed == ["commit", "commit", "commit"]
+    assert rolled_back == []
+
+
+async def test_run_collect_job_concurrent_failure_keeps_other_commits(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Task 11: falha de 1 segmento DURANTE o overlap não cancela as irmãs.
+
+    O sleep força a sobreposição real (velas levanta depois das outras já
+    terem entrado): sem o try/except DENTRO da task, o TaskGroup cancelaria
+    tudo e slugs sumiriam do envelope.
+    """
+    monkeypatch.setenv("WORKER_MAX_SEGMENTS", "3")
+
+    async def fake_collect(slug: str, platforms: list[str], limit: int, deps: object) -> object:
+        await asyncio.sleep(0.02 if slug == "velas" else 0.01)
+        if slug == "velas":
+            raise RuntimeError("boom")
+
+        class _Out:
+            ok = True
+            partial = False
+            counts: ClassVar[dict[str, object]] = {"found": 1}
+
+        return _Out()
+
+    monkeypatch.setattr(w, "_collect_impl", fake_collect)
+    monkeypatch.setattr(w, "_load_settings", lambda: _collect_cfg([], 10))
+    campaigns = _FakeCampaignsMultiSegment(slugs=["velas", "sabonetes", "resina"])
+    committed: list[str] = []
+    rolled_back: list[str] = []
+    app_deps = _FakeAppDeps(committed, rolled_back)
+    out = await w.run_collect_job(
+        {"collect_deps": object(), "campaigns_deps": campaigns, "app_deps": app_deps}
+    )
+    assert set(out["segments"]) == {"velas", "sabonetes", "resina"}
+    assert out["ok"] is False
+    assert out["segments"]["velas"]["ok"] is False
+    assert "boom" in out["segments"]["velas"]["error"]
+    assert out["segments"]["sabonetes"]["ok"] is True
+    assert out["segments"]["resina"]["ok"] is True
+    assert committed == ["commit", "commit"]
+    assert rolled_back == ["rollback"]
+
+
+class _KeyedFakeLock:
+    """Lock por chave (espelha RedisLock): segmentos distintos não se bloqueiam.
+
+    O FakeLock de stubs.py é de estado único — o 2o segmento nunca adquiriria.
+    Aqui cada `collect:{slug}` tem seu próprio estado.
+    """
+
+    def __init__(self) -> None:
+        self.held: set[str] = set()
+        self.acquired: list[str] = []
+        self.released: list[str] = []
+
+    async def acquire_once(self, key: str) -> bool:
+        if key in self.held:
+            return False
+        self.held.add(key)
+        self.acquired.append(key)
+        return True
+
+    async def release(self, key: str) -> None:
+        self.released.append(key)
+        self.held.discard(key)
+
+
+@dataclass
+class _RealCollectBundle:
+    uow: _FakeUoW
+    collect: CollectDeps
+
+
+class _SharedLimiterAppDeps:
+    """AppDeps com CollectDeps REAIS sobre limiter/lock compartilhados (Task 11).
+
+    Exercita o caminho real `collect()` (janela Redis) com UoWs fakes por
+    segmento — prova que o teto de plataforma soma os segmentos.
+    """
+
+    def __init__(
+        self,
+        limiter: RedisRateLimiter,
+        lock: _KeyedFakeLock,
+        collector: Collector,
+        committed: list[str],
+        rolled_back: list[str],
+    ) -> None:
+        self._limiter = limiter
+        self._lock = lock
+        self._collector = collector
+        self._committed = committed
+        self._rolled_back = rolled_back
+
+    @asynccontextmanager
+    async def create_segment_deps(self, segment: Segment) -> AsyncGenerator[_RealCollectBundle]:
+        repos = FakeRepos()
+        session = _FakeSession()
+        committed = self._committed
+        rolled_back = self._rolled_back
+        uow = _FakeUoW(
+            session,
+            on_commit=lambda: committed.append("commit"),
+            on_rollback=lambda: rolled_back.append("rollback"),
+        )
+        deps = CollectDeps(
+            collectors=[self._collector],
+            videos=repos.videos,
+            segments=repos.segments,
+            runs=repos.runs,
+            limiter=self._limiter,
+            lock=self._lock,  # type: ignore[arg-type]
+        )
+        try:
+            yield _RealCollectBundle(uow=uow, collect=deps)
+        except BaseException:
+            await uow.rollback()
+            raise
+
+
+async def test_run_collect_job_global_limiter_shared_across_segments(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Task 11: teto de plataforma SOMANDO os segmentos (limiter Redis da Task 3).
+
+    3 segmentos x 1 plataforma sobre o MESMO FakeRedis com janela 2/dia: 2
+    passam, o 3o vira failed via RateLimited — sem o cliente compartilhado
+    cada segmento teria sua própria janela e os 3 passariam.
+    """
+    monkeypatch.setenv("WORKER_MAX_SEGMENTS", "3")
+    monkeypatch.setattr(w, "_collect_impl", collect)
+    monkeypatch.setattr(w, "_load_settings", lambda: _collect_cfg(["youtube"], 10))
+    redis = FakeRedis()
+    limiter = RedisRateLimiter(redis, windows={"youtube": Window(limit=2, period_s=86_400)})
+    committed: list[str] = []
+    rolled_back: list[str] = []
+    app_deps = _SharedLimiterAppDeps(
+        limiter, _KeyedFakeLock(), FakeCollector("youtube", n=2), committed, rolled_back
+    )
+    campaigns = _FakeCampaignsMultiSegment(slugs=["velas", "sabonetes", "resina"])
+    out = await w.run_collect_job(
+        {"collect_deps": object(), "campaigns_deps": campaigns, "app_deps": app_deps}
+    )
+    assert set(out["segments"]) == {"velas", "sabonetes", "resina"}
+    assert out["ok"] is False
+    oks = sorted(s for s in out["segments"] if out["segments"][s]["ok"])
+    fails = sorted(s for s in out["segments"] if not out["segments"][s]["ok"])
+    assert len(oks) == 2 and len(fails) == 1
+    assert out["segments"][fails[0]]["failed"] == 1  # counts do collect real
+    assert sum(out["segments"][s]["found"] for s in oks) == 4  # 2 videos x 2 janelas
+    assert redis.counters["cf:rl:youtube"] == 2  # janela COMUM, nao 3x
+    assert committed == ["commit", "commit", "commit"]  # run failed também commita
+    assert rolled_back == []
+
+
+async def test_run_score_job_runs_segments_concurrently(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Task 11: score também fana-out sob o mesmo TaskGroup + semáforo."""
+    monkeypatch.setenv("WORKER_MAX_SEGMENTS", "3")
+    state: dict[str, int] = {"current": 0, "peak": 0}
+
+    async def fake_score(deps: ScoreDeps) -> object:
+        state["current"] += 1
+        state["peak"] = max(state["peak"], state["current"])
+        try:
+            await asyncio.sleep(0.01)
+        finally:
+            state["current"] -= 1
+
+        class _Out:
+            ok = True
+            scored = 3
+
+        return _Out()
+
+    monkeypatch.setattr(w, "_score_impl", fake_score)
+    campaigns = _FakeCampaignsMultiSegment(slugs=["velas", "sabonetes", "resina"])
+    committed: list[str] = []
+    rolled_back: list[str] = []
+    app_deps = _FakeAppDeps(committed, rolled_back)
+    out = await w.run_score_job(
+        {
+            "score_deps": _score_deps_placeholder(),
+            "campaigns_deps": campaigns,
+            "app_deps": app_deps,
+        }
+    )
+    assert state["peak"] == 3
+    assert set(out["segments"]) == {"velas", "sabonetes", "resina"}
+    assert out["ok"] is True
+    assert committed == ["commit", "commit", "commit"]
+    assert rolled_back == []
+
+
+async def test_run_research_job_runs_segments_concurrently(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Task 11: research também fana-out sob o mesmo TaskGroup + semáforo."""
+    monkeypatch.setenv("WORKER_MAX_SEGMENTS", "3")
+    state: dict[str, int] = {"current": 0, "peak": 0}
+
+    async def fake_research(slug: str, cfg: object, deps: object) -> object:
+        state["current"] += 1
+        state["peak"] = max(state["peak"], state["current"])
+        try:
+            await asyncio.sleep(0.01)
+        finally:
+            state["current"] -= 1
+
+        class _Out:
+            ok = True
+            partial = False
+            counts: ClassVar[dict[str, object]] = {"web_found": 3}
+
+        return _Out()
+
+    monkeypatch.setattr(w, "_research_impl", fake_research)
+    campaigns = _FakeCampaignsMultiSegment(slugs=["velas", "sabonetes", "resina"])
+    committed: list[str] = []
+    rolled_back: list[str] = []
+    app_deps = _FakeAppDeps(committed, rolled_back)
+    out = await w.run_research_job(
+        {"research_deps": _research_deps(), "campaigns_deps": campaigns, "app_deps": app_deps}
+    )
+    assert state["peak"] == 3
+    assert set(out["segments"]) == {"velas", "sabonetes", "resina"}
+    assert out["ok"] is True
+    assert committed == ["commit", "commit", "commit"]
+    assert rolled_back == []
+
+
+async def test_campaigns_repo_opens_fresh_session_per_call(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Task 11: repo de campanhas abre 1 sessão fresca por chamada.
+
+    Com max_jobs > 1 os jobs se sobrepõem — o repo do startup NÃO pode estar
+    ligado à sessão compartilhada (quebraria com IllegalStateChangeError).
+    """
+    import content_factory.infra.db.repositories as repos_mod
+
+    seen: list[object] = []
+
+    class _Impl:
+        def __init__(self, session: object) -> None:
+            seen.append(session)
+
+        async def active_segments(self) -> list[Segment]:
+            return []
+
+    monkeypatch.setattr(repos_mod, "ResearchCampaignRepositoryImpl", _Impl)
+
+    @asynccontextmanager
+    async def _session() -> AsyncGenerator[object]:
+        yield object()
+
+    def _factory() -> Any:
+        return _session()
+
+    wrapper = w._FreshSessionCampaigns(cast("Any", _factory))  # pyright: ignore[reportPrivateUsage]
+    await wrapper.active_segments()
+    await wrapper.active_segments()
+    assert len(seen) == 2
+    assert seen[0] is not seen[1]

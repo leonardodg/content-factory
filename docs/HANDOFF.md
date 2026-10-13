@@ -450,3 +450,22 @@ plano `docs/ai-plans/2026-10-12-fix-instagram-collector-fase0.md`.
   (`-` simples, confirmado contra o slug real do mkdocs) em
   `PLANO_TESTE_E2E.md` e `manual/chaves-api.md`; contagem de testes
   atualizada (117→120 passed, 1 failed ambiente).
+
+## Concorrência do pipeline — Etapa B (branch `feat/concorrencia-pipeline`, 2026-10-13)
+
+Plano: `docs/ai-plans/2026-10-13-content-factory-concorrencia-pipeline.md`.
+Troca 3 workers → 1 worker multi-segmento SÓ após 2026-10-19 (fim do
+experimento); não rebuildar/restartar `cf-worker-*` antes da Task 1 (já mergeada).
+
+- [x] **Task 9** (`7a366b0`): `RedisLock` com token de posse (Lua CAS) —
+  release de lock expirado-e-readquirido não apaga o do novo dono.
+- [x] **Task 10** (`42ac15c`): engine compartilhado + sessão por UoW —
+  `AppDeps.create_segment_deps` (1 segmento = 1 transação), jobs ainda sequenciais.
+- [x] **Task 11**: segmentos concorrentes (TaskGroup + semáforo
+  `WORKER_MAX_SEGMENTS`, default 3), 1 transação cada; `max_jobs` 1→3;
+  `job_end`/`on_job_end` e `commit`/`rollback` de startup REMOVIDOS (cada UoW
+  já reverte via `session_scope`); `campaigns` abre 1 sessão fresca por chamada
+  (`_FreshSessionCampaigns`) para jobs sobrepostos não disputarem sessão.
+  Templates `collect`/`score`/`research` do startup mantidos SÓ como templates
+  (jobs nunca os usam como sessão). CLI não usa `AppDeps` (deps próprios por
+  comando) — nada a aposentar lá. Próximo: Etapa C (lote no score).

@@ -97,9 +97,10 @@ O que procurar:
   auth): capturada por plataforma dentro do `collect`, o job **retorna**
   normalmente e a sessão é commitada — auditada em `collect_runs` com
   `status`/`error_code` (queries em [Análise](analise.md));
-- **exceção não tratada no job** (bug): o job lança, `on_job_end` dá rollback
-  na sessão — a linha de auditoria **não** persiste em `collect_runs`; o que
-  sobra é o traceback no log do worker;
+- **exceção não tratada no job** (bug): capturada POR SEGMENTO dentro da task
+  do TaskGroup e registrada no envelope (`segments: {slug: {ok: false, error}}`)
+  — a UoW do segmento reverte sozinha (`session_scope`), as irmãs commitam
+  normal; o que sobra é o traceback no log do worker;
 - `SegmentNotFound` no startup (fail-fast): o segmento de `COLLECT_SEGMENT`
   não existe no banco; o container morre com exit ≠ 0. Corrigir com
   `cf segment load` e subir de novo ([§6](#6-limitacoes-conhecidas));
@@ -152,9 +153,12 @@ dois serviços leem via `env_file`) — depois, recrie o container:
 `… --profile worker up -d worker`. Ver também [§6](#6-limitacoes-conhecidas)
 sobre o `defaults.env`.
 
-**`max_jobs=1` não é bug:** os jobs compartilham uma única sessão Postgres
-montada no startup do worker; mais de um job em paralelo quebraria a sessão
-(`IllegalStateChangeError`). Um job por vez, em série.
+**`max_jobs=3` (1 por tipo de job):** cada segmento roda na SUA sessão Postgres
+(1 UoW por segmento, revertida em exceção via `session_scope`); engine e
+clientes Redis são compartilhados por serem task-safe. O `max_jobs=1` anterior
+existia SÓ porque a sessão era compartilhada (quebraria com
+`IllegalStateChangeError`). Dentro de cada job, os segmentos rodam concorrentes
+sob TaskGroup + semáforo `WORKER_MAX_SEGMENTS` (default 3).
 
 ## 5. Campanhas de pesquisa (`cf research`)
 
