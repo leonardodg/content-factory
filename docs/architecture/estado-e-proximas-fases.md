@@ -26,20 +26,22 @@ flowchart TD
 | Área | Estado |
 |---|---|
 | Toolchain | `uv`, ruff (check+format), `pyright` strict 0, pre-commit, bandit, pip-audit |
-| Camadas | `domain` (modelos + scoring), `app` (ports, segment), `cli` (`cf segment load`, `cf ping`) |
-| Banco | schema Alembic completo (14 tabelas) + repositórios; `alembic check` é gate |
-| Segmento | `segments/candles.yaml` validado por pydantic → persistido |
-| Infra | compose único (python/postgres/redis), CI `quality` + `docs` + teste de privacidade |
-| Docs | 8 tipos + índice + HANDOFF, site `mkdocs build --strict` |
+| Camadas | `domain` puro (modelos + scoring), `app` (ports, collect, score, research), `cli` (`cf collect/score/status/collect-timings/research …`) |
+| Banco | schema Alembic completo + repositórios; `alembic check` é gate; `collect_runs` com `skipped`/`discover_ms`/`persist_ms`, `video_scores` com `metrics_available`/`formula_version` |
+| Coleta | `collect()` em 2 fases — descoberta concorrente (TaskGroup + semáforo `COLLECT_MAX_CONCURRENCY`) e persistência sequencial; coletores YouTube/TikTok/Instagram/Web |
+| Score | `score()` em lote (`upsert_many`, blocos de 500; `ScoreDeps` dataclass) |
+| Worker | arq multi-segmento (`active_segments()`, TaskGroup por segmento com `WORKER_MAX_SEGMENTS`, 1 UoW por segmento, `max_jobs=3`); lock com token de posse (Lua CAS); cota/breaker unificados no Redis de `rate_limit_redis_url` |
+| Segmento | YAMLs validados por pydantic → persistidos; campanhas via `cf research start/stop/status` |
+| Infra | compose (python/postgres/redis + worker), CI `quality` + `docs` + teste de privacidade |
+| Docs | manual + índice + HANDOFF, site `mkdocs build --strict` |
 
-## O que falta (fase B desta entrega)
+## O que falta (pós-concorrência)
 
-Tasks 10–18 do [plano](../ai-plans/2026-10-07-fundacao-coletores-banco.md):
-fronteira de coleta (registry + FakeCollector) → use-case `collect`
-(rate-limit/lock Redis) → coletores YouTube/TikTok/Instagram/Web →
-`score` → worker arq com cron 2×/dia → E2E `00`/`01`. Requisitos técnicos
-já fechados nos TRDs: [coletores](../specs/trd-collectors.md),
-[scoring](../specs/trd-scoring.md), [CLI](../specs/trd-cli.md).
+A fundação + coletores + worker com cron 2×/dia (Tasks 10–18 do [plano](../ai-plans/2026-10-07-fundacao-coletores-banco.md))
+estão de pé, assim como a concorrência do pipeline ([plano](../ai-plans/2026-10-13-content-factory-concorrencia-pipeline.md)).
+Requisitos técnicos nos TRDs: [coletores](../specs/trd-collectors.md),
+[scoring](../specs/trd-scoring.md), [CLI](../specs/trd-cli.md). Estado fino
+e próximos passos: [HANDOFF](../HANDOFF.md).
 
 ## Próximas frentes (após fundação + coletores)
 

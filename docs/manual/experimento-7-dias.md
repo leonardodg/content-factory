@@ -20,8 +20,11 @@
   mesmo ele estando na lista de `platforms` do segmento. O compose do
   experimento (abaixo) zera essa variável por worker pra cair no fallback
   real (`segment.platforms`, que inclui tiktok).
-- **Achado de arquitetura**: o worker roda 1 único segmento por processo
-  (`COLLECT_SEGMENT`) e usa a fila default do `arq`. Rodar 3 cópias do
+- **Achado de arquitetura** (vale para as imagens **pré-concorrência** que
+  rodam este experimento — o código atual já é multi-segmento, sem
+  `COLLECT_SEGMENT`, ver [Operação](operacao.md)): o worker daqui roda 1
+  único segmento por processo (`COLLECT_SEGMENT`) e usa a fila default do
+  `arq`. Rodar 3 cópias do
   mesmo service sem separar faria elas competirem na mesma fila — o cron
   `unique=True` dispararia `research_job` só 1x no total, não 1x por
   segmento. `.devcontainer/docker-compose.experimento-7dias.yml` resolve

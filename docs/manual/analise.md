@@ -43,7 +43,8 @@ LIMIT 10;
 Troque `seg.slug` para analisar outro segmento. `video_scores` é timeseries:
 1 linha por cálculo, append sem `ON CONFLICT` ([Fluxo §3](fluxo-busca.md#3-workflow-ate-o-banco)) —
 com mais de um `cf score` no histórico o mesmo vídeo aparece uma vez por
-`computed_at`.
+`computed_at`. Cada linha traz ainda `metrics_available` (quais métricas
+existiam no cálculo) e `formula_version`.
 
 ## 3. Evolução do score (timeseries)
 
@@ -78,6 +79,9 @@ ORDER BY collector;
 Leitura: linha `ok` com `failed = 0` é o estado bom; runs `failed`/`blocked`
 caem no diagnóstico por `error_code` da próxima query — códigos e o significado
 de cada exit estão no [Primeiro passo §9](guide-start.md#9-primeiras-falhas-o-que-significam-os-exit-codes).
+Para `skipped` e os tempos de rede/persistência, some `skipped`,
+`discover_ms` e `persist_ms` na mesma query — ou use o agregado pronto
+`cf collect-timings --segment <slug>` (médias por plataforma, 7 dias).
 
 ## 5. Últimos erros
 

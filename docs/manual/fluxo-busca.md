@@ -14,15 +14,13 @@ flowchart TD
     A["cf collect --segment SLUG"] --> B{"lock Redis<br/>collect:SLUG (TTL 30 min)?"}
     B -- ocupado --> E1["exit 1 · ja_em_execucao"]
     B -- livre --> C["lê o segmento no banco"]
-    C --> D["para cada plataforma pedida:"]
-    D --> F["limiter.acquire(plataforma)"]
-    F --> G["collector.discover(segmento, limit)"]
-    G --> H["upsert em videos + video_segments"]
-    H --> I["collect_runs ← status ok"]
+    C --> D["fase de rede (concorrente):<br/>TaskGroup + semáforo<br/>(COLLECT_MAX_CONCURRENCY, default 2)"]
+    D --> F["por plataforma pedida:<br/>limiter.acquire → collector.discover"]
+    F --> H["fase de persistência (sequencial,<br/>ordem pedida): upsert em videos<br/>+ video_segments"]
+    H --> I["collect_runs ← status ok<br/>(+ skipped, discover_ms, persist_ms)"]
     F -.->|CollectorError| J["collect_runs ← status failed/blocked<br/>+ error_code"]
-    I --> K["próxima plataforma"]
-    J --> K
-    K --> L["lock.release (finally)"]
+    I --> L["lock.release (finally)"]
+    J --> L
     L --> M{"alguma falha?"}
     M -- não --> N["exit 0"]
     M -- sim + algo inserido --> O["exit 2 · partial"]
@@ -32,29 +30,40 @@ flowchart TD
 Passo a passo (`app/collect.py`):
 
 1. **Lock por segmento.** `acquire_once("collect:{slug}")` no Redis
-   (`SET NX` com TTL de **30 min**). Se já estiver ocupado, a coleta não
+   (token de posse por aquisição + TTL de **30 min**; o `release` só apaga
+   via script Lua atômico quando o valor ainda é o token do dono — `release`
+   de dono obsoleto é no-op, então um lock readquirido nunca é apagado pelo
+   dono antigo). Se já estiver ocupado, a coleta não
    começa: a CLI devolve `{"ok": false, "error": {"code": "ja_em_execucao"}}`
    e **exit 1** — nunca force. O TTL cobre o caso de worker morto no meio da
    coleta (lock órfão não sobrevive 30 min); o `finally` libera o lock em
    qualquer saída.
 2. **Leitura do segmento.** Slug inexistente → `segment_not_found` (exit 1).
-3. **Por plataforma** (na ordem pedida; `--platform` vazio usa as plataformas
-   declaradas no segmento):
-   - `limiter.acquire(platform)` — janela por plataforma no Redis (tabela da
-     seção 2); janela estourada espera com backoff, e se a espera passaria de
-     60 s falha na hora com `rate_limited`;
-   - `collector.discover(segment, limit)` — busca remota (fonte, tabela da
-     seção 2);
-   - `videos.upsert_candidates(...)` — upsert idempotente (seção 3);
-   - `collect_runs` recebe uma linha por plataforma **no sucesso e em
-     qualquer falha de plataforma (caminho `CollectorError`)**, gravada no
-     `finally`: `status` `ok`/`failed`/`blocked`, `error_code`, `found`,
-     `inserted`, `updated`, `finished_at`. Exceções não tratadas abortam o
-     lote **sem** linha de auditoria (o commit nunca acontece — ver
+3. **Duas fases** (`--platform` vazio usa as plataformas declaradas no
+   segmento):
+   - **Fase de rede (concorrente).** `limiter.acquire(platform)` +
+     `collector.discover(segment, limit)` rodam sob `TaskGroup` com semáforo
+     (`COLLECT_MAX_CONCURRENCY`, default 2) — janela por plataforma no Redis
+     (tabela da seção 2); janela estourada espera com backoff, e se a espera
+     passaria de 60 s falha na hora com `rate_limited` (fonte de cada
+     plataforma, tabela da seção 2);
+   - **Fase de persistência (sequencial, determinística).** Na ordem pedida
+     (não na ordem de término da rede): `videos.upsert_candidates(...)` —
+     upsert idempotente (seção 3) — e uma linha em `collect_runs` por
+     plataforma **no sucesso e em qualquer falha de plataforma (caminho
+     `CollectorError`)**, gravada no `finally`: `status` `ok`/`failed`/
+     `blocked`, `error_code`, `found`, `inserted`, `updated`, `skipped`,
+     `discover_ms` (fase de rede), `persist_ms` (fase de persistência),
+     `finished_at`.
+   - **Fronteira de erro.** `CollectorError` de uma plataforma é capturado
+     na própria task e não derruba as irmãs. Exceção **não**-`CollectorError`
+     (bug, erro inesperado de lib) **propaga**: cancela as tasks irmãs e
+     aborta antes de persistir — sem linha de auditoria para o lote (no
+     worker a UoW do segmento reverte sozinha; ver
      [Operação §3](operacao.md#3-logs)).
-4. **Desfecho.** Falha de uma plataforma não derruba as demais. Exit codes:
-   `0` = tudo ok · `2` = **parcial** (alguma falhou, algo foi inserido ou
-   atualizado) · `1` = erro total (tudo falhou ou lock ocupado).
+4. **Desfecho.** `CollectorError` de uma plataforma não derruba as demais.
+   Exit codes: `0` = tudo ok · `2` = **parcial** (alguma falhou, algo foi
+   inserido ou atualizado) · `1` = erro total (tudo falhou ou lock ocupado).
 
 ### Vocabulário de erros (mesmos nomes em todo o manual)
 
@@ -154,7 +163,7 @@ rotação em [credentials](../dev/credentials.md).
 |---|---|---|
 | `videos` | um vídeo por candidato (`platform` + `platform_video_id`, url, título, descrição, duração, thumbnail, `raw`) | `INSERT … ON CONFLICT (platform, platform_video_id) DO UPDATE` (título + `last_collected_at`; inserto de verdade é contado via `xmax`) |
 | `video_segments` | vínculo vídeo↔segmento com `discovery_source` (plataforma) | `ON CONFLICT (video_id, segment_id) DO UPDATE` |
-| `collect_runs` | 1 linha por plataforma por execução: `status`, `error_code`, contagens, tempos | append de auditoria (sem conflito) |
+| `collect_runs` | 1 linha por plataforma por execução: `status`, `error_code`, contagens (`found`/`inserted`/`updated`/`failed`/`skipped`), `discover_ms`, `persist_ms` | append de auditoria (sem conflito) |
 
 Schema campo a campo: [Data model](../data-model/README.md).
 
@@ -168,8 +177,12 @@ Schema campo a campo: [Data model](../data-model/README.md).
    recency) e `trend_decay` (`none`/`low`/`medium`/`high` por idade) —
    cálculo **puro de domínio**, sem I/O.
 3. Grava em `video_scores` — tabela **timeseries**: 1 linha por cálculo
-   (append, sem `ON CONFLICT`), com `SAVEPOINT` por vídeo (falha de um vídeo
-   não derruba o lote; daí o exit `2` de parcial).
+   (append, sem `ON CONFLICT`), em lote via `upsert_many` (blocos de 500, 1
+   `flush` por bloco; bloco quebrado cai para linha-a-linha com savepoint —
+   falha de um vídeo não derruba o lote; daí o exit `2` de parcial). Cada
+   linha leva `metrics_available` (quais métricas existiam) e
+   `formula_version`. O cálculo é CPU trivial (~20 µs/vídeo, `ScoreDeps`
+   dataclass) — sem paralelismo de CPU; o ganho está no lote de I/O.
 
 ## 4. Verdade documentada (limites honestos)
 

@@ -13,7 +13,7 @@ daqui usa os comandos do [Primeiro passo](guide-start.md) e da
 
 | Papel | Responsabilidade |
 |---|---|
-| Worker (arq, cron 08:00/20:00 BRT) | agenda e roda `collect_job`/`score_job` ([Operação §4](operacao.md#4-worker-e-cron)) |
+| Worker (arq, cron 07:00/08:00/20:00 BRT) | agenda e roda `research_job`/`collect_job`/`score_job` sobre todos os segmentos ativos ([Operação §4](operacao.md#4-worker-e-cron)) |
 | **Agente (este runbook)** | monitora saúde, diagnostica falhas, analisa scores, escala ao humano |
 
 O agente **não** agenda coletas periódicas (nada de cron ou loop próprio)
