@@ -28,7 +28,7 @@ from content_factory.app.research_pipeline import ResearchDeps, run_research_cyc
 from content_factory.app.score import ScoreDeps, score
 from content_factory.config import Settings, get_settings
 from content_factory.domain.fanout_guard import FanoutGuard
-from content_factory.domain.models import DepthConfig
+from content_factory.domain.models import DepthConfig, Segment
 
 
 def parse_cron_hours(raw: str) -> set[int]:
@@ -41,10 +41,14 @@ def parse_cron_hours(raw: str) -> set[int]:
 
 
 def _load_settings() -> dict[str, Any]:
-    """Config do job de coleta — env `COLLECT_*` (segmento default: candles)."""
+    """Config do job de coleta — env `COLLECT_*` (sem mais `COLLECT_SEGMENT`).
+
+    Qual segmento processar sai de `active_segments()` por job — a env
+    antiga virou inerte e pode sair do compose junto do fim do
+    experimento de 3 workers.
+    """
     platforms = [p.strip() for p in os.getenv("COLLECT_PLATFORMS", "").split(",") if p.strip()]
     return {
-        "segment": os.getenv("COLLECT_SEGMENT", "candles"),
         "platforms": platforms,
         "limit": int(os.getenv("COLLECT_LIMIT", "10")),
     }
@@ -151,8 +155,12 @@ class AppDeps:
 async def create_app_deps(settings: Settings) -> AppDeps:
     """Fábrica do worker: `register_defaults` + repositórios + lock/rate-limit.
 
-    Segmento precisa existir no banco (`cf segment load`) — senão o startup
-    falha rápido. Testes nunca passam por aqui (monkeypatch nos hooks).
+    Fase multi-segmento: NÃO resolve mais 1 segmento fixo aqui — cada job
+    resolve os segmentos ativos por conta própria
+    (`ResearchCampaignRepository.active_segments`) e reconstrói
+    `ScoreDeps.segment`/`.keywords`/`ResearchDeps.guard` por segmento.
+    Os placeholders abaixo são nunca lidos fora do loop dos jobs.
+    Startup não depende mais de `cf segment load` prévio.
 
     Decisão de composição (Fase D→B): `web` = WebSuggestProvider real
     (Google Suggest, ADR-0005); `trends` = TrendsGoogleProvider real;
@@ -183,7 +191,6 @@ async def create_app_deps(settings: Settings) -> AppDeps:
         client = await stack.enter_async_context(redis_client(settings.redis_url))
         session = await stack.enter_async_context(get_session_factory(settings)())
         register_defaults(settings)
-        segment = await SegmentRepositoryImpl(session).get_by_slug(_load_settings()["segment"])
         # socials: só collectors que implementam discover_by_keywords (Fase C+)
         socials: dict[str, SocialDiscoverer] = {}
         for name in registry.snapshot():
@@ -203,8 +210,9 @@ async def create_app_deps(settings: Settings) -> AppDeps:
             score=ScoreDeps(
                 videos=VideoRepositoryImpl(session),
                 scores=ScoreRepositoryImpl(session),
-                segment=segment,
-                keywords=segment.keywords,
+                # placeholder — run_score_job substitui por segmento
+                segment=Segment(id=0, slug="_placeholder", name="_", platforms=[], keywords=[]),
+                keywords=[],
             ),
             research=ResearchDeps(
                 web=WebSuggestProvider(),
@@ -217,7 +225,7 @@ async def create_app_deps(settings: Settings) -> AppDeps:
                 runs=CollectRunRepositoryImpl(session),
                 limiter=RedisRateLimiter(client),
                 lock=RedisLock(client),
-                guard=FanoutGuard(segment.research or DepthConfig()),
+                guard=FanoutGuard(DepthConfig()),  # placeholder — run_research_job substitui
             ),
             campaigns=ResearchCampaignRepositoryImpl(session),
             commit=session.commit,

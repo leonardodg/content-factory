@@ -275,6 +275,75 @@ async def test_shutdown_closes_app_deps_when_present() -> None:
     assert closed == ["close"]
 
 
+async def test_create_app_deps_startup_resolves_no_segment(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Task 5: startup NÃO resolve mais 1 segmento fixo do banco.
+
+    O único sinal de "quais segmentos processar" passou a ser
+    `active_segments()` dentro de cada job — o startup monta
+    ScoreDeps/ResearchDeps com placeholders que os jobs sempre
+    substituem antes de usar. `get_by_slug` boom = guarda de regressão.
+    """
+    from collections.abc import AsyncGenerator
+    from contextlib import asynccontextmanager
+
+    import content_factory.infra.collectors as collectors_mod
+    import content_factory.infra.db.base as db_base
+    import content_factory.infra.db.repositories as repos_mod
+    import content_factory.infra.redis_ops as redis_ops
+    from content_factory.config import Settings
+
+    async def _boom(self: object, slug: str) -> Segment:
+        raise AssertionError("startup nao deve resolver segmento")
+
+    monkeypatch.setattr(repos_mod.SegmentRepositoryImpl, "get_by_slug", _boom)
+
+    class _Session:
+        async def commit(self) -> None:
+            pass
+
+        async def rollback(self) -> None:
+            pass
+
+    @asynccontextmanager
+    async def _session() -> AsyncGenerator[Any]:
+        yield _Session()
+
+    @asynccontextmanager
+    async def _redis(_url: str) -> AsyncGenerator[Any]:
+        yield object()  # RedisLock/RateLimiter só armazenam o client
+
+    def _factory(_settings: Settings) -> Any:
+        return _session
+
+    def _register(_settings: Settings) -> None:
+        pass
+
+    class _Registry:
+        def snapshot(self) -> list[str]:
+            return []
+
+        def resolve(self, names: list[str]) -> list[object]:
+            return []
+
+    monkeypatch.setattr(db_base, "get_session_factory", _factory)
+    monkeypatch.setattr(redis_ops, "redis_client", _redis)
+    monkeypatch.setattr(collectors_mod, "register_defaults", _register)
+    monkeypatch.setattr(collectors_mod, "registry", _Registry())
+
+    deps = await w.create_app_deps(Settings())
+    # placeholders nunca lidos fora do loop dos jobs (Tasks 2-4)
+    assert deps.score.segment.slug == "_placeholder"
+    assert deps.score.segment.id == 0
+    assert deps.score.keywords == []
+    assert deps.research.guard is not None
+    assert not deps.research.guard.admit("x", depth=99)  # DepthConfig default
+    assert deps.collect.collectors == []
+    assert deps.campaigns is not None
+    await deps.close()
+
+
 class _NoopWeb:
     platform: str = "web_suggest"
 
