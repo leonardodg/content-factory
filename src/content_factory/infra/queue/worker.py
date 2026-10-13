@@ -65,8 +65,11 @@ async def run_collect_job(ctx: dict[str, Any]) -> dict[str, Any]:
 
     `COLLECT_SEGMENT` não é mais lido: a lista vem de
     `ResearchCampaignRepository.active_segments()`. 1 segmento com erro
-    não reverte os outros (commit por iteração, mesmo princípio do
-    savepoint por candidato em `upsert_candidates`).
+    não reverte os outros: `collect()` só captura `CollectorError`
+    internamente (por plataforma) — qualquer outra exceção de um
+    collector (ex.: `DDGSException` do web) é pega aqui por segmento,
+    com rollback, pra não travar a sessão pros segmentos seguintes do
+    mesmo tick nem perder o commit já feito dos anteriores.
     """
     cfg = _load_settings()
     deps: CollectDeps = ctx["collect_deps"]
@@ -76,9 +79,13 @@ async def run_collect_job(ctx: dict[str, Any]) -> dict[str, Any]:
     results: dict[str, Any] = {}
     for segment in active:
         platforms: list[str] = cfg["platforms"] or segment.platforms
-        out = await _collect_impl(segment.slug, platforms, cfg["limit"], deps)
-        await app_deps.commit()
-        results[segment.slug] = {"ok": out.ok, "partial": out.partial, **out.counts}
+        try:
+            out = await _collect_impl(segment.slug, platforms, cfg["limit"], deps)
+            await app_deps.commit()
+            results[segment.slug] = {"ok": out.ok, "partial": out.partial, **out.counts}
+        except Exception as exc:
+            await app_deps.rollback()
+            results[segment.slug] = {"ok": False, "error": str(exc)}
     return {
         "ok": all(r["ok"] for r in results.values()) if results else True,
         "segments": results,
@@ -91,7 +98,9 @@ async def run_score_job(ctx: dict[str, Any]) -> dict[str, Any]:
     `ScoreDeps` é barato de construir (sem I/O): monta 1 por segmento no
     loop reaproveitando os MESMOS `videos`/`scores` (repositórios ligados
     à sessão, não ao segmento). O `segment`/`keywords` do startup são
-    placeholder e nunca chegam aqui.
+    placeholder e nunca chegam aqui. Exceção de 1 segmento é pega aqui,
+    com rollback — mesmo princípio de isolamento de `run_collect_job`/
+    `run_research_job`.
     """
     base: ScoreDeps = ctx["score_deps"]
     campaigns: ResearchCampaignRepository = ctx["campaigns_deps"]
@@ -106,9 +115,13 @@ async def run_score_job(ctx: dict[str, Any]) -> dict[str, Any]:
             keywords=segment.keywords,
             clock=base.clock,
         )
-        out = await _score_impl(deps)
-        await app_deps.commit()
-        results[segment.slug] = {"ok": out.ok, "scored": out.scored}
+        try:
+            out = await _score_impl(deps)
+            await app_deps.commit()
+            results[segment.slug] = {"ok": out.ok, "scored": out.scored}
+        except Exception as exc:
+            await app_deps.rollback()
+            results[segment.slug] = {"ok": False, "error": str(exc)}
     return {
         "ok": all(r["ok"] for r in results.values()) if results else True,
         "segments": results,
@@ -122,6 +135,11 @@ async def run_research_job(ctx: dict[str, Any]) -> dict[str, Any]:
     expressa "rodar por N semanas" — sem campanha ativa, `active_segments()`
     devolve lista vazia e o loop não roda nenhuma vez. A chave antiga
     `"skipped"` saiu do envelope: vazio é `segments: {}`.
+
+    `run_research_cycle` só captura exceção por rede social (loop interno);
+    uma falha de `web`/`trends` (ex.: `UpstreamChanged` fora do try/except)
+    sobe direto — pega aqui por segmento, com rollback, pra não abortar o
+    tick inteiro dos demais segmentos.
     """
     base: ResearchDeps = ctx["research_deps"]  # guard aqui é só placeholder — ver Task 5
     campaigns: ResearchCampaignRepository = ctx["campaigns_deps"]
@@ -130,9 +148,13 @@ async def run_research_job(ctx: dict[str, Any]) -> dict[str, Any]:
     results: dict[str, Any] = {}
     for segment in active:
         deps = replace(base, guard=FanoutGuard(segment.research or DepthConfig()))
-        out = await _research_impl(segment.slug, DepthConfig(), deps)
-        await app_deps.commit()
-        results[segment.slug] = {"ok": out.ok, "partial": out.partial, **out.counts}
+        try:
+            out = await _research_impl(segment.slug, DepthConfig(), deps)
+            await app_deps.commit()
+            results[segment.slug] = {"ok": out.ok, "partial": out.partial, **out.counts}
+        except Exception as exc:
+            await app_deps.rollback()
+            results[segment.slug] = {"ok": False, "error": str(exc)}
     return {
         "ok": all(r["ok"] for r in results.values()) if results else True,
         "segments": results,

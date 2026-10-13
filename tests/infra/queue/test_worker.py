@@ -149,6 +149,54 @@ async def test_run_collect_job_platforms_fall_back_to_segment(
     assert calls == [["youtube", "tiktok"]]  # plataformas do segmento (stub)
 
 
+async def test_run_collect_job_isolates_segment_exception(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """1 segmento levanta exceção não-CollectorError → outros seguem rodando.
+
+    `web.py`/outros collectors podem levantar exceções que `collect()` não
+    captura (só pega `CollectorError`) — o job não pode deixar isso abortar
+    os demais segmentos do tick.
+    """
+    calls: list[str] = []
+
+    async def fake_collect(slug: str, platforms: list[str], limit: int, deps: object) -> object:
+        calls.append(slug)
+        if slug == "velas":
+            raise RuntimeError("boom")
+
+        class _Out:
+            ok = True
+            partial = False
+            counts: ClassVar[dict[str, object]] = {"found": 1}
+
+        return _Out()
+
+    monkeypatch.setattr(w, "_collect_impl", fake_collect)
+    monkeypatch.setattr(w, "_load_settings", lambda: _collect_cfg([], 10))
+    campaigns = _FakeCampaignsMultiSegment(slugs=["velas", "sabonetes"])
+    committed: list[str] = []
+    rolled_back: list[str] = []
+
+    class _AppDeps:
+        async def commit(self) -> None:
+            committed.append("commit")
+
+        async def rollback(self) -> None:
+            rolled_back.append("rollback")
+
+    out = await w.run_collect_job(
+        {"collect_deps": object(), "campaigns_deps": campaigns, "app_deps": _AppDeps()}
+    )
+    assert calls == ["velas", "sabonetes"]  # ambos tentados, 1 não trava o outro
+    assert out["ok"] is False
+    assert out["segments"]["velas"]["ok"] is False
+    assert "boom" in out["segments"]["velas"]["error"]
+    assert out["segments"]["sabonetes"] == {"ok": True, "partial": False, "found": 1}
+    assert committed == ["commit"]  # só sabonetes comitou
+    assert rolled_back == ["rollback"]  # velas sofreu rollback, não trava a sessão
+
+
 async def test_run_score_job_processes_all_active_segments(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -184,6 +232,51 @@ async def test_run_score_job_processes_all_active_segments(
         "segments": {"velas": {"ok": True, "scored": 3}, "sabonetes": {"ok": True, "scored": 3}},
     }
     assert committed == ["commit", "commit"]
+
+
+async def test_run_score_job_isolates_segment_exception(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """1 segmento levanta exceção → outros seguem, erro aparece no envelope."""
+    calls: list[str] = []
+
+    async def fake_score(deps: ScoreDeps) -> object:
+        calls.append(deps.segment.slug)
+        if deps.segment.slug == "velas":
+            raise RuntimeError("boom")
+
+        class _Out:
+            ok = True
+            scored = 3
+
+        return _Out()
+
+    monkeypatch.setattr(w, "_score_impl", fake_score)
+    campaigns = _FakeCampaignsMultiSegment(slugs=["velas", "sabonetes"])
+    committed: list[str] = []
+    rolled_back: list[str] = []
+
+    class _AppDeps:
+        async def commit(self) -> None:
+            committed.append("commit")
+
+        async def rollback(self) -> None:
+            rolled_back.append("rollback")
+
+    out = await w.run_score_job(
+        {
+            "score_deps": _score_deps_placeholder(),
+            "campaigns_deps": campaigns,
+            "app_deps": _AppDeps(),
+        }
+    )
+    assert calls == ["velas", "sabonetes"]
+    assert out["ok"] is False
+    assert out["segments"]["velas"]["ok"] is False
+    assert "boom" in out["segments"]["velas"]["error"]
+    assert out["segments"]["sabonetes"] == {"ok": True, "scored": 3}
+    assert committed == ["commit"]
+    assert rolled_back == ["rollback"]
 
 
 async def test_run_score_job_noop_when_no_active_segment(
@@ -487,6 +580,67 @@ async def test_run_research_job_processes_all_active_segments(
         },
     }
     assert committed == ["commit", "commit"]
+
+
+async def test_run_research_job_isolates_segment_exception(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """1 segmento levanta exceção (ex.: trends_google fora do try/except de
+    `run_research_cycle`) → os demais seguem, erro aparece no envelope."""
+
+    class _Campaigns:
+        async def active_segments(self) -> list[Segment]:
+            return [
+                Segment(id=1, slug="velas", name="Velas", platforms=["youtube"], keywords=["k"]),
+                Segment(
+                    id=2, slug="sabonetes", name="Sabonetes", platforms=["youtube"], keywords=["k"]
+                ),
+            ]
+
+        async def active_for_segment(self, segment_id: int) -> ResearchCampaign | None:
+            return None
+
+        async def start(self, segment_id: int, ends_at: object) -> ResearchCampaign:
+            raise NotImplementedError
+
+        async def stop(self, segment_id: int) -> None:
+            pass
+
+    calls: list[str] = []
+
+    async def fake_research(slug: str, cfg: object, deps: object) -> object:
+        calls.append(slug)
+        if slug == "velas":
+            raise RuntimeError("boom")
+
+        class _Out:
+            ok = True
+            partial = False
+            counts: ClassVar[dict[str, object]] = {"web_found": 3}
+
+        return _Out()
+
+    monkeypatch.setattr(w, "_research_impl", fake_research)
+    committed: list[str] = []
+    rolled_back: list[str] = []
+
+    class _AppDeps:
+        async def commit(self) -> None:
+            committed.append("commit")
+
+        async def rollback(self) -> None:
+            rolled_back.append("rollback")
+
+    out = await w.run_research_job(
+        {"research_deps": _research_deps(), "campaigns_deps": _Campaigns(), "app_deps": _AppDeps()}
+    )
+    assert calls == ["velas", "sabonetes"]
+    assert out["ok"] is False
+    assert out["segments"]["velas"]["ok"] is False
+    assert "boom" in out["segments"]["velas"]["error"]
+    assert out["segments"]["sabonetes"] == {"ok": True, "partial": False, "web_found": 3}
+    assert committed == ["commit"]
+    assert rolled_back == ["rollback"]
 
 
 def test_workersettings_registers_research_job_and_cron() -> None:

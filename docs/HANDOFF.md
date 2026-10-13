@@ -5,15 +5,25 @@
 
 ## 🔄 EM ANDAMENTO
 
-_Branch `feat/worker-multi-segmento` (6 commits, 232 passed + pyright 0 +
-todos os gates) pronta para merge FF — worker passa a processar TODOS os
-segmentos com campanha ativa por tick (não mais 1 `COLLECT_SEGMENT` fixo).
-Adiado até o fim do experimento de 7 dias: trocar o compose de 3 workers
-por 1 worker único + teste de aceitação (4º segmento sem restart) — ver
-"O que falta". Depois do merge: próximo passo sugerido é a sessão de
-design da Fase I (contrato `insta_kb`) — ver roadmap, ainda não
-iniciada. Validacao empirica do ranking (Ferramenta `cf score-sample`
-entregue; o veredito sobre os pesos é humano, com dados reais).)_
+_Worker multi-segmento mergeado (`a4faf04`) e revisado (2026-10-13): teste
+real contra o Postgres/Redis do experimento achou 2 bugs de isolamento por
+segmento em `run_collect_job`/`run_research_job` (exceção não-`CollectorError`
+de 1 segmento abortava o tick inteiro dos outros) — corrigidos com
+try/except+rollback por segmento (mesmo tratamento aplicado a `run_score_job`
+por simetria), 3 testes novos, 233 passed + 9 gates verdes. Também achado e
+limpo: 9 campanhas `teste-ativo-*` órfãs (testes de aceitação antigos nunca
+parados) estavam ativas na base real — `cf research stop` rodado em todas,
+só `velas-artesanais`/`sabonetes-artesanais`/`resina-artesanal` seguem
+ativas. **Risco ainda não resolvido** (não é bug de código, é operacional):
+os 3 containers do experimento (`docker-compose.experimento-7dias.yml`)
+continuam na imagem PRÉ-merge (ainda lê `COLLECT_SEGMENT`) — não fazer
+`--build`/restart neles sem já ter trocado pelo worker único, senão cada um
+passa a processar TODOS os segmentos ativos sem lock compartilhado entre si
+(Redis separado por container) e tripli­ca o trabalho. Próximo passo sugerido
+depois do swap de compose: sessão de design da Fase I (contrato `insta_kb`)
+— ver roadmap, ainda não iniciada. Validação empírica do ranking (ferramenta
+`cf score-sample` entregue; o veredito sobre os pesos é humano, com dados
+reais).
 
 ## ✅ CONCLUÍDO
 
