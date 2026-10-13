@@ -173,7 +173,10 @@ async def collect(
                     errors += 1
                     counts["failed"] = int(counts["failed"]) + 1
                 else:
-                    assert result.found is not None  # invariante: erro↔found None
+                    # invariante: erro↔found None (sem assert: B101; erro interno
+                    # explícito se a fronteira de _discover_one for violada)
+                    if result.found is None:
+                        raise RuntimeError(f"discover sem erro nem found: {result.platform}")
                     try:
                         persist_start = deps.clock()
                         stats = await deps.videos.upsert_candidates(

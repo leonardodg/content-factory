@@ -203,7 +203,10 @@ async def run_research_cycle(
                     social_platform_errors += 1
                     counts[f"{platform}_failed"] = int(counts.get(f"{platform}_failed", 0)) + 1
                 else:
-                    assert result.candidates is not None  # invariante: erro↔candidates None
+                    # invariante: erro↔candidates None (sem assert: B101; erro
+                    # interno explícito se a fronteira for violada)
+                    if result.candidates is None:
+                        raise RuntimeError(f"discover sem erro nem candidates: {platform}")
                     try:
                         # Fase F2: persistir pelo MESMO contrato do collect() —
                         # upsert_candidates faz ON CONFLICT DO UPDATE, ciclo

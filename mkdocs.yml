@@ -33,6 +33,7 @@ nav:
       - 0003 Coletores: adr/0003-coletores-fontes.md
       - 0004 CLI-first: adr/0004-cli-first.md
       - 0005 Google scraping: adr/0005-trends-pytrends.md
+      - 0006 Manter arq+Redis: adr/0006-manter-arq-redis.md
   - Arquitetura:
       - Visão geral: architecture/README.md
       - Estado e fases: architecture/estado-e-proximas-fases.md
