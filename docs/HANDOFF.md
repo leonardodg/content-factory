@@ -5,6 +5,26 @@
 
 ## 🔄 EM ANDAMENTO
 
+_Concorrência do pipeline — Etapas 0–C IMPLEMENTADAS na branch
+`feat/concorrencia-pipeline` (2026-10-13, plano
+`docs/ai-plans/2026-10-13-content-factory-concorrencia-pipeline.md`, 12
+commits, 285 passed com infra + todos os gates verdes). Troca de ambiente
+(3 workers → 1) SÓ após 2026-10-19; containers do experimento intocados a
+sessão inteira (só SELECT + 1 medição com rollback confirmado). Falta:
+revisão final da branch + merge + swap de compose pós-19._
+
+_Tasks: T1 guard COLLECT_SEGMENT no startup · T2 compose worker único
+preparado (`docker-compose.multi-segmento.yml`) · T3 cota/breaker/lock no
+Redis compartilhado (`rate_limit_redis_url`) · T4 `discover_ms/persist_ms`
+(migração 0009, `cf collect-timings`) · T5 baseline congelado em
+`docs/manual/baseline-concorrencia.md` · T6 collect em 2 fases · T7
+TaskGroup+semáforo na descoberta (`COLLECT_MAX_CONCURRENCY=2`) · T8 mesmo
+padrão no research · T9 RedisLock com token (Lua CAS) · T10 engine único +
+sessão por UoW (`ScoreDeps` dataclass) · T11 segmentos concorrentes
+(`WORKER_MAX_SEGMENTS=3`, `max_jobs=3`, `on_job_end` removido) · T12 perfil
+do score (CPU ~20µs/vídeo, Task 14 descartada) · T13 `upsert_many` em
+blocos de 500 (N flushes→1) · ADR-0006 (manter arq+Redis)._
+
 _Worker multi-segmento mergeado (`a4faf04`) e revisado (2026-10-13): teste
 real contra o Postgres/Redis do experimento achou 2 bugs de isolamento por
 segmento em `run_collect_job`/`run_research_job` (exceção não-`CollectorError`

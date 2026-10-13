@@ -57,6 +57,17 @@ aproximadamente para o **máximo** das plataformas em vez da **soma**, com
 `found`/`inserted`/`updated` equivalentes. O `discover_ms`/`persist_ms` em
 `collect_runs` separa então o ganho de rede do custo de persistência.
 
+## Verificação fim-a-fim da Etapa A (2026-10-13, sintético)
+
+`collect()` com 3 plataformas de 0,5 s cada, contra Postgres descartável
+(migrações até 0009), `max_concurrent_discoveries` 1 vs 3:
+
+- sequencial (1): **1,51 s** · concorrente (3): **0,51 s** · speedup **2,95x**
+
+Confirma o critério: duração total ≈ máximo das plataformas em vez da
+soma, com `found`/`inserted`/`updated` equivalentes (suíte e2e/integration:
+35 passed no mesmo banco descartável).
+
 ## Task 12 — perfil do score (2026-10-13, dados reais do experimento)
 
 Medido contra o Postgres do experimento (só leitura + upserts revertidos
