@@ -1,0 +1,27 @@
+# Worker único multi-segmento — SUBSTITUI docker-compose.experimento-7dias.yml.
+#
+# NÃO APLICAR ANTES DE 2026-10-19 (fim do experimento de 7 dias).
+# Até lá, os 3 containers do experimento rodam a imagem PRÉ-merge
+# (ainda lê COLLECT_SEGMENT) — ver docs/HANDOFF.md e Task 1 (guard de
+# arranque: com COLLECT_SEGMENT definido, o worker novo falha no startup
+# em vez de triplicar a coleta).
+#
+# Troca (só após 2026-10-19, com dados do experimento já exportados):
+#   docker compose -f .devcontainer/docker-compose.yml \
+#     -f .devcontainer/docker-compose.experimento-7dias.yml \
+#     --profile experimento stop worker-velas worker-sabonetes worker-resina
+#   docker compose -f .devcontainer/docker-compose.yml \
+#     -f .devcontainer/docker-compose.multi-segmento.yml \
+#     --profile worker-multi up -d --build worker
+# Conferir: guard da Task 1 não dispara (sem COLLECT_SEGMENT), os 3 crons
+# registram e active_segments() devolve os 3 segmentos.
+services:
+  worker:
+    extends:
+      file: docker-compose.yml
+      service: worker
+    container_name: cf-worker-multi-segmento
+    environment:
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-contentfactory}:${POSTGRES_PASSWORD:-localdev}@postgres:5432/${POSTGRES_DB:-contentfactory}
+      REDIS_URL: redis://redis:6379/0
+    profiles: ["worker-multi"]

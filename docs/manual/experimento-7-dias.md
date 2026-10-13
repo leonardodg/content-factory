@@ -215,6 +215,25 @@ docker compose -f .devcontainer/docker-compose.yml \
   --profile experimento stop worker-velas worker-sabonetes worker-resina
 ```
 
+## Pós-2026-10-19 — troca para worker único multi-segmento
+
+> NÃO aplicar antes de 2026-10-19 (fim do experimento). Ver Task 1 (guard de
+> arranque) e `docs/HANDOFF.md`.
+
+```bash
+# 1. Exportar dados do experimento ANTES de parar os containers
+# 2. Parar os 3 workers legados
+docker compose -f .devcontainer/docker-compose.yml \
+  -f .devcontainer/docker-compose.experimento-7dias.yml \
+  --profile experimento stop worker-velas worker-sabonetes worker-resina
+# 3. Subir o worker único
+docker compose -f .devcontainer/docker-compose.yml \
+  -f .devcontainer/docker-compose.multi-segmento.yml \
+  --profile worker-multi up -d --build worker
+# 4. Conferir: guard da Task 1 não dispara (sem COLLECT_SEGMENT),
+#    os 3 crons registram e active_segments() devolve os 3 segmentos.
+```
+
 ## Fase 4 — avaliar o ranking (depois de acumular dados)
 
 ```bash
