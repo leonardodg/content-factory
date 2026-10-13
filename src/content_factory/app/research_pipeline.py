@@ -93,6 +93,7 @@ async def run_research_cycle(
             run = CollectRun(
                 collector=f"research:{platform}", segment_id=segment.id, started_at=started
             )
+            gate_hits_before = getattr(discoverer, "gate_hits", 0)
             try:
                 await deps.limiter.acquire(platform)
                 candidates = await discoverer.discover_by_keywords(keywords_for_social, [], 1)
@@ -117,6 +118,16 @@ async def run_research_cycle(
                 social_platform_errors += 1
                 counts[f"{platform}_failed"] = int(counts.get(f"{platform}_failed", 0)) + 1
             finally:
+                # mesmo padrão de collect() (REVISÃO Important #1/#2): lido no
+                # finally (sobrevive a discover_by_keywords levantando depois
+                # de incrementar) e por delta (coletor é singleton no registry,
+                # self.gate_hits acumula entre runs). Sem isso, o envelope da
+                # pesquisa por keyword não distingue busca ampla por hashtag
+                # do fallback de conta própria (gate #10) do Instagram.
+                gate_hits_after = getattr(discoverer, "gate_hits", 0)
+                gate_hits_delta = gate_hits_after - gate_hits_before
+                if gate_hits_delta:
+                    counts[f"{platform}_gate_hits"] = gate_hits_delta
                 run.finished_at = datetime.now(UTC)
                 await deps.runs.record(run)
         counts["social_found"] = social_found
