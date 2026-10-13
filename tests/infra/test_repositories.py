@@ -190,6 +190,14 @@ async def test_latest_for_segment_picks_newest_metric_and_zero_fills() -> None:
         assert set(snaps) == {vid, vid_vazio}  # 1 linha por vídeo, inclusive sem métrica
         assert snaps[vid].metrics.views == 9_999  # captura mais recente vence a antiga
         assert snaps[vid].metrics.likes == 50
+        assert snaps[vid].captured_at == base + timedelta(hours=1)
+        # Fase H Task 4: captura anterior disponível pro momentum_score
+        prev = snaps[vid].previous_metrics
+        assert prev is not None
+        assert prev.views == 10
+        assert snaps[vid].previous_captured_at == base
+        # vídeo com só 1 captura (ou nenhuma): sem par comparável
+        assert snaps[vid_vazio].previous_metrics is None
         assert snaps[vid_vazio].metrics.views is None  # Fase G: ausente ≠ zero
     await engine.dispose()
 

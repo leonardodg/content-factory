@@ -44,7 +44,15 @@ async def score(deps: ScoreDeps) -> ScoreOutcome:
     errors = 0
     for snap in snaps:
         rel = relevance_of(snap, deps.keywords)
-        result = viral_score(snap.metrics, rel, now, snap.published_at)
+        result = viral_score(
+            snap.metrics,
+            rel,
+            now,
+            snap.published_at,
+            captured_at=snap.captured_at,
+            previous_metrics=snap.previous_metrics,
+            previous_captured_at=snap.previous_captured_at,
+        )
         try:
             await deps.scores.upsert(snap.video_id, deps.segment.id, result, now)
             scored += 1

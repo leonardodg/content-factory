@@ -6,6 +6,7 @@ from sqlalchemy.dialects.postgresql import distinct_on
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.exc import DataError, IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import aliased
 
 from content_factory.app.ports import (
     CollectRunRepository,
@@ -44,10 +45,14 @@ from content_factory.infra.db.orm import (
 )
 
 
-def _snapshot(video: VideoRow, m: VideoMetricsRow | None) -> VideoSnapshot:
+def _snapshot(
+    video: VideoRow, m: VideoMetricsRow | None, previous: VideoMetricsRow | None = None
+) -> VideoSnapshot:
     """LEFT JOIN sem match vira `None` ⇒ métricas None (vídeo ainda não capturado).
 
     Fase G: `None` ≠ `0` — métrica ausente não é penalizada como zero.
+    Fase H Task 4: `previous` é a captura imediatamente anterior — base
+    para `momentum_score` medir crescimento real entre snapshots.
     """
     metrics = (
         VideoMetrics(
@@ -60,12 +65,26 @@ def _snapshot(video: VideoRow, m: VideoMetricsRow | None) -> VideoSnapshot:
         if m is not None
         else VideoMetrics()
     )
+    previous_metrics = (
+        VideoMetrics(
+            views=previous.views,
+            likes=previous.likes,
+            comments=previous.comments,
+            shares=previous.shares,
+            saves=previous.saves,
+        )
+        if previous is not None
+        else None
+    )
     return VideoSnapshot(
         video_id=video.id,
         title=video.title,
         description=video.description,
         published_at=video.published_at,
         metrics=metrics,
+        captured_at=m.captured_at if m is not None else None,
+        previous_metrics=previous_metrics,
+        previous_captured_at=previous.captured_at if previous is not None else None,
     )
 
 
@@ -151,13 +170,11 @@ class VideoRepositoryImpl(VideoRepository):
         return stats
 
     async def latest_for_segment(self, segment_id: int) -> list[VideoSnapshot]:
-        """1 snapshot por vídeo do segmento com a métrica mais recente.
+        """1 snapshot por vídeo do segmento com a métrica mais recente + a
+        captura imediatamente anterior (Task 4 — base para `momentum_score`).
 
-        `DISTINCT ON (video_id) ORDER BY video_id, captured_at DESC` — Postgres
-        escolhe a captura mais nova por vídeo. Vídeo sem captura em
-        `video_metrics` entra com métricas zeradas (LEFT JOIN): quem foi
-        vinculado pelo `cf collect` é pontuado mesmo antes da primeira coleta
-        de métricas.
+        Vídeo sem captura em `video_metrics` entra com `metrics=VideoMetrics()`
+        (todos os campos `None` — Fase G: ausência ≠ zero).
         """
         stmt = (
             select(VideoRow, VideoMetricsRow)
@@ -168,7 +185,27 @@ class VideoRepositoryImpl(VideoRepository):
             .order_by(VideoRow.id, VideoMetricsRow.captured_at.desc())
         )
         rows = (await self._s.execute(stmt)).all()
-        return [_snapshot(video, m) for video, m in rows]
+
+        rn_col = (
+            func.row_number()
+            .over(
+                partition_by=VideoMetricsRow.video_id,
+                order_by=VideoMetricsRow.captured_at.desc(),
+            )
+            .label("rn")
+        )
+        ranked = (
+            select(VideoMetricsRow, rn_col)
+            .join(VideoSegmentRow, VideoSegmentRow.video_id == VideoMetricsRow.video_id)
+            .where(VideoSegmentRow.segment_id == segment_id)
+            .subquery()
+        )
+        PrevMetrics = aliased(VideoMetricsRow, ranked)
+        prev_stmt = select(PrevMetrics).where(ranked.c.rn == 2)
+        prev_rows = (await self._s.execute(prev_stmt)).scalars().all()
+        previous_by_video = {row.video_id: row for row in prev_rows}
+
+        return [_snapshot(video, m, previous_by_video.get(video.id)) for video, m in rows]
 
 
 class SegmentRepositoryImpl(SegmentRepository):
