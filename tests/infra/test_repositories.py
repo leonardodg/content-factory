@@ -1,3 +1,4 @@
+import logging
 import os
 from datetime import UTC, datetime, timedelta
 from typing import Any, cast
@@ -376,6 +377,8 @@ async def test_score_partial_persists_healthy_rows_when_one_insert_fails(
         assert outcome.ok is False
         assert outcome.partial is True
         assert outcome.scored == 2  # os dois vizinhos saudáveis, não o doente
+        assert (outcome.processed, outcome.persisted, outcome.failed) == (3, 2, 1)
+        assert outcome.failures == {"data_error": 1}  # R5: categoria, não mensagem
         rows = (
             (await s.execute(select(VideoScoreRow.id).where(VideoScoreRow.segment_id == seg.id)))
             .scalars()
@@ -421,9 +424,11 @@ async def test_score_upsert_many_persists_batch_in_one_block() -> None:
                 computed_at=now,
             )
 
-        saved = await ScoreRepositoryImpl(s).upsert_many([row(vid) for vid in vids])
-        assert saved == 3
-        assert await ScoreRepositoryImpl(s).upsert_many([]) == 0  # lote vazio é no-op
+        report = await ScoreRepositoryImpl(s).upsert_many([row(vid) for vid in vids])
+        assert report.persisted == 3
+        assert report.failures == {}
+        empty = await ScoreRepositoryImpl(s).upsert_many([])  # lote vazio é no-op
+        assert empty.persisted == 0 and empty.failures == {}
         await s.commit()
         rows = (
             (await s.execute(select(VideoScoreRow).where(VideoScoreRow.segment_id == seg.id)))
@@ -477,10 +482,11 @@ async def test_score_upsert_many_isolates_bad_row_without_poisoning_txn() -> Non
                 computed_at=now,
             )
 
-        saved = await ScoreRepositoryImpl(s).upsert_many(
+        report = await ScoreRepositoryImpl(s).upsert_many(
             [row(vids[0]), row(2_147_483_647), row(vids[1])]
         )
-        assert saved == 2
+        assert report.persisted == 2
+        assert report.failures == {"data_error": 1}  # R5: categoria da linha descartada
         # transação externa viva: commit persiste as saudáveis
         await s.commit()
         rows = (
@@ -490,6 +496,69 @@ async def test_score_upsert_many_isolates_bad_row_without_poisoning_txn() -> Non
         )
         assert len(rows) == 2
         assert {r.video_id for r in rows} == set(vids)
+    await engine.dispose()
+
+
+@requires_infra
+async def test_score_upsert_many_logs_warning_per_discarded_row(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """R5: cada linha descartada gera 1 WARNING com `video_id` e a classe.
+
+    Antes o repo descartava em silêncio — o diagnóstico só existia no
+    retorno. A mensagem leva id + nome da classe (`IntegrityError`), nunca
+    o valor que estourou (dado bruto fica fora do log).
+    """
+    engine = create_async_engine(os.environ["TEST_DATABASE_URL"])
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    async with factory() as s:
+        await s.rollback()
+        seg = await SegmentRepositoryImpl(s).upsert(
+            SegmentConfig(
+                slug=f"teste-r5-{uuid4().hex[:8]}",
+                name="Teste R5",
+                platforms=["youtube"],
+                keywords=["k"],
+            )
+        )
+        cands = [candidate(60), candidate(61)]
+        await VideoRepositoryImpl(s).upsert_candidates(seg.id, "youtube", cands)
+        vids = [await video_id_of(s, c) for c in cands]
+        now = datetime(2026, 10, 7, 12, 0, tzinfo=UTC)
+
+        def row(video_id: int) -> ScoreUpsertRow:
+            return ScoreUpsertRow(
+                video_id=video_id,
+                segment_id=seg.id,
+                result=ScoreResult(
+                    total=42.5,
+                    performance=10.0,
+                    velocity=80.0,
+                    engagement=20.0,
+                    relevance=100.0,
+                    recency=100.0,
+                    trend_decay="low",
+                ),
+                computed_at=now,
+            )
+
+        with caplog.at_level(logging.WARNING, logger="content_factory.infra.db.repositories"):
+            report = await ScoreRepositoryImpl(s).upsert_many(
+                [row(vids[0]), row(2_147_483_647), row(vids[1])]
+            )
+        await s.rollback()
+
+        assert report.persisted == 2
+        assert report.failures == {"data_error": 1}
+        warnings = [
+            rec
+            for rec in caplog.records
+            if rec.name == "content_factory.infra.db.repositories" and rec.levelname == "WARNING"
+        ]
+        assert len(warnings) == 1  # 1 linha descartada ⇒ 1 WARNING
+        message = warnings[0].getMessage()
+        assert "2147483647" in message  # video_id da linha descartada
+        assert "IntegrityError" in message  # classe da exceção, sem dado bruto
     await engine.dispose()
 
 

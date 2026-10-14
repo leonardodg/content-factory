@@ -6,8 +6,8 @@ def envelope_ok(command: str, **counts: Any) -> dict[str, Any]:
     return {"ok": True, "command": command, **counts}
 
 
-def envelope_err(command: str, code: str, message: str) -> dict[str, Any]:
-    return {"ok": False, "command": command, "error": {"code": code, "message": message}}
+def envelope_err(command: str, code: str, message: str, **counts: Any) -> dict[str, Any]:
+    return {"ok": False, "command": command, "error": {"code": code, "message": message}, **counts}
 
 
 def dumps(payload: dict[str, Any]) -> str:

@@ -3,7 +3,7 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
-from content_factory.app.ports import ScoreUpsertRow
+from content_factory.app.ports import ScoreUpsertRow, UpsertReport
 from content_factory.app.score import ScoreDeps, relevance_of, score
 from content_factory.domain.models import (
     ScoreResult,
@@ -57,7 +57,7 @@ class FakeScores:
             raise RuntimeError("repo indisponível")
         self.saved.append((video_id, result))
 
-    async def upsert_many(self, rows: Sequence[ScoreUpsertRow]) -> int:
+    async def upsert_many(self, rows: Sequence[ScoreUpsertRow]) -> UpsertReport:
         self.upsert_many_calls += 1
         self.flushes += 1
         saved = 0
@@ -66,7 +66,12 @@ class FakeScores:
                 continue
             self.saved.append((row.video_id, row.result))
             saved += 1
-        return saved
+        # as linhas que caíram são erro de dado (mesma classe que o impl real
+        # isola): o report dá a categoria, o use-case tira a contagem
+        return UpsertReport(
+            persisted=saved,
+            failures={"data_error": len(rows) - saved} if len(rows) > saved else {},
+        )
 
 
 class FailingScores(FakeScores):
@@ -249,6 +254,40 @@ async def test_score_partial_when_one_batch_row_is_bad() -> None:
     assert [vid for vid, _ in scores.saved] == [1, 2, 4, 5]
 
 
+async def test_score_outcome_carries_diagnostic_counts() -> None:
+    """R5: o outcome expõe processed/persisted/failed + failures por categoria."""
+    scores = FakeScores(fail_on={3})
+    deps = ScoreDeps(
+        videos=FakeVideos([snap(i, 100_000) for i in range(1, 5)]),
+        scores=scores,
+        segment=SEG,
+        keywords=["vela"],
+        clock=lambda: NOW,
+    )
+    out = await score(deps)
+    assert out.processed == 4
+    assert out.persisted == 3
+    assert out.failed == 1
+    assert out.failures == {"data_error": 1}
+    assert out.scored == out.persisted  # `scored` é o nome legado de `persisted`
+    assert sum(out.failures.values()) == out.failed  # categorias fecham a contagem
+
+
+async def test_score_outcome_all_rows_persisted_has_no_failures() -> None:
+    """R5: caminho feliz zera failed/failures (zeros esperados no envelope)."""
+    deps = ScoreDeps(
+        videos=FakeVideos([snap(1, 100_000), snap(2, 50_000)]),
+        scores=FakeScores(),
+        segment=SEG,
+        keywords=["vela"],
+        clock=lambda: NOW,
+    )
+    out = await score(deps)
+    assert out.ok is True and out.partial is False
+    assert (out.processed, out.persisted, out.failed) == (2, 2, 0)
+    assert out.failures == {}
+
+
 async def test_score_batch_connection_failure_propagates() -> None:
     """Etapa 1 Task 11: falha do lote inteiro (ex.: conexão) PROPAGA.
 
@@ -258,7 +297,7 @@ async def test_score_batch_connection_failure_propagates() -> None:
     """
 
     class ExplodingScores(FakeScores):
-        async def upsert_many(self, rows: Sequence[ScoreUpsertRow]) -> int:
+        async def upsert_many(self, rows: Sequence[ScoreUpsertRow]) -> UpsertReport:
             raise RuntimeError("conexão caiu")
 
     deps = ScoreDeps(
@@ -291,6 +330,8 @@ async def test_empty_segment_scores_nothing_and_is_ok() -> None:
     )
     out = await score(deps)
     assert out.ok is True and out.partial is False and out.scored == 0
+    assert (out.processed, out.persisted, out.failed) == (0, 0, 0)  # R5: nada processado é ok
+    assert out.failures == {}
     assert scores.saved == []
 
 

@@ -1,3 +1,4 @@
+import logging
 from collections.abc import Sequence
 from datetime import UTC, datetime
 
@@ -16,6 +17,7 @@ from content_factory.app.ports import (
     ScoreUpsertRow,
     SegmentRepository,
     TrendObservationRepository,
+    UpsertReport,
     VideoRepository,
 )
 from content_factory.app.score_sample import ScoreSampleRow
@@ -45,6 +47,8 @@ from content_factory.infra.db.orm import (
     VideoScoreRow,
     VideoSegmentRow,
 )
+
+logger = logging.getLogger(__name__)
 
 
 def _snapshot(
@@ -363,7 +367,7 @@ class ScoreRepositoryImpl(ScoreRepository):
             )
             await self._s.flush()
 
-    async def upsert_many(self, rows: Sequence[ScoreUpsertRow]) -> int:
+    async def upsert_many(self, rows: Sequence[ScoreUpsertRow]) -> UpsertReport:
         """1 flush por bloco de N; bloco quebrado cai para linha-a-linha.
 
         Sem ON CONFLICT, `add_all` + 1 `flush` por bloco troca N round-trips
@@ -375,8 +379,13 @@ class ScoreRepositoryImpl(ScoreRepository):
         rollback do bloco falho é só até o savepoint e não envenena a
         transação externa. Só DataError/IntegrityError são isolados (dado
         da linha); conexão e afins propagam para o caller.
+
+        R5: linha descartada NÃO some em silêncio — vira `failures` por
+        categoria no relatório e 1 WARNING com `video_id` + classe da
+        exceção (nunca o valor que estourou: dado bruto fica fora do log).
         """
         saved = 0
+        failures: dict[str, int] = {}
         for start in range(0, len(rows), SCORE_UPSERT_BATCH_SIZE):
             block = list(rows[start : start + SCORE_UPSERT_BATCH_SIZE])
             try:
@@ -391,9 +400,14 @@ class ScoreRepositoryImpl(ScoreRepository):
                             self._s.add(_score_orm_row(row))
                             await self._s.flush()
                         saved += 1
-                    except DataError, IntegrityError:
-                        continue
-        return saved
+                    except (DataError, IntegrityError) as exc:
+                        failures["data_error"] = failures.get("data_error", 0) + 1
+                        logger.warning(
+                            "score: linha descartada video_id=%s classe=%s",
+                            row.video_id,
+                            type(exc).__name__,
+                        )
+        return UpsertReport(persisted=saved, failures=failures)
 
 
 class ScoreSampleRepositoryImpl:

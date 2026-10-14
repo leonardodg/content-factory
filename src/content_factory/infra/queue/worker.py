@@ -208,7 +208,16 @@ async def run_score_job(ctx: dict[str, Any]) -> dict[str, Any]:
         async with app_deps.create_segment_deps(segment) as bundle:
             out = await _score_impl(bundle.score)
             await bundle.uow.commit()
-        return {"ok": out.ok, "scored": out.scored}
+        # R5: só contagens/categorias (a mensagem fica no log, redigida);
+        # `scored` é o nome legado de `persisted`
+        return {
+            "ok": out.ok,
+            "scored": out.scored,
+            "processed": out.processed,
+            "persisted": out.persisted,
+            "failed": out.failed,
+            "failures": out.failures,
+        }
 
     return await _gather_segments(active, _max_segments_from_env(), _one, "score")
 
