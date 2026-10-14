@@ -339,6 +339,32 @@ class FakeRedis:
         return removed
 
     async def eval(self, script: str, numkeys: int, *keys_and_args: str) -> Any:
+        """Executa os scripts Lua da infra de forma atômica no dict em memória.
+
+        Rate limiter (A1): `INCR_WITH_TTL` e `DECR_IF_EXISTS` reimplementados
+        aqui; a verdade da atomicidade está em `test_ratelimit_redis.py`.
+        Demais scripts: o CAS de release do lock (abaixo).
+        """
+        from content_factory.infra.ratelimit import DECR_IF_EXISTS, INCR_WITH_TTL
+
+        if script == INCR_WITH_TTL:
+            self.commands.append("eval:incr_with_ttl")
+            key, ttl_ms = keys_and_args[0], int(keys_and_args[1])
+            count = self.counters.get(key, 0) + 1
+            self.counters[key] = count
+            if count == 1 or key not in self.expires:
+                self.expires[key] = self.clock + ttl_ms / 1000
+            return [count, ceil((self.expires[key] - self.clock) * 1000)]
+        if script == DECR_IF_EXISTS:
+            self.commands.append("eval:decr_if_exists")
+            key = keys_and_args[0]
+            if key not in self.counters:
+                return -1
+            self.counters[key] -= 1
+            return self.counters[key]
+        return await self._eval_lock_cas(script, numkeys, *keys_and_args)
+
+    async def _eval_lock_cas(self, script: str, numkeys: int, *keys_and_args: str) -> Any:
         """Executa o CAS de release de forma atômica no dict em memória.
 
         Espelha o Lua de `infra/lock` (`KEYS[1]` apagada só se o valor for

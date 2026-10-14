@@ -226,13 +226,25 @@ def test_score_unknown_segment_exit_1_envelope(monkeypatch: pytest.MonkeyPatch) 
 
 
 def _fake_score(
-    ok: bool, partial: bool, scored: int
+    ok: bool,
+    partial: bool,
+    scored: int,
+    processed: int | None = None,
+    failed: int = 0,
+    failures: dict[str, int] | None = None,
 ) -> Callable[[str], Coroutine[Any, Any, ScoreOutcome]]:
     """Seam: devolve o ScoreOutcome fake no lugar do wire real (sem DB)."""
 
     async def _run(slug: str) -> ScoreOutcome:
         _ = slug
-        return ScoreOutcome(ok=ok, partial=partial, scored=scored)
+        return ScoreOutcome(
+            ok=ok,
+            partial=partial,
+            scored=scored,
+            processed=scored + failed if processed is None else processed,
+            failed=failed,
+            failures=failures,
+        )
 
     return _run
 
@@ -243,23 +255,43 @@ def test_score_success_exit_0_envelope(monkeypatch: pytest.MonkeyPatch) -> None:
     assert result.exit_code == 0
     assert '"ok": true' in result.stdout
     assert '"scored": 3' in result.stdout
+    assert '"processed": 3' in result.stdout
+    assert '"persisted": 3' in result.stdout
+    assert '"failed": 0' in result.stdout
+    assert '"failures": {}' in result.stdout
     assert '"partial"' not in result.stdout
 
 
 def test_score_partial_exit_2_envelope(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr("content_factory.cli.main._ascore", _fake_score(False, True, 2))
+    """R5: envelope parcial leva contagens + categorias (não mensagem de erro)."""
+    monkeypatch.setattr(
+        "content_factory.cli.main._ascore",
+        _fake_score(False, True, 2, processed=3, failed=1, failures={"data_error": 1}),
+    )
     result = runner.invoke(app, ["score", "--segment", "candles"])
     assert result.exit_code == 2
     assert '"ok": true' in result.stdout
     assert '"partial": true' in result.stdout
     assert '"scored": 2' in result.stdout
+    assert '"processed": 3' in result.stdout
+    assert '"persisted": 2' in result.stdout
+    assert '"failed": 1' in result.stdout
+    assert '"data_error": 1' in result.stdout
 
 
 def test_score_total_failure_exit_1_envelope(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr("content_factory.cli.main._ascore", _fake_score(False, False, 0))
+    """R5: falha total (0 de N persistidas) é ok=false COM as contagens."""
+    monkeypatch.setattr(
+        "content_factory.cli.main._ascore",
+        _fake_score(False, False, 0, processed=3, failed=3, failures={"data_error": 3}),
+    )
     result = runner.invoke(app, ["score", "--segment", "candles"])
     assert result.exit_code == 1
     assert '"ok": false' in result.stdout
+    assert '"processed": 3' in result.stdout
+    assert '"persisted": 0' in result.stdout
+    assert '"failed": 3' in result.stdout
+    assert '"data_error": 3' in result.stdout
 
 
 class _MissingSegments:

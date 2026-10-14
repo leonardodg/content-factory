@@ -174,7 +174,9 @@ Fixos no código (não são env):
   score 5 min, para o job inteiro (todos os segmentos). É menor que o TTL de
   30 min do lock por segmento. Job cancelado por timeout aparece no log do
   arq. Os crons usam `max_tries=1`, então não há re-execução: a próxima
-  tentativa é o próximo horário.
+  tentativa é o próximo horário (política completa em
+  [ADR-0007](../adr/0007-politica-retry-jobs.md), com o comando de
+  enfileirar um tick manual).
 - **Breaker por plataforma** (Redis, `cf:cb:<plataforma>:*`): 3 falhas
   seguidas do discover, somando segmentos, com códigos `blocked`,
   `rate_limited`, `network` ou `upstream_changed`, fazem o `acquire` da

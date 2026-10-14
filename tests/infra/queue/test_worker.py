@@ -8,7 +8,7 @@ from typing import Any, ClassVar, cast
 import pytest
 
 from content_factory.app.collect import CollectDeps, collect
-from content_factory.app.ports import Collector
+from content_factory.app.ports import Collector, UpsertReport
 from content_factory.app.research_pipeline import ResearchDeps
 from content_factory.app.score import ScoreDeps
 from content_factory.domain.errors import SegmentNotFound
@@ -25,6 +25,17 @@ from tests.stubs import (
     FakeRepos,
     TrackedCollector,
 )
+
+
+class _ScoreOk:
+    """Resultado fake do score com o contrato R5 (contagens + categorias)."""
+
+    ok: ClassVar[bool] = True
+    scored: ClassVar[int] = 3
+    processed: ClassVar[int] = 3
+    persisted: ClassVar[int] = 3
+    failed: ClassVar[int] = 0
+    failures: ClassVar[dict[str, int]] = {}
 
 
 class CountingDeps:
@@ -349,11 +360,7 @@ async def test_run_score_job_processes_all_active_segments(
     async def fake_score(deps: ScoreDeps) -> object:
         calls.append(deps.segment.slug)
 
-        class _Out:
-            ok = True
-            scored = 3
-
-        return _Out()
+        return _ScoreOk()
 
     monkeypatch.setattr(w, "_score_impl", fake_score)
     campaigns = _FakeCampaignsMultiSegment(slugs=["velas", "sabonetes"])
@@ -365,9 +372,58 @@ async def test_run_score_job_processes_all_active_segments(
     assert calls == ["velas", "sabonetes"]
     assert out == {
         "ok": True,
-        "segments": {"velas": {"ok": True, "scored": 3}, "sabonetes": {"ok": True, "scored": 3}},
+        "segments": {
+            "velas": {
+                "ok": True,
+                "scored": 3,
+                "processed": 3,
+                "persisted": 3,
+                "failed": 0,
+                "failures": {},
+            },
+            "sabonetes": {
+                "ok": True,
+                "scored": 3,
+                "processed": 3,
+                "persisted": 3,
+                "failed": 0,
+                "failures": {},
+            },
+        },
     }
     assert committed == ["commit", "commit"]
+
+
+async def test_run_score_job_envelope_carries_score_diagnostic(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """R5: o envelope do `score_job` leva contagens e categorias, não mensagem."""
+
+    async def fake_score(deps: ScoreDeps) -> object:
+        _ = deps
+
+        class _Partial:
+            ok = False
+            scored = 2
+            processed = 3
+            persisted = 2
+            failed = 1
+            failures: ClassVar[dict[str, int]] = {"data_error": 1}
+
+        return _Partial()
+
+    monkeypatch.setattr(w, "_score_impl", fake_score)
+    campaigns = _FakeCampaignsMultiSegment(slugs=["velas"])
+    app_deps = _FakeAppDeps([], [])
+    out = await w.run_score_job({"campaigns_deps": campaigns, "app_deps": app_deps})
+    assert out["segments"]["velas"] == {
+        "ok": False,
+        "scored": 2,
+        "processed": 3,
+        "persisted": 2,
+        "failed": 1,
+        "failures": {"data_error": 1},
+    }
 
 
 async def test_run_score_job_isolates_segment_exception(
@@ -381,11 +437,7 @@ async def test_run_score_job_isolates_segment_exception(
         if deps.segment.slug == "velas":
             raise RuntimeError("boom")
 
-        class _Out:
-            ok = True
-            scored = 3
-
-        return _Out()
+        return _ScoreOk()
 
     monkeypatch.setattr(w, "_score_impl", fake_score)
     campaigns = _FakeCampaignsMultiSegment(slugs=["velas", "sabonetes"])
@@ -403,7 +455,14 @@ async def test_run_score_job_isolates_segment_exception(
     assert out["ok"] is False
     assert out["segments"]["velas"]["ok"] is False
     assert "boom" in out["segments"]["velas"]["error"]
-    assert out["segments"]["sabonetes"] == {"ok": True, "scored": 3}
+    assert out["segments"]["sabonetes"] == {
+        "ok": True,
+        "scored": 3,
+        "processed": 3,
+        "persisted": 3,
+        "failed": 0,
+        "failures": {},
+    }
     assert committed == ["commit"]
     assert rolled_back == ["rollback"]
 
@@ -1283,11 +1342,7 @@ async def test_run_score_job_runs_segments_concurrently(
         finally:
             state["current"] -= 1
 
-        class _Out:
-            ok = True
-            scored = 3
-
-        return _Out()
+        return _ScoreOk()
 
     monkeypatch.setattr(w, "_score_impl", fake_score)
     campaigns = _FakeCampaignsMultiSegment(slugs=["velas", "sabonetes", "resina"])
@@ -1457,7 +1512,7 @@ async def test_score_job_batch_failure_reaches_envelope_and_rolls_back(
     from content_factory.app.score import score as real_score
 
     class _ExplodingScores:
-        async def upsert_many(self, rows: object) -> int:
+        async def upsert_many(self, rows: object) -> UpsertReport:
             raise RuntimeError("conexão caiu")
 
     class _Videos:

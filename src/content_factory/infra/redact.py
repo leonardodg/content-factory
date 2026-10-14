@@ -3,16 +3,28 @@
 import logging
 import re
 
-# valor depois do padrão vira *** — cobre forma de query, header e JSON
+# valor depois do padrão vira *** — cobre forma de query, header e JSON.
+# `&` encerra o valor (query string): sem isso o resto da URL era engolido.
 _SENSITIVE = re.compile(
     r"(?i)(set-cookie|cookie|sessionid|ms_token|access_token)"
-    r"(['\"]?\s*[:=]\s*['\"]?)([^\s;,'\"}]+)"
+    r"(['\"]?\s*[:=]\s*['\"]?)([^\s;,&'\"}]+)"
 )
+# Revisão 2026-10-14 (A2, R3): nomes genéricos de segredo como PARÂMETRO —
+# `key` é a API key do YouTube na query. Fronteira de palavra para não pegar
+# `monkey=`/`turkey=`; `access_token` já é coberto acima.
+_SECRET_PARAMS = re.compile(
+    r"(?i)(\b(?:key|api_?key|token|password|passwd|secret|client_secret)\b)"
+    r"(['\"]?\s*[:=]\s*['\"]?)([^\s;,&'\"}]+)"
+)
+# credencial embutida em URL: scheme://usuario:SENHA@host (usuário pode ser vazio)
+_URL_CREDENTIALS = re.compile(r"(?i)([a-z][a-z0-9+.-]*://[^:/\s@]*:)([^@\s/]+)(@)")
 
 
 def redact(text: str) -> str:
-    """Mascara o valor de `sessionid`/`ms_token`/`access_token`/cookies."""
-    return _SENSITIVE.sub(r"\1\2***", text)
+    """Mascara segredos: tokens/cookies, parâmetros de segredo e senha em URL."""
+    text = _URL_CREDENTIALS.sub(r"\1***\3", text)
+    text = _SENSITIVE.sub(r"\1\2***", text)
+    return _SECRET_PARAMS.sub(r"\1\2***", text)
 
 
 _TRACEBACK_FORMATTER = logging.Formatter()

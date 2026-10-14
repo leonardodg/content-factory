@@ -256,14 +256,24 @@ def score_cmd(
         print(dumps(envelope_err("score", "internal_error", redact(str(exc)))))
         raise typer.Exit(exit_code_for(ok=False)) from exc
 
+    # R5: envelope do score é SÓ contagem/categoria (o porquê da linha está
+    # no log do repo, já redigido pelo handler) — `scored` fica como nome
+    # legado de `persisted` para os contratos/documentação antigos.
+    counts: dict[str, Any] = {
+        "scored": outcome.scored,
+        "processed": outcome.processed,
+        "persisted": outcome.persisted,
+        "failed": outcome.failed,
+        "failures": outcome.failures,
+    }
     if outcome.partial:
-        print(dumps(envelope_ok("score", partial=True, scored=outcome.scored)))
+        print(dumps(envelope_ok("score", partial=True, **counts)))
         raise typer.Exit(exit_code_for(ok=True, partial=True))
     if outcome.ok:
-        print(dumps(envelope_ok("score", scored=outcome.scored)))
+        print(dumps(envelope_ok("score", **counts)))
         raise typer.Exit(exit_code_for(ok=True))
     msg = f"falha ao gravar scores de {segment}"
-    print(dumps(envelope_err("score", "internal_error", redact(msg))))
+    print(dumps(envelope_err("score", "internal_error", redact(msg), **counts)))
     raise typer.Exit(exit_code_for(ok=False))
 
 

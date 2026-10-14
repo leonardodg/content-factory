@@ -15,7 +15,7 @@ from tests.stubs import (
     FakeVideos,
 )
 
-from content_factory.app.gate_hits import record_gate_hit
+from content_factory.app.call_counters import record_gate_hit
 from content_factory.app.ports import KeywordSignalRepository, SocialDiscoverer
 from content_factory.app.research_pipeline import ResearchDeps, ResearchOutcome, run_research_cycle
 from content_factory.domain.errors import CollectorError
@@ -890,7 +890,7 @@ class _SharedGatedSocial:
     async def discover_by_keywords(
         self, keywords: list[str], hashtags: list[str], depth: int
     ) -> list[CandidateVideo]:
-        from content_factory.app.gate_hits import record_gate_hit
+        from content_factory.app.call_counters import record_gate_hit
 
         self.gate_hits += 1
         record_gate_hit()
@@ -1105,3 +1105,24 @@ async def test_research_acquire_failure_is_not_recorded() -> None:
     deps.limiter = _BlockedTiktok()
     await run_research_cycle("candles", DepthConfig(), deps)
     assert health.failures == [] and health.successes == []
+
+
+class _QuotaSocial:
+    platform: ClassVar[str] = "youtube"
+
+    async def discover_by_keywords(
+        self, keywords: list[str], hashtags: list[str], depth: int
+    ) -> list[CandidateVideo]:
+        from content_factory.app.call_counters import record_quota
+
+        record_quota(100)
+        record_quota(1)
+        return []
+
+
+async def test_research_social_run_records_quota_used() -> None:
+    """Revisão B2: a run research:youtube grava a cota daquela chamada."""
+    repos = FakeRepos()
+    deps = _research_deps_with({"youtube": _QuotaSocial()}, repos)
+    await run_research_cycle("candles", DepthConfig(), deps)
+    assert _runs_by_collector(repos)["research:youtube"].quota_used == 101

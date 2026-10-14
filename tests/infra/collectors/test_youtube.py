@@ -1,6 +1,7 @@
 import httpx
 import pytest
 
+from content_factory.app.call_counters import counting
 from content_factory.domain.models import SegmentConfig
 from content_factory.infra.collectors.youtube import YoutubeCollector
 
@@ -12,12 +13,13 @@ SEG = SegmentConfig(
 @pytest.mark.asyncio
 async def test_discover_maps_fixture(httpx_mock_transport: httpx.MockTransport) -> None:
     c = YoutubeCollector(api_key="k", transport=httpx_mock_transport)
-    out = await c.discover(SEG, limit=5)
+    with counting() as counters:
+        out = await c.discover(SEG, limit=5)
     assert out and out[0].platform == "youtube"
     assert out[0].views is not None and out[0].url.startswith("https://")
     assert out[0].duration_s == 492  # PT8M12S
     assert out[0].creator_followers == 54000
-    assert c.quota_used == 102  # 100 search + 1 videos + 1 channels
+    assert counters.quota_used == 102  # 100 search + 1 videos + 1 channels (por chamada)
 
 
 @pytest.mark.asyncio
@@ -40,12 +42,13 @@ async def test_discover_by_keywords_builds_query_and_returns_videos() -> None:
         return httpx.Response(404, json={})
 
     c = YoutubeCollector(api_key="k", transport=httpx.MockTransport(_route))
-    out = await c.discover_by_keywords(
-        keywords=["candle making", "DIY candle"], hashtags=["#velas", "#soy"], depth=1
-    )
+    with counting() as counters:
+        out = await c.discover_by_keywords(
+            keywords=["candle making", "DIY candle"], hashtags=["#velas", "#soy"], depth=1
+        )
     assert out and out[0].platform == "youtube"
     assert out[0].duration_s == 492
-    assert c.quota_used == 102
+    assert counters.quota_used == 102
     # query = keywords+hashtags unidos (máx 5 termos)
     assert len(captured) == 1
     assert "candle making" in captured[0]

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from typing import ClassVar, Protocol
 
@@ -91,6 +91,22 @@ class ScoreUpsertRow:
     computed_at: datetime
 
 
+@dataclass
+class UpsertReport:
+    """Resultado de `upsert_many`: o que persistiu e o que caiu, por categoria.
+
+    Antes a porta devolvia só um `int` e o repo descartava linha ruim em
+    silêncio — o diagnóstico (R5) exigia saber **quanto** caiu e **por quê**.
+    `failures` é categoria → nº de linhas (ex.: `{"data_error": 1}`), nunca
+    mensagem: envelope fica só com contagens, o detalhe vai para o log.
+    `persisted + sum(failures.values()) == len(rows)` no caminho do impl
+    (linhas descartadas são exatamente as de erro de dado).
+    """
+
+    persisted: int
+    failures: dict[str, int] = field(default_factory=dict[str, int])
+
+
 class ScoreRepository(Protocol):
     async def upsert(
         self, video_id: int, segment_id: int, result: ScoreResult, computed_at: datetime
@@ -98,12 +114,12 @@ class ScoreRepository(Protocol):
         """Upsert de um vídeo — mantido para a CLI/uso direto pontual."""
         ...
 
-    async def upsert_many(self, rows: Sequence[ScoreUpsertRow]) -> int:
+    async def upsert_many(self, rows: Sequence[ScoreUpsertRow]) -> UpsertReport:
         """Persiste o lote, isolando linhas ruins (fallback por linha).
 
-        Devolve quantas linhas persistiram; linhas com dado inválido são
-        puladas sem derrubar o lote. Erros que não são de dados da linha
-        (ex.: conexão) propagam para o caller.
+        Devolve o relatório (persistidas + falhas por categoria); linhas com
+        dado inválido são puladas sem derrubar o lote. Erros que não são de
+        dados da linha (ex.: conexão) propagam para o caller.
         """
         ...
 

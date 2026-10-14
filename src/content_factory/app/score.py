@@ -30,10 +30,33 @@ class ScoreDeps:
 
 
 class ScoreOutcome:
-    def __init__(self, ok: bool, partial: bool, scored: int) -> None:
+    """Resultado do score — só contagens e categorias (R5), nunca mensagem.
+
+    `scored` é o nome legado de `persisted` (envelopes e docs já o usam) e
+    `failures` é categoria → nº de linhas descartadas (`{"data_error": 1}`):
+    o porquê de cada linha fica no log do repo, vermelho só na fila.
+    """
+
+    def __init__(
+        self,
+        ok: bool,
+        partial: bool,
+        scored: int,
+        processed: int = 0,
+        failed: int = 0,
+        failures: dict[str, int] | None = None,
+    ) -> None:
         self.ok = ok
         self.partial = partial
         self.scored = scored
+        self.processed = processed
+        self.failed = failed
+        self.failures: dict[str, int] = failures or {}
+
+    @property
+    def persisted(self) -> int:
+        """Mesmo valor de `scored` — o nome novo da contagem de gravadas."""
+        return self.scored
 
 
 def relevance_of(snap: VideoSnapshot, keywords: list[str]) -> float:
@@ -67,13 +90,23 @@ async def score(deps: ScoreDeps) -> ScoreOutcome:
         for snap in snaps
     ]
     if not rows:
-        return ScoreOutcome(ok=True, partial=False, scored=0)
+        return ScoreOutcome(ok=True, partial=False, scored=0, processed=0)
     # 1 round-trip por bloco (não por vídeo); linhas ruins são isoladas
-    # dentro do repo — o retorno diz quantas persistiram. Falha do lote
-    # inteiro (ex.: conexão) PROPAGA (Etapa 1 Task 11): engolir aqui fazia o
-    # commit seguinte levantar PendingRollbackError e o erro real se perdia;
-    # o worker loga com traceback e reverte só a UoW do segmento.
-    scored = await deps.scores.upsert_many(rows)
-    errors = len(rows) - scored
-    ok = errors == 0
-    return ScoreOutcome(ok=ok, partial=(not ok and scored > 0), scored=scored)
+    # dentro do repo — o relatório diz quantas persistiram e qual categoria
+    # caiu (R5). Falha do lote inteiro (ex.: conexão) PROPAGA (Etapa 1 Task
+    # 11): engolir aqui fazia o commit seguinte levantar PendingRollbackError
+    # e o erro real se perdia; o worker loga com traceback e reverte só a
+    # UoW do segmento.
+    report = await deps.scores.upsert_many(rows)
+    processed = len(rows)
+    persisted = report.persisted
+    failed = processed - persisted
+    ok = failed == 0
+    return ScoreOutcome(
+        ok=ok,
+        partial=(not ok and persisted > 0),  # 0 < persisted < processed
+        scored=persisted,
+        processed=processed,
+        failed=failed,
+        failures=report.failures,
+    )

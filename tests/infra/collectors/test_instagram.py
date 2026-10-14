@@ -3,7 +3,7 @@ from pathlib import Path
 import httpx
 import pytest
 
-from content_factory.app.gate_hits import counting
+from content_factory.app.call_counters import counting
 from content_factory.domain.errors import AuthExpired, NetworkError, UpstreamChanged
 from content_factory.domain.models import SegmentConfig
 from content_factory.infra.collectors.instagram import InstagramCollector
@@ -401,7 +401,7 @@ async def test_gate_increments_gate_hits_counter() -> None:
     with counting() as hits:
         await c.discover(SEG, limit=5)
     assert c.gate_hits == 1
-    assert hits.total == 1  # Etapa 1 Task 9: também conta por chamada
+    assert hits.gate_hits == 1  # Etapa 1 Task 9: também conta por chamada
 
 
 def test_register_defaults_registers_instagram() -> None:

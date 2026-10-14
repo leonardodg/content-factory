@@ -4,8 +4,10 @@ from typing import Any, ClassVar, cast
 
 import httpx
 
+from content_factory.app.call_counters import record_quota
 from content_factory.domain.errors import NetworkError, RateLimited, UpstreamChanged
 from content_factory.domain.models import CandidateVideo, SegmentConfig
+from content_factory.infra.redact import redact
 
 API = "https://www.googleapis.com/youtube/v3"
 DURATION_RE = re.compile(r"PT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?")
@@ -35,18 +37,17 @@ class YoutubeCollector:
     platform: ClassVar[str] = "youtube"
     COST_SEARCH, COST_LIST = 100, 1
 
-    def __init__(
-        self, api_key: str, transport: httpx.AsyncBaseTransport | None = None, quota_used: int = 0
-    ) -> None:
+    def __init__(self, api_key: str, transport: httpx.AsyncBaseTransport | None = None) -> None:
         self._key = api_key
         self._client = httpx.AsyncClient(transport=transport, timeout=20)
-        self.quota_used = quota_used
 
     async def _get(self, path: str, params: dict[str, str]) -> dict[str, Any]:
         try:
             r = await self._client.get(f"{API}/{path}", params={**params, "key": self._key})
         except httpx.HTTPError as exc:
-            raise NetworkError(self.platform, str(exc)) from exc
+            # redact: a URL de erro carrega a API key na query (`key=`), como
+            # o access_token no Instagram (revisão 2026-10-14 A2)
+            raise NetworkError(self.platform, redact(str(exc))) from exc
         if r.status_code == 403:
             raise RateLimited(self.platform, "quota ou origem bloqueada")
         if r.status_code >= 400:
@@ -85,7 +86,7 @@ class YoutubeCollector:
                 "maxResults": str(min(limit, 50)),
             },
         )
-        self.quota_used += self.COST_SEARCH
+        record_quota(self.COST_SEARCH)  # por chamada → collect_runs.quota_used
         items: Any = search.get("items")
         if not isinstance(items, list):
             raise UpstreamChanged(self.platform, "search sem items")
@@ -104,7 +105,7 @@ class YoutubeCollector:
                 "id": ",".join(ids[:50]),
             },
         )
-        self.quota_used += self.COST_LIST
+        record_quota(self.COST_LIST)
         stats_by_id = {str(v["id"]): v for v in stats.get("items", [])}
         channels = await self._get(
             "channels",
@@ -113,7 +114,7 @@ class YoutubeCollector:
                 "id": ",".join({v["snippet"]["channelId"] for v in stats_by_id.values()}),
             },
         )
-        self.quota_used += self.COST_LIST
+        record_quota(self.COST_LIST)
         followers = {
             str(c["id"]): int(c["statistics"].get("subscriberCount", 0))
             for c in channels.get("items", [])

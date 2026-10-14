@@ -16,6 +16,7 @@ from tests.stubs import (
     TrackedCollector,
 )
 
+from content_factory.app.call_counters import record_gate_hit
 from content_factory.app.collect import (
     CollectDeps,
     CollectOutcome,
@@ -23,7 +24,6 @@ from content_factory.app.collect import (
     _discover_one,  # pyright: ignore[reportPrivateUsage]
     collect,
 )
-from content_factory.app.gate_hits import record_gate_hit
 from content_factory.app.ports import Collector, VideoRepository
 from content_factory.domain.errors import CollectorError, RateLimited
 from content_factory.domain.models import (
