@@ -471,6 +471,17 @@ guard-rail, tabela e orquestrador; Fases B–E pendem de decisão do usuário.
 
 ## ⛔ O que falta (próximos passos aprovados)
 
+0. **Lacunas achadas ao montar o [Mapa do ciclo](diagram/mapa-do-ciclo.md)**
+   (2026-10-14, não corrigidas):
+   - (a) **Breaker por plataforma no Redis inativo.** `RedisRateLimiter`
+     tem `record_failure`/`record_success` (3 falhas → 15 min), mas nenhum
+     caminho do app os chama, então o bloqueio nunca é gravado. Decidir
+     entre ligar no `collect`/research ou remover.
+   - (b) **`job_timeout` de 300 s (default do arq) vale para o job inteiro,
+     com os 3 segmentos.** Hoje as coletas levam segundos, porque o TikTok
+     falha na hora, sem token. Com `TIKTOK_MS_TOKEN` e `tiktok=1`
+     serializando o Playwright, o job pode ser cancelado. Medir antes de
+     ativar o TikTok e, se preciso, definir `job_timeout` por função.
 1. **Issues pós-merge** (backlog da REVISÃO §6 — #1 mascaramento/finally já
    corrigido pelo savepoint; PR #3 merged `7d5d295`): lock token (#2 alta),
    INCR+EXPIRE (#3), detalhe de erro do score (#4) — **deferrals do collector
