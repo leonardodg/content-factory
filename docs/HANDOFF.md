@@ -5,26 +5,36 @@
 
 ## 🔄 EM ANDAMENTO
 
-_**Revisão sênior 2026-10-14 — plano pronto, execução não iniciada.**
-Registro: [`REVISAO_2026-10-14.md`](REVISAO_2026-10-14.md); plano:
+_**Revisão sênior 2026-10-14 — correções na `main` (PR #14, `5c14a6d`); deploy PENDENTE.**
+Registro e auditoria: [`REVISAO_2026-10-14.md`](REVISAO_2026-10-14.md); plano:
 `ai-plans/2026-10-14-content-factory-revisao-senior.md`.
 
-- **Decisão:** **corrigir, não refatorar.** Os refactors são locais: Lua no
-  rate limiter, `UpsertReport` no score e contador genérico por chamada.
-- **Antes de 19/10:**
-  - A1, rate limiter atômico. Uma chave sem TTL hoje bloqueia a plataforma
-    **para sempre**;
-  - A2, redação. A API key do YouTube e as senhas em URL de
-    Postgres/Redis **vazam**, reproduzido;
-  - A4, ruleset na `main`, que precisa da sua confirmação;
-  - A5, ADR de retry;
+- **Experimento pausado** em 2026-10-14 15:21:26 UTC. Os 3 workers legados
+  estão parados (não removidos); backup completo em
+  `~/backups/content-factory/2026-10-14-experimento-pausa/`; relatório em
+  [`manual/experimento-pausa-2026-10-14.md`](manual/experimento-pausa-2026-10-14.md).
+- **Na `main`:**
+  - A1, rate limiter atômico;
+  - A2, redação;
+  - B2, `quota_used`;
   - B1, score diagnosticável;
-  - B2, `quota_used`, hoje sempre 0.
-- **Em 19/10:** A3, troca 3→1 pelo checklist.
-- **Depois:**
-  - B3, validação do ranking, com limiares a decidir;
-  - C1–C3, contratos e observabilidade;
-  - D1–D2, supply chain e ADR de SSRF.
+  - A5, ADR-0007.
+
+  Os gates passam com 382 testes. A auditoria validou a migração
+  `0008→0009` e os jobs reais sobre uma cópia restaurada do banco: o
+  research grava sinais pela primeira vez.
+- **Antes do deploy** (achados da auditoria):
+  - A-1, o comando de tick do ADR-0007 deve usar `uv run python`;
+  - A-2(a), teto `web=1`;
+  - A-3, YouTube sem chave ou com chave inválida deve virar
+    `auth_expired`, não `rate_limited`.
+- **Deploy pendente:**
+  - `alembic upgrade` no banco real (`0008`);
+  - `compose multi-segmento --profile worker-multi up -d --build worker`;
+  - checklist A3;
+  - campanhas novas de 7 dias nos 3 segmentos.
+- **Pendente:** A4 (ruleset, aguarda confirmação), limiares do B3,
+  C1–C3, D1–D2.
 - **Restrição:** nada no `insta_kb` até o content-factory fechar 100%.
 
 _**Etapa 1 do plano de review CONCLUÍDA (2026-10-14), branch
