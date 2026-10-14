@@ -323,6 +323,10 @@ dura 1/3 do previsto, e falhas de segmentos diferentes se somam.
 
 ## Task 11 — Falha de lote do score propaga
 
+> ✅ Feita. Worker: envelope com o erro original + rollback só da UoW (RED: era
+> `{ok: false, scored: 0}` e commitava). CLI: já capturava `Exception` → agora
+> `internal_error` com a mensagem real, não a genérica.
+
 `except Exception: scored = 0` em `score()` esconde o erro real; o `commit`
 seguinte levanta `PendingRollbackError` e só ele chega ao envelope.
 

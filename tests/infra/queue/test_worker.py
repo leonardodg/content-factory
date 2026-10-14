@@ -1441,3 +1441,61 @@ async def test_close_disposes_engine_even_if_redis_close_fails(
     with pytest.raises(ConnectionError):
         await deps.close()
     assert engine.disposed == 1
+
+
+async def test_score_job_batch_failure_reaches_envelope_and_rolls_back(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Etapa 1 Task 11: erro de lote do score chega ao envelope ORIGINAL e reverte.
+
+    Antes: `score()` engolia o erro (`scored=0`), o job commitava e — com
+    sessão real — o commit levantava `PendingRollbackError` no lugar dele.
+    """
+    from content_factory.app.score import score as real_score
+
+    class _ExplodingScores:
+        async def upsert_many(self, rows: object) -> int:
+            raise RuntimeError("conexão caiu")
+
+    class _Videos:
+        async def latest_for_segment(self, segment_id: int) -> list[object]:
+            from datetime import UTC, datetime
+
+            from content_factory.domain.models import VideoMetrics, VideoSnapshot
+
+            return [
+                VideoSnapshot(
+                    video_id=1,
+                    title="vela",
+                    description="",
+                    published_at=datetime(2026, 10, 1, tzinfo=UTC),
+                    metrics=VideoMetrics(views=1000),
+                )
+            ]
+
+    committed: list[str] = []
+    rolled_back: list[str] = []
+    base = _FakeAppDeps(committed, rolled_back)
+
+    class _AppDeps:
+        @asynccontextmanager
+        async def create_segment_deps(self, segment: Segment) -> AsyncGenerator[Any]:
+            async with base.create_segment_deps(segment) as bundle:
+                bundle.score = ScoreDeps(
+                    videos=_Videos(),  # type: ignore[arg-type]
+                    scores=_ExplodingScores(),  # type: ignore[arg-type]
+                    segment=segment,
+                    keywords=segment.keywords,
+                )
+                yield bundle
+
+    monkeypatch.setattr(w, "_score_impl", real_score)
+    campaigns = _FakeCampaignsMultiSegment(slugs=["velas"])
+    out = await w.run_score_job({"campaigns_deps": campaigns, "app_deps": _AppDeps()})
+    assert out["segments"]["velas"] == {
+        "ok": False,
+        "error": "conexão caiu",
+        "error_type": "RuntimeError",
+    }
+    assert committed == []
+    assert rolled_back == ["rollback"]

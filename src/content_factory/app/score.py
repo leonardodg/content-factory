@@ -68,12 +68,12 @@ async def score(deps: ScoreDeps) -> ScoreOutcome:
     ]
     if not rows:
         return ScoreOutcome(ok=True, partial=False, scored=0)
-    try:
-        # 1 round-trip por bloco (não por vídeo); linhas ruins são isoladas
-        # dentro do repo — o retorno diz quantas persistiram.
-        scored = await deps.scores.upsert_many(rows)
-    except Exception:  # falha do lote inteiro (ex.: conexão) — nada garantido
-        scored = 0
+    # 1 round-trip por bloco (não por vídeo); linhas ruins são isoladas
+    # dentro do repo — o retorno diz quantas persistiram. Falha do lote
+    # inteiro (ex.: conexão) PROPAGA (Etapa 1 Task 11): engolir aqui fazia o
+    # commit seguinte levantar PendingRollbackError e o erro real se perdia;
+    # o worker loga com traceback e reverte só a UoW do segmento.
+    scored = await deps.scores.upsert_many(rows)
     errors = len(rows) - scored
     ok = errors == 0
     return ScoreOutcome(ok=ok, partial=(not ok and scored > 0), scored=scored)
