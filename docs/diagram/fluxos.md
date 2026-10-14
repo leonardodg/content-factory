@@ -71,7 +71,7 @@ flowchart TD
     B --> U["abrir UoW<br/>bundle = collect+score+research<br/>montado de SharedDeps + sessão do segmento<br/>(RedisLock próprio)"]
     U --> L{"lock collect:SLUG<br/>token de posse · TTL 30 min"}
     L -- ocupado --> J1["{ok: false, ja_em_execucao}"]
-    L -- livre --> N["fase de rede · bounded_gather 2<br/>+ vaga por plataforma (tiktok=1)"]
+    L -- livre --> N["fase de rede · bounded_gather 2<br/>+ vaga por plataforma (tiktok=1,web=1)"]
     N --> D1["limiter.acquire + discover<br/>youtube"]
     N --> D2["limiter.acquire + discover<br/>instagram"]
     N --> D3["limiter.acquire + discover<br/>web / tiktok"]

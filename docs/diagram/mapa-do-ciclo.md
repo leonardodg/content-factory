@@ -150,7 +150,7 @@ vídeo, e cada coleta grava um novo snapshot de métricas.
 ```mermaid
 flowchart TD
     A["lock collect:SLUG"] --> B["coletores das plataformas do segmento<br/>(ou COLLECT_PLATFORMS)"]
-    B --> N["bounded_gather COLLECT_MAX_CONCURRENCY=2<br/>+ vaga por plataforma tiktok=1"]
+    B --> N["bounded_gather COLLECT_MAX_CONCURRENCY=2<br/>+ vaga por plataforma tiktok=1,web=1"]
     N --> D["por plataforma: limiter.acquire → discover(segment, COLLECT_LIMIT=10)<br/>gate_hits contado por chamada"]
     D -->|CollectorError| E1["run failed/blocked com error_code"]
     D -->|outra exceção| E2["run failed internal_error<br/>+ ERROR com traceback"]
@@ -245,7 +245,7 @@ sequenceDiagram
 | --- | --- | --- |
 | Limite | segmentos simultâneos por job | `WORKER_MAX_SEGMENTS=3` (lido a cada tick) |
 | Limite | discovers simultâneos por segmento | `COLLECT_MAX_CONCURRENCY=2` (collect; o research usa 2 fixo) |
-| Limite | por plataforma no processo | `PLATFORM_MAX_CONCURRENCY`, sempre com `tiktok=1` |
+| Limite | por plataforma no processo | `PLATFORM_MAX_CONCURRENCY`, sempre com `tiktok=1,web=1` |
 | Limite | jobs simultâneos | `max_jobs=3` (1 por tipo) |
 | Limite | duração do job (todos os segmentos) | collect e research **25 min**, score **5 min**, explícitos na `func()` e no `cron()`; abaixo do TTL do lock (30 min) |
 | Limite | janelas no Redis (globais, somam segmentos) | YouTube 100/dia · TikTok 6/min · Instagram 20/min · demais 10/min |

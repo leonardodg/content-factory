@@ -68,7 +68,7 @@ cf research status --segment <slug>
 Para forçar um tick do worker (fora do cron) — usado pela fumaça do deploy:
 
 ```bash
-docker exec cf-worker-multi-segmento python -c "
+docker exec cf-worker-multi-segmento uv run python -c "
 import asyncio
 from arq import create_pool
 from arq.connections import RedisSettings
@@ -81,6 +81,10 @@ async def main():
 asyncio.run(main())
 "
 ```
+
+> `uv run` porque o worker instala as dependências no venv do uv: o
+> `python` puro do container é o do sistema e não tem `arq`
+> (auditoria 2026-10-14 A-1).
 
 ## Alternativas consideradas
 

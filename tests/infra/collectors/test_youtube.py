@@ -68,6 +68,60 @@ async def test_quota_403_becomes_rate_limited() -> None:
         await c.discover(SEG, limit=5)
 
 
+@pytest.mark.asyncio
+async def test_missing_api_key_raises_auth_expired_without_http() -> None:
+    """Auditoria A-3: chave vazia = credencial, não cota — falha antes da chamada.
+
+    Sem isso a run saía `rate_limited` e abria o breaker por plataforma,
+    mascarando a ausência de `YOUTUBE_API_KEY` como problema de quota.
+    """
+    from content_factory.domain.errors import AuthExpired
+
+    def _nope(request: httpx.Request) -> httpx.Response:
+        raise AssertionError("HTTP não pode ser chamado sem YOUTUBE_API_KEY")
+
+    c = YoutubeCollector(api_key="", transport=httpx.MockTransport(_nope))
+    with pytest.raises(AuthExpired, match="YOUTUBE_API_KEY"):
+        await c.discover(SEG, limit=5)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("status", [400, 403])
+async def test_key_invalid_raises_auth_expired(status: int) -> None:
+    """Auditoria A-3: 400/403 com reason `keyInvalid` é credencial revogada.
+
+    Só `quotaExceeded`/`rateLimitExceeded` (e 403 sem reason legível) são
+    cota; chave inválida não pode abrir o breaker.
+    """
+    from content_factory.domain.errors import AuthExpired
+
+    def _invalid(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            status,
+            json={"error": {"message": "API key not valid", "errors": [{"reason": "keyInvalid"}]}},
+        )
+
+    c = YoutubeCollector(api_key="bad", transport=httpx.MockTransport(_invalid))
+    with pytest.raises(AuthExpired, match="keyInvalid"):
+        await c.discover(SEG, limit=5)
+
+
+@pytest.mark.asyncio
+async def test_quota_exceeded_reason_stays_rate_limited() -> None:
+    """Auditoria A-3: reason `quotaExceeded` continua sendo cota (rate_limited)."""
+    from content_factory.domain.errors import RateLimited
+
+    def _quota(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            403,
+            json={"error": {"message": "quota", "errors": [{"reason": "quotaExceeded"}]}},
+        )
+
+    c = YoutubeCollector(api_key="k", transport=httpx.MockTransport(_quota))
+    with pytest.raises(RateLimited):
+        await c.discover(SEG, limit=5)
+
+
 def test_register_defaults_registers_youtube() -> None:
     from content_factory.config import Settings
     from content_factory.infra.collectors import register_defaults, registry
