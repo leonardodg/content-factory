@@ -3,6 +3,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 
+from content_factory.app.concurrency import PlatformSlots
 from content_factory.app.ports import (
     Collector,
     CollectRunRepository,
@@ -39,6 +40,10 @@ class CollectDeps:
     # partida para benchmark, não limite seguro universal — a persistência
     # continua sempre sequencial na sessão compartilhada.
     max_concurrent_discoveries: int = 2
+    # Teto de discover() simultâneos POR PLATAFORMA, compartilhado entre
+    # segmentos (Etapa 0 Task 7 — ex.: tiktok=1 serializa as sessões
+    # Playwright no processo). Default vazio = sem teto.
+    platform_slots: PlatformSlots = field(default_factory=PlatformSlots)
 
 
 @dataclass
@@ -83,68 +88,72 @@ async def _discover_one(
     no registry (self.gate_hits acumula entre runs).
     """
     gate_hits_before = getattr(collector, "gate_hits", 0)
-    started_at = deps.clock()
-    try:
-        await deps.limiter.acquire(collector.platform)
-    except CollectorError as exc:
-        gate_hits_after = getattr(collector, "gate_hits", 0)
-        return DiscoverResult(
-            platform=collector.platform,
-            found=None,
-            error=exc,
-            gate_hits_delta=gate_hits_after - gate_hits_before,
-            discover_ms=None,
-            started_at=started_at,
-        )
-    except Exception as exc:
-        gate_hits_after = getattr(collector, "gate_hits", 0)
-        error = CollectorError("internal_error", collector.platform, str(exc))
-        error.__cause__ = exc
-        return DiscoverResult(
-            platform=collector.platform,
-            found=None,
-            error=error,
-            gate_hits_delta=gate_hits_after - gate_hits_before,
-            discover_ms=None,
-            started_at=started_at,
-        )
-    discover_start = deps.clock()
-    try:
-        found = await collector.discover(segment, limit)
-    except CollectorError as exc:
+    # Teto por plataforma (Etapa 0 Task 7): a vaga cobre acquire + discover.
+    # started_at é lido DENTRO da vaga (mas antes do acquire) para a duração
+    # medir trabalho, não espera na fila — comparável ao baseline (Task 6).
+    async with deps.platform_slots.slot(collector.platform):
+        started_at = deps.clock()
+        try:
+            await deps.limiter.acquire(collector.platform)
+        except CollectorError as exc:
+            gate_hits_after = getattr(collector, "gate_hits", 0)
+            return DiscoverResult(
+                platform=collector.platform,
+                found=None,
+                error=exc,
+                gate_hits_delta=gate_hits_after - gate_hits_before,
+                discover_ms=None,
+                started_at=started_at,
+            )
+        except Exception as exc:
+            gate_hits_after = getattr(collector, "gate_hits", 0)
+            error = CollectorError("internal_error", collector.platform, str(exc))
+            error.__cause__ = exc
+            return DiscoverResult(
+                platform=collector.platform,
+                found=None,
+                error=error,
+                gate_hits_delta=gate_hits_after - gate_hits_before,
+                discover_ms=None,
+                started_at=started_at,
+            )
+        discover_start = deps.clock()
+        try:
+            found = await collector.discover(segment, limit)
+        except CollectorError as exc:
+            discover_ms = _ms_between(discover_start, deps.clock())
+            gate_hits_after = getattr(collector, "gate_hits", 0)
+            return DiscoverResult(
+                platform=collector.platform,
+                found=None,
+                error=exc,
+                gate_hits_delta=gate_hits_after - gate_hits_before,
+                discover_ms=discover_ms,
+                started_at=started_at,
+            )
+        except Exception as exc:
+            discover_ms = _ms_between(discover_start, deps.clock())
+            gate_hits_after = getattr(collector, "gate_hits", 0)
+            error = CollectorError("internal_error", collector.platform, str(exc))
+            error.__cause__ = exc
+            return DiscoverResult(
+                platform=collector.platform,
+                found=None,
+                error=error,
+                gate_hits_delta=gate_hits_after - gate_hits_before,
+                discover_ms=discover_ms,
+                started_at=started_at,
+            )
         discover_ms = _ms_between(discover_start, deps.clock())
         gate_hits_after = getattr(collector, "gate_hits", 0)
         return DiscoverResult(
             platform=collector.platform,
-            found=None,
-            error=exc,
+            found=found,
+            error=None,
             gate_hits_delta=gate_hits_after - gate_hits_before,
             discover_ms=discover_ms,
             started_at=started_at,
         )
-    except Exception as exc:
-        discover_ms = _ms_between(discover_start, deps.clock())
-        gate_hits_after = getattr(collector, "gate_hits", 0)
-        error = CollectorError("internal_error", collector.platform, str(exc))
-        error.__cause__ = exc
-        return DiscoverResult(
-            platform=collector.platform,
-            found=None,
-            error=error,
-            gate_hits_delta=gate_hits_after - gate_hits_before,
-            discover_ms=discover_ms,
-            started_at=started_at,
-        )
-    discover_ms = _ms_between(discover_start, deps.clock())
-    gate_hits_after = getattr(collector, "gate_hits", 0)
-    return DiscoverResult(
-        platform=collector.platform,
-        found=found,
-        error=None,
-        gate_hits_delta=gate_hits_after - gate_hits_before,
-        discover_ms=discover_ms,
-        started_at=started_at,
-    )
 
 
 async def collect(

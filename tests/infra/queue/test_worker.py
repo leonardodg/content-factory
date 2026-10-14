@@ -2,7 +2,7 @@ import asyncio
 import logging
 from collections.abc import AsyncGenerator, Callable
 from contextlib import asynccontextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any, ClassVar, cast
 
 import pytest
@@ -16,7 +16,15 @@ from content_factory.domain.fanout_guard import FanoutGuard
 from content_factory.domain.models import DepthConfig, ResearchCampaign, Segment
 from content_factory.infra.queue import worker as w
 from content_factory.infra.ratelimit import RedisRateLimiter, Window
-from tests.stubs import FakeCollector, FakeLimiter, FakeLock, FakeRedis, FakeRepos
+from tests.stubs import (
+    ConcurrencyTracker,
+    FakeCollector,
+    FakeLimiter,
+    FakeLock,
+    FakeRedis,
+    FakeRepos,
+    TrackedCollector,
+)
 
 
 class CountingDeps:
@@ -1149,6 +1157,96 @@ async def test_segment_bundles_get_distinct_lock_instances_over_shared_client(
         client_b = cast(Any, bundle_b.collect.lock)._client
         assert client_a is client_b is deps.lock_client
     await deps.close()
+
+
+async def test_worker_segments_share_platform_slots_capping_tiktok(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Etapa 0 Task 7: 3 segmentos concorrentes sob 1 PlatformSlots.
+
+    O teto é por processo, não por segmento: tiktok=1 serializa (pico 1)
+    enquanto youtube sem teto sobrepõe (pico >= 2). Os 3 bundles herdam a
+    MESMA instância criada no startup.
+    """
+    from contextlib import asynccontextmanager
+
+    import content_factory.infra.collectors as collectors_mod
+    import content_factory.infra.db.base as db_base
+    import content_factory.infra.redis_ops as redis_ops
+    from content_factory.config import Settings
+
+    monkeypatch.setenv("WORKER_MAX_SEGMENTS", "3")
+    monkeypatch.setenv("PLATFORM_MAX_CONCURRENCY", "tiktok=1")
+
+    @asynccontextmanager
+    async def _session() -> AsyncGenerator[_FakeSession]:
+        yield _FakeSession()
+
+    @asynccontextmanager
+    async def _redis(_url: str) -> AsyncGenerator[Any]:
+        yield object()
+
+    def _factory(_settings: Settings) -> Any:
+        return _session
+
+    def _register(_settings: Settings) -> None:
+        pass
+
+    class _Registry:
+        def snapshot(self) -> list[str]:
+            return []
+
+        def resolve(self, names: list[str]) -> list[object]:
+            return []
+
+    monkeypatch.setattr(db_base, "get_session_factory", _factory)
+    monkeypatch.setattr(redis_ops, "redis_client", _redis)
+    monkeypatch.setattr(collectors_mod, "register_defaults", _register)
+    monkeypatch.setattr(collectors_mod, "registry", _Registry())
+
+    tiktok_tracker = ConcurrencyTracker()
+    youtube_tracker = ConcurrencyTracker()
+    tiktok = TrackedCollector("tiktok", tiktok_tracker, delay=0.05)
+    youtube = TrackedCollector("youtube", youtube_tracker, delay=0.05)
+    seen_slots: list[object] = []
+
+    async def fake_collect(slug: str, platforms: list[str], limit: int, deps: object) -> object:
+        bundle_collect = cast(CollectDeps, deps)
+        seen_slots.append(bundle_collect.platform_slots)
+        repos = FakeRepos()
+        test_deps = replace(
+            bundle_collect,
+            collectors=[youtube, tiktok],
+            videos=repos.videos,
+            segments=repos.segments,
+            runs=repos.runs,
+            limiter=FakeLimiter(),
+            lock=FakeLock(),
+        )
+        out = await collect(slug, platforms, limit, test_deps)
+
+        class _Out:
+            ok = out.ok
+            partial = out.partial
+            counts: ClassVar[dict[str, object]] = {"found": 1}
+
+        return _Out()
+
+    monkeypatch.setattr(w, "_collect_impl", fake_collect)
+    campaigns = _FakeCampaignsMultiSegment(slugs=["a", "b", "c"])
+    app_deps = await w.create_app_deps(Settings())
+    try:
+        out = await w.run_collect_job(
+            {"collect_deps": object(), "campaigns_deps": campaigns, "app_deps": app_deps}
+        )
+    finally:
+        await app_deps.close()
+    assert out["ok"] is True
+    assert tiktok_tracker.peak == 1
+    assert youtube_tracker.peak >= 2
+    assert len(seen_slots) == 3
+    assert seen_slots[0] is seen_slots[1] is seen_slots[2]
+    assert seen_slots[0] is app_deps.collect.platform_slots
 
 
 async def test_create_app_deps_close_disposes_engine(

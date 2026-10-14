@@ -26,6 +26,7 @@ from arq.worker import Function, func
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 from content_factory.app.collect import CollectDeps, collect
+from content_factory.app.concurrency import PlatformSlots
 from content_factory.app.ports import (
     ResearchCampaignRepository,
     SegmentDepsBundle,
@@ -78,6 +79,31 @@ def _max_segments_from_env() -> int:
     except ValueError:
         return 3
     return max(1, value)
+
+
+def _platform_max_concurrency_from_env() -> dict[str, int]:
+    """Teto de discovers simultâneos por plataforma (env `PLATFORM_MAX_CONCURRENCY`).
+
+    Formato `tiktok=1,instagram=2`; entrada inválida é ignorada. Default
+    `tiktok=1` (1 sessão Playwright por vez no processo). Vale do startup:
+    trocar exige restart do worker. Uma única instância de `PlatformSlots`
+    é criada no startup e herdada por todos os bundles — o teto é por
+    processo, não por segmento.
+    """
+    raw = os.getenv("PLATFORM_MAX_CONCURRENCY", "tiktok=1")
+    limits: dict[str, int] = {}
+    for entry in raw.split(","):
+        name, sep, value = entry.partition("=")
+        name = name.strip()
+        if not sep or not name:
+            continue
+        try:
+            limit = int(value.strip())
+        except ValueError:
+            continue
+        if limit >= 1:
+            limits[name] = limit
+    return limits
 
 
 def _load_settings() -> dict[str, Any]:
@@ -292,6 +318,9 @@ class AppDeps(SegmentDepsFactory):
     Etapa 0 Task 2: o `lock` dos templates é placeholder — cada bundle ganha
     seu próprio `RedisLock` sobre o `lock_client` compartilhado (a instância
     de lock, com seu mapa de tokens, NÃO é task-safe entre segmentos).
+    Etapa 0 Task 7: `platform_slots` É compartilhado (a instância única do
+    startup é herdada por todos os bundles via replace) — o teto por
+    plataforma é por processo de propósito.
     `commit`/`rollback` de startup e `job_end`/`on_job_end` foram REMOVIDOS
     na Task 11: cada UoW já reverte em exceção via `session_scope`, e não há
     mais sessão global a limpar após o job.
@@ -449,6 +478,10 @@ async def create_app_deps(settings: Settings) -> AppDeps:
             collector = registry.resolve([name])[0]
             if hasattr(collector, "discover_by_keywords"):
                 socials[name] = collector  # type: ignore[assignment]
+        # Etapa 0 Task 7: UMA instância para o processo inteiro — os bundles
+        # a herdam via replace (o objeto é mantido), então o teto por
+        # plataforma vale entre segmentos, não por segmento.
+        platform_slots = PlatformSlots(_platform_max_concurrency_from_env())
         return AppDeps(
             collect=CollectDeps(
                 # todos os coletores registrados; o job filtra pela plataforma pedida
@@ -459,6 +492,7 @@ async def create_app_deps(settings: Settings) -> AppDeps:
                 limiter=RedisRateLimiter(shared),
                 lock=RedisLock(shared),
                 max_concurrent_discoveries=int(_load_settings()["max_concurrency"]),
+                platform_slots=platform_slots,
             ),
             score=ScoreDeps(
                 videos=VideoRepositoryImpl(session),
@@ -479,6 +513,7 @@ async def create_app_deps(settings: Settings) -> AppDeps:
                 limiter=RedisRateLimiter(shared),
                 lock=RedisLock(shared),
                 guard=FanoutGuard(DepthConfig()),  # placeholder — run_research_job substitui
+                platform_slots=platform_slots,
             ),
             campaigns=_FreshSessionCampaigns(factory),
             close=_close,

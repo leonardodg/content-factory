@@ -3,6 +3,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 
+from content_factory.app.concurrency import PlatformSlots
 from content_factory.app.ports import (
     CollectRunRepository,
     KeywordExpander,
@@ -47,6 +48,9 @@ class ResearchDeps:
     # Mesmo padrão de CollectDeps: clock injetável, default = agora em UTC —
     # chamadas existentes (worker/CLI) continuam funcionando sem mudança.
     clock: Callable[[], datetime] = field(default_factory=lambda: _utcnow)
+    # Teto de discover_by_keywords() simultâneos POR PLATAFORMA, compartilhado
+    # entre segmentos (Etapa 0 Task 7). Default vazio = sem teto.
+    platform_slots: PlatformSlots = field(default_factory=PlatformSlots)
 
 
 @dataclass
@@ -83,27 +87,30 @@ async def _discover_social_one(
     (self.gate_hits acumula entre runs).
     """
     gate_hits_before = getattr(discoverer, "gate_hits", 0)
-    started_at = deps.clock()
-    try:
-        await deps.limiter.acquire(platform)
-        candidates = await discoverer.discover_by_keywords(keywords, [], 1)
-    except Exception as exc:
+    # Teto por plataforma (Etapa 0 Task 7): a vaga cobre acquire + discover;
+    # started_at é lido DENTRO da vaga para a duração medir trabalho (Task 6).
+    async with deps.platform_slots.slot(platform):
+        started_at = deps.clock()
+        try:
+            await deps.limiter.acquire(platform)
+            candidates = await discoverer.discover_by_keywords(keywords, [], 1)
+        except Exception as exc:
+            gate_hits_after = getattr(discoverer, "gate_hits", 0)
+            return SocialDiscoverResult(
+                platform=platform,
+                candidates=None,
+                error=exc,
+                gate_hits_delta=gate_hits_after - gate_hits_before,
+                started_at=started_at,
+            )
         gate_hits_after = getattr(discoverer, "gate_hits", 0)
         return SocialDiscoverResult(
             platform=platform,
-            candidates=None,
-            error=exc,
+            candidates=candidates,
+            error=None,
             gate_hits_delta=gate_hits_after - gate_hits_before,
             started_at=started_at,
         )
-    gate_hits_after = getattr(discoverer, "gate_hits", 0)
-    return SocialDiscoverResult(
-        platform=platform,
-        candidates=candidates,
-        error=None,
-        gate_hits_delta=gate_hits_after - gate_hits_before,
-        started_at=started_at,
-    )
 
 
 @dataclass
