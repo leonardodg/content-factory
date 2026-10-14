@@ -287,25 +287,36 @@ esperar 19/10, salvar tudo, corrigir e reativar os 3 segmentos já no worker
 1. ✅ **Pausa:** 3 workers legados parados às 15:21:26 UTC e backup
    completo. Detalhes em
    [`manual/experimento-pausa-2026-10-14.md`](../manual/experimento-pausa-2026-10-14.md).
-2. **Correções desta rodada**, em ordem, com TDD e 1 commit por task:
-   A1 (rate limiter atômico) → A2 (redação) → B2 (`quota_used`) → B1
-   (score diagnosticável) → A5 (ADR-0007).
-   - A4 (ruleset) depende da confirmação do usuário.
+2. ✅ **Correções desta rodada** (PR #14, `5c14a6d`), em ordem, com TDD e
+   1 commit por task: A1 (rate limiter atômico) → A2 (redação) → B2
+   (`quota_used`) → B1 (score diagnosticável) → A5 (ADR-0007).
+   - ✅ A4 (ruleset): criada e ativa — `main protegida` id 25095494,
+     exige `quality` + `Build site`, bypass só admin.
+   - ✅ Achados da auditoria pós-implementação A-1, A-2(a), A-3
+     (PR #16, `95e423c`); A-2(b) e A-4…A-7 ficam para depois da
+     reativação.
    - C/D ficam para depois da reativação.
-3. **Deploy (A3, adiantado para hoje):**
-   - merge na `main` com CI verde;
-   - `alembic upgrade head` no banco real (está em `0008`, a `main` pede
-     `0009`), com backup antes, que já foi feito;
-   - build da imagem e `docker compose … multi-segmento … --profile
-     worker-multi up -d worker`;
-   - verificações do checklist A3: sem `COLLECT_SEGMENT`, 3 crons,
-     `active_segments()` = 3.
-4. **Reativação:**
-   - `cf research stop` + `cf research start --weeks 1` nos 3 segmentos,
-     para a janela nova começar no deploy;
-   - disparar 1 `collect_job` manual de fumaça (fora do cron) e conferir 1
-     run por (segmento, plataforma), sem duplicata e com `discover_ms`
-     populado.
+   - ✅ Limiares do B3: **aprovados pelo usuário como estão** (2026-10-14).
+3. ✅ **Deploy (A3, adiantado para hoje):**
+   - ✅ merge na `main` com CI verde (PRs #14, #15, #16, #17, #18);
+   - ✅ `alembic upgrade head` no banco real (`0008` → **`0009`**), com
+     backup antes em `~/backups/content-factory/2026-10-14-pre-0009/`;
+   - ✅ build da imagem + worker único `cf-worker-multi-segmento` no ar
+     (2 correções de build descobertas na fumaça: Dockerfile com layout
+     `src/` (PR #17) e `COLLECT_PLATFORMS=""` no compose para o tiktok do
+     segmento ser coletado (PR #17));
+   - ✅ checklist A3 completo: sem `COLLECT_SEGMENT`, 3 crons,
+     `active_segments()` = 3, 0 `ERROR` no log, `collect-timings` ok;
+   - ✅ os 3 workers legados removidos (`docker rm`).
+4. ✅ **Reativação:**
+   - ✅ `cf research stop` + `cf research start --weeks 1` nos 3
+     segmentos → janela até **2026-10-21 19:20 UTC**;
+   - ✅ 2 `collect_job` manuais de fumaça: 12 runs = 3 × 4 coletores, 1
+     por (segmento, plataforma), sem duplicata, `discover_ms` populado;
+   - ✅ YouTube real com `quota_used=102` (B2 validado com dado real).
+   - **Achados na fumaça (ações/acompanhamento):** `TIKTOK_MS_TOKEN`
+     inválido → `auth_expired` nos 3 segmentos (rotacionar, ação humana);
+     web ainda degrada em alguns runs (A-2(b) no C2).
 
 # Plano de análise dos relatórios
 
