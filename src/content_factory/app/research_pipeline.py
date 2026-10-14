@@ -195,58 +195,61 @@ async def run_research_cycle(
                 segment_id=segment.id,
                 started_at=result.started_at,
             )
-            try:
-                if result.error is not None:
-                    # erro de 1 rede social não aborta as demais (padrão de
-                    # collect(), que captura por coletor); visível no envelope
-                    exc = result.error
+            # Sem try/finally (Etapa 1, /code-review): erro fora do contrato
+            # (infra — a sessão fica inutilizável) PROPAGA original; gravar a
+            # run num `finally` levantaria PendingRollbackError e mascararia
+            # a causa. A UoW do segmento reverte tudo, então não há run a
+            # gravar nesse caminho.
+            if result.error is not None:
+                # erro de 1 rede social não aborta as demais (padrão de
+                # collect(), que captura por coletor); visível no envelope
+                exc = result.error
+                run.status = "failed"
+                run.error_code = getattr(exc, "code", "internal_error")
+                run.failed = 1  # Fase H: explícito no campo numérico
+                social_platform_errors += 1
+                counts[f"{platform}_failed"] = int(counts.get(f"{platform}_failed", 0)) + 1
+            else:
+                # invariante: erro↔candidates None (sem assert: B101; erro
+                # interno explícito se a fronteira for violada)
+                if result.candidates is None:
+                    raise RuntimeError(f"discover sem erro nem candidates: {platform}")
+                try:
+                    # Fase F2: persistir pelo MESMO contrato do collect() —
+                    # upsert_candidates faz ON CONFLICT DO UPDATE, ciclo
+                    # reexecutado não duplica vídeo.
+                    stats = await deps.videos.upsert_candidates(
+                        segment.id, platform, result.candidates
+                    )
+                except CollectorError as exc:
+                    # só o contrato vira run failed: erro de dado já é
+                    # isolado por savepoint no repo; o resto é
+                    # infraestrutura (sessão inutilizável) e PROPAGA —
+                    # o worker loga e reverte a UoW (Etapa 1, /code-review)
                     run.status = "failed"
                     run.error_code = getattr(exc, "code", "internal_error")
-                    run.failed = 1  # Fase H: explícito no campo numérico
+                    run.failed = 1
                     social_platform_errors += 1
                     counts[f"{platform}_failed"] = int(counts.get(f"{platform}_failed", 0)) + 1
                 else:
-                    # invariante: erro↔candidates None (sem assert: B101; erro
-                    # interno explícito se a fronteira for violada)
-                    if result.candidates is None:
-                        raise RuntimeError(f"discover sem erro nem candidates: {platform}")
-                    try:
-                        # Fase F2: persistir pelo MESMO contrato do collect() —
-                        # upsert_candidates faz ON CONFLICT DO UPDATE, ciclo
-                        # reexecutado não duplica vídeo.
-                        stats = await deps.videos.upsert_candidates(
-                            segment.id, platform, result.candidates
-                        )
-                    except Exception as exc:
-                        if not isinstance(exc, CollectorError):
-                            logger.exception(
-                                "persistência fora do contrato: %s/%s", segment.slug, platform
-                            )
-                        run.status = "failed"
-                        run.error_code = getattr(exc, "code", "internal_error")
-                        run.failed = 1
-                        social_platform_errors += 1
-                        counts[f"{platform}_failed"] = int(counts.get(f"{platform}_failed", 0)) + 1
-                    else:
-                        run.status = "ok"
-                        run.found = len(result.candidates)
-                        run.inserted, run.updated = stats.inserted, stats.updated
-                        run.skipped = stats.skipped  # Fase H: era run.failed = stats.skipped
-                        social_found += len(result.candidates)
-                        social_inserted += stats.inserted
-                        social_updated += stats.updated
-                        social_skipped += stats.skipped
-            finally:
-                # mesmo padrão de collect() (REVISÃO Important #1/#2):
-                # contado por chamada na fase de rede e transportado
-                # (sobrevive a discover_by_keywords levantando depois do
-                # hit). Sem isso, o envelope da pesquisa por keyword não
-                # distingue busca ampla por hashtag do fallback de conta
-                # própria (gate #10) do Instagram.
-                if result.gate_hits:
-                    counts[f"{platform}_gate_hits"] = result.gate_hits
-                run.finished_at = deps.clock()
-                await deps.runs.record(run)
+                    run.status = "ok"
+                    run.found = len(result.candidates)
+                    run.inserted, run.updated = stats.inserted, stats.updated
+                    run.skipped = stats.skipped  # Fase H: era run.failed = stats.skipped
+                    social_found += len(result.candidates)
+                    social_inserted += stats.inserted
+                    social_updated += stats.updated
+                    social_skipped += stats.skipped
+            # mesmo padrão de collect() (REVISÃO Important #1/#2):
+            # contado por chamada na fase de rede e transportado
+            # (sobrevive a discover_by_keywords levantando depois do
+            # hit). Sem isso, o envelope da pesquisa por keyword não
+            # distingue busca ampla por hashtag do fallback de conta
+            # própria (gate #10) do Instagram.
+            if result.gate_hits:
+                counts[f"{platform}_gate_hits"] = result.gate_hits
+            run.finished_at = deps.clock()
+            await deps.runs.record(run)
         counts["social_found"] = social_found
         counts["social_inserted"] = social_inserted
         counts["social_updated"] = social_updated

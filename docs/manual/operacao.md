@@ -112,8 +112,13 @@ O que procurar:
   run fica `failed` com `error_code = internal_error` e as plataformas
   irmãs seguem. A causa NÃO vai para o banco (`collect_runs` só guarda o
   código); ela fica no log como `ERROR … discover fora do contrato:
-  <slug>/<plataforma>` (ou `persistência fora do contrato` no research),
-  com traceback;
+  <slug>/<plataforma>`, com traceback;
+- **erro de infraestrutura na persistência** (ex.: conexão caiu no upsert;
+  erro de DADO de 1 candidato já é isolado por savepoint): propaga ORIGINAL
+  em collect, research e score (Etapa 1). A UoW do segmento reverte, o
+  envelope traz `{ok: false, error, error_type}` e o log traz o traceback.
+  Antes, a gravação da run num `finally` (ou o `scored=0` do score) trocava
+  a causa por um `PendingRollbackError`;
 - `RuntimeError` no startup (guard multi-segmento): `COLLECT_SEGMENT` está
   definido no ambiente — a imagem nova não roda sob o compose antigo de 3
   workers. Remova a env (troca pelo compose de worker único, só após

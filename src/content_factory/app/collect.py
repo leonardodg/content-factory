@@ -160,46 +160,49 @@ async def collect(
                 collector=result.platform, segment_id=segment.id, started_at=result.started_at
             )
             run.discover_ms = result.discover_ms
-            try:
-                if result.error is not None:
-                    exc = result.error
+            # Sem try/finally (Etapa 1, /code-review): erro fora do contrato
+            # (infra — a sessão fica inutilizável) PROPAGA original; gravar a
+            # run num `finally` levantaria PendingRollbackError e mascararia
+            # a causa. A UoW do segmento reverte tudo, então não há run a
+            # gravar nesse caminho.
+            if result.error is not None:
+                exc = result.error
+                run.status = "blocked" if exc.code == "blocked" else "failed"
+                run.error_code = exc.code
+                run.failed = 1  # Fase H: explícito no campo numérico
+                errors += 1
+                counts["failed"] = int(counts["failed"]) + 1
+            else:
+                # invariante: erro↔found None (sem assert: B101; erro interno
+                # explícito se a fronteira de _discover_one for violada)
+                if result.found is None:
+                    raise RuntimeError(f"discover sem erro nem found: {result.platform}")
+                try:
+                    persist_start = deps.clock()
+                    stats = await deps.videos.upsert_candidates(
+                        segment.id, result.platform, result.found
+                    )
+                except CollectorError as exc:
                     run.status = "blocked" if exc.code == "blocked" else "failed"
                     run.error_code = exc.code
-                    run.failed = 1  # Fase H: explícito no campo numérico
+                    run.failed = 1
                     errors += 1
                     counts["failed"] = int(counts["failed"]) + 1
                 else:
-                    # invariante: erro↔found None (sem assert: B101; erro interno
-                    # explícito se a fronteira de _discover_one for violada)
-                    if result.found is None:
-                        raise RuntimeError(f"discover sem erro nem found: {result.platform}")
-                    try:
-                        persist_start = deps.clock()
-                        stats = await deps.videos.upsert_candidates(
-                            segment.id, result.platform, result.found
-                        )
-                    except CollectorError as exc:
-                        run.status = "blocked" if exc.code == "blocked" else "failed"
-                        run.error_code = exc.code
-                        run.failed = 1
-                        errors += 1
-                        counts["failed"] = int(counts["failed"]) + 1
-                    else:
-                        run.persist_ms = _ms_between(persist_start, deps.clock())
-                        run.status = "ok"
-                        run.found = len(result.found)
-                        run.inserted, run.updated = stats.inserted, stats.updated
-                        run.skipped = stats.skipped
-                        counts["found"] = int(counts["found"]) + len(result.found)
-                        counts["inserted"] = int(counts["inserted"]) + stats.inserted
-                        counts["updated"] = int(counts["updated"]) + stats.updated
-                        counts["skipped"] = int(counts["skipped"]) + stats.skipped
-            finally:
-                if result.gate_hits:
-                    counts[f"{result.platform}_gate_hits"] = result.gate_hits
-                run.finished_at = deps.clock()
-                await deps.runs.record(run)
-                runs.append(run)
+                    run.persist_ms = _ms_between(persist_start, deps.clock())
+                    run.status = "ok"
+                    run.found = len(result.found)
+                    run.inserted, run.updated = stats.inserted, stats.updated
+                    run.skipped = stats.skipped
+                    counts["found"] = int(counts["found"]) + len(result.found)
+                    counts["inserted"] = int(counts["inserted"]) + stats.inserted
+                    counts["updated"] = int(counts["updated"]) + stats.updated
+                    counts["skipped"] = int(counts["skipped"]) + stats.skipped
+            if result.gate_hits:
+                counts[f"{result.platform}_gate_hits"] = result.gate_hits
+            run.finished_at = deps.clock()
+            await deps.runs.record(run)
+            runs.append(run)
         ok = errors == 0
         return CollectOutcome(
             ok=ok,

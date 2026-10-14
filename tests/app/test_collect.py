@@ -11,6 +11,7 @@ from tests.stubs import (
     FakeLimiter,
     FakeLock,
     FakeRepos,
+    FakeRuns,
     FakeVideos,
     TrackedCollector,
 )
@@ -25,7 +26,13 @@ from content_factory.app.collect import (
 from content_factory.app.gate_hits import record_gate_hit
 from content_factory.app.ports import Collector, VideoRepository
 from content_factory.domain.errors import CollectorError, RateLimited
-from content_factory.domain.models import CandidateVideo, SegmentConfig, UpsertStats, VideoSnapshot
+from content_factory.domain.models import (
+    CandidateVideo,
+    CollectRun,
+    SegmentConfig,
+    UpsertStats,
+    VideoSnapshot,
+)
 
 
 class _FakeGatedCollector:
@@ -659,3 +666,32 @@ async def test_collect_rate_limited_is_failed_without_api_call() -> None:
     run = out.runs[0]
     assert run.status == "failed" and run.error_code == "rate_limited"
     assert run.failed == 1
+
+
+async def test_collect_infra_error_in_persistence_is_not_masked_by_run_record() -> None:
+    """Erro de infra no upsert propaga ORIGINAL — o `finally` gravava a run na
+    sessão quebrada e o `PendingRollbackError` dele mascarava a causa."""
+
+    class _BoomVideos(FakeVideos):
+        async def upsert_candidates(
+            self, segment_id: int, source: str, candidates: Sequence[CandidateVideo]
+        ) -> UpsertStats:
+            raise ConnectionError("conexão caiu")
+
+    class _PoisonedRuns(FakeRuns):
+        async def record(self, run: CollectRun) -> int:
+            raise RuntimeError("PendingRollbackError simulada")
+
+    repos = FakeRepos()
+    lock = FakeLock()
+    deps = CollectDeps(
+        collectors=[FakeCollector("youtube", n=1)],
+        videos=_BoomVideos(),
+        segments=repos.segments,
+        runs=_PoisonedRuns(),
+        limiter=FakeLimiter(),
+        lock=lock,
+    )
+    with pytest.raises(ConnectionError, match="conexão caiu"):
+        await collect("candles", ["youtube"], limit=5, deps=deps)
+    assert lock.released == ["collect:candles"]

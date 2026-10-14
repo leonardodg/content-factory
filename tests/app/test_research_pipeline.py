@@ -808,9 +808,15 @@ class _BoomVideos(FakeVideos):
         raise KeyError("boom-upsert")
 
 
-async def test_research_unexpected_upsert_error_logs_cause(
-    caplog: pytest.LogCaptureFixture,
-) -> None:
+async def test_research_infra_error_in_persistence_propagates() -> None:
+    """Etapa 1 (pendência do /code-review): erro fora do contrato no upsert PROPAGA.
+
+    Erro de dado já é isolado por savepoint dentro do repo; o que escapa é
+    infraestrutura (ex.: conexão) e deixa a sessão inutilizável — seguir para
+    a próxima plataforma levantava `PendingRollbackError` no `runs.record`,
+    mascarando a causa. Paridade com collect()/score(): sobe, o worker loga
+    com traceback e reverte a UoW do segmento. O lock é liberado.
+    """
     tracker = ConcurrencyTracker()
     cand = CandidateVideo(
         platform="tiktok", platform_video_id="t1", url="https://t.invalid/1", creator_handle="u"
@@ -818,12 +824,30 @@ async def test_research_unexpected_upsert_error_logs_cause(
     repos = FakeRepos()
     repos.videos = _BoomVideos()
     deps = _research_deps_with({"tiktok": _tracked_social("tiktok", tracker, [], [cand])}, repos)
-    with caplog.at_level(logging.ERROR, logger="content_factory"):
-        out = await run_research_cycle("candles", DepthConfig(), deps)
+    with pytest.raises(KeyError, match="boom-upsert"):
+        await run_research_cycle("candles", DepthConfig(), deps)
+    assert isinstance(deps.lock, FakeLock)
+    assert deps.lock.released == ["research:candles"]
+
+
+async def test_research_contract_error_in_persistence_becomes_failed_run() -> None:
+    """`CollectorError` na persistência continua virando run failed (contrato)."""
+
+    class _BlockedVideos(FakeVideos):
+        async def upsert_candidates(
+            self, segment_id: int, source: str, candidates: Sequence[CandidateVideo]
+        ) -> UpsertStats:
+            raise CollectorError("blocked", "tiktok", "gate")
+
+    tracker = ConcurrencyTracker()
+    cand = CandidateVideo(
+        platform="tiktok", platform_video_id="t1", url="https://t.invalid/1", creator_handle="u"
+    )
+    repos = FakeRepos()
+    repos.videos = _BlockedVideos()
+    deps = _research_deps_with({"tiktok": _tracked_social("tiktok", tracker, [], [cand])}, repos)
+    out = await run_research_cycle("candles", DepthConfig(), deps)
     assert out.counts.get("tiktok_failed") == 1
-    records = [r for r in caplog.records if r.levelno == logging.ERROR]
-    assert len(records) == 1 and "tiktok" in records[0].getMessage()
-    assert records[0].exc_info is not None and isinstance(records[0].exc_info[1], KeyError)
 
 
 @pytest.mark.asyncio
@@ -875,3 +899,24 @@ async def test_research_concurrent_segments_count_own_gate_hits() -> None:
     )
     assert a.counts["instagram_gate_hits"] == 1
     assert b.counts["instagram_gate_hits"] == 1
+
+
+class _PoisonedRuns(FakeRuns):
+    """Sessão quebrada: depois de um erro de infra, qualquer escrita levanta."""
+
+    async def record(self, run: CollectRun) -> int:
+        raise RuntimeError("PendingRollbackError simulada")
+
+
+async def test_research_infra_error_is_not_masked_by_run_record() -> None:
+    """O `finally` gravava a run na sessão quebrada e o erro dele mascarava o real."""
+    tracker = ConcurrencyTracker()
+    cand = CandidateVideo(
+        platform="tiktok", platform_video_id="t1", url="https://t.invalid/1", creator_handle="u"
+    )
+    repos = FakeRepos()
+    repos.videos = _BoomVideos()
+    repos.runs = _PoisonedRuns()
+    deps = _research_deps_with({"tiktok": _tracked_social("tiktok", tracker, [], [cand])}, repos)
+    with pytest.raises(KeyError, match="boom-upsert"):
+        await run_research_cycle("candles", DepthConfig(), deps)

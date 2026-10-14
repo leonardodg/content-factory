@@ -9,8 +9,9 @@ são processados — campanhas alheias ativas no banco descartável retornam
 
 import asyncio
 import os
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
-from typing import ClassVar, cast
+from typing import Any, ClassVar, cast
 from uuid import uuid4
 
 import pytest
@@ -180,3 +181,74 @@ async def _purge(factory: async_sessionmaker[AsyncSession], tag: str) -> None:
         )
         await session.execute(delete(SegmentRow).where(SegmentRow.slug.like(f"t8-{tag}-%")))
         await session.commit()
+
+
+@requires_infra
+@requires_redis
+async def test_infra_error_in_persistence_reaches_envelope_unmasked(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Etapa 1: erro FORA do savepoint aborta a transação real do Postgres.
+
+    Antes, o `finally` do collect gravava a run nessa sessão abortada e o
+    envelope trazia `PendingRollbackError`; agora traz a causa (DataError).
+    """
+    from sqlalchemy import text
+
+    import content_factory.infra.db.repositories as repos_mod
+    from content_factory.app.collect import collect as real_collect
+
+    monkeypatch.setenv("WORKER_MAX_SEGMENTS", "1")
+    tag = uuid4().hex[:8]
+    slug = f"t8-{tag}-infra"
+    settings = Settings(
+        database_url=os.environ["TEST_DATABASE_URL"],
+        redis_url=os.environ["TEST_REDIS_URL"],
+    )
+    deps = await w.create_app_deps(settings)
+    started: list[int] = []
+    try:
+        async with deps.session_factory() as session:
+            seg = await SegmentRepositoryImpl(session).upsert(
+                SegmentConfig(slug=slug, name=slug, platforms=["youtube"], keywords=["k"])
+            )
+            await session.commit()
+        await deps.campaigns.start(seg.id, datetime.now(UTC) + timedelta(days=1))
+        started.append(seg.id)
+
+        async def _poison(self: Any, segment_id: int, source: str, candidates: object) -> object:
+            await self._s.execute(text("select 1/0"))  # fora de savepoint: aborta a tx
+            raise AssertionError("inalcançável")
+
+        monkeypatch.setattr(repos_mod.VideoRepositoryImpl, "upsert_candidates", _poison)
+
+        class _OneVideo:
+            platform: ClassVar[str] = "youtube"
+
+            async def discover(self, segment: SegmentConfig, limit: int) -> list[CandidateVideo]:
+                return [
+                    CandidateVideo(
+                        platform="youtube",
+                        platform_video_id=f"{slug}-1",
+                        url="https://example.invalid/1",
+                        creator_handle="stub",
+                    )
+                ]
+
+        async def _collect(slug_: str, platforms: list[str], limit: int, cd: object) -> object:
+            if slug_ != slug:
+                return await real_collect(slug_, [], limit, cast(CollectDeps, cd))
+            bundle_collect = replace(cast(CollectDeps, cd), collectors=[_OneVideo()])
+            return await real_collect(slug_, ["youtube"], limit, bundle_collect)
+
+        monkeypatch.setattr(w, "_collect_impl", _collect)
+        out = await w.run_collect_job({"campaigns_deps": deps.campaigns, "app_deps": deps})
+        envelope = out["segments"][slug]
+        assert envelope["ok"] is False
+        assert envelope["error_type"] == "DataError"
+        assert "division by zero" in envelope["error"]
+    finally:
+        for sid in started:
+            await deps.campaigns.stop(sid)
+        await _purge(deps.session_factory, tag)
+        await deps.close()

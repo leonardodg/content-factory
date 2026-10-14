@@ -341,6 +341,16 @@ seguinte levanta `PendingRollbackError` e só ele chega ao envelope.
 - Test `tests/infra/queue/test_worker.py` — score de 1 segmento levantando →
   envelope com o erro **original**, não `PendingRollbackError`.
 
+## Task 11.1 — Erro de infra na persistência propaga sem mascaramento (pendência do /code-review)
+
+> ✅ Feita. Savepoint por plataforma **não** resolveria: erro de dado já é
+> isolado pelo savepoint por candidato em `upsert_candidates`, e o que escapa é
+> infraestrutura (sessão inutilizável). Correção: (1) a persistência do research
+> captura só `CollectorError`, em paridade com collect/score; (2) collect e
+> research perdem o `try/finally` que gravava a run na sessão quebrada, pois o
+> `PendingRollbackError` desse `runs.record` mascarava a causa. RED com
+> `runs.record` envenenado nos dois caminhos.
+
 ---
 
 # Etapa 2 — Refactor de qualidade (SOLID/DRY), sem mudar comportamento
