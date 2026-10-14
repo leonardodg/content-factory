@@ -278,6 +278,94 @@ mesmo cenário pela CLI e pelo worker produz os mesmos campos.
   for CLI local; reabrir se a ingestão for exposta via API ou automação
   (resolver DNS uma vez, conectar no IP validado, revalidar redirects).
 
+# Execução 2026-10-14 — pausa, correção e reativação
+
+**Decisão do usuário (2026-10-14):** pausar o experimento agora, sem
+esperar 19/10, salvar tudo, corrigir e reativar os 3 segmentos já no worker
+único.
+
+1. ✅ **Pausa:** 3 workers legados parados às 15:21:26 UTC e backup
+   completo. Detalhes em
+   [`manual/experimento-pausa-2026-10-14.md`](../manual/experimento-pausa-2026-10-14.md).
+2. **Correções desta rodada**, em ordem, com TDD e 1 commit por task:
+   A1 (rate limiter atômico) → A2 (redação) → B2 (`quota_used`) → B1
+   (score diagnosticável) → A5 (ADR-0007).
+   - A4 (ruleset) depende da confirmação do usuário.
+   - C/D ficam para depois da reativação.
+3. **Deploy (A3, adiantado para hoje):**
+   - merge na `main` com CI verde;
+   - `alembic upgrade head` no banco real (está em `0008`, a `main` pede
+     `0009`), com backup antes, que já foi feito;
+   - build da imagem e `docker compose … multi-segmento … --profile
+     worker-multi up -d worker`;
+   - verificações do checklist A3: sem `COLLECT_SEGMENT`, 3 crons,
+     `active_segments()` = 3.
+4. **Reativação:**
+   - `cf research stop` + `cf research start --weeks 1` nos 3 segmentos,
+     para a janela nova começar no deploy;
+   - disparar 1 `collect_job` manual de fumaça (fora do cron) e conferir 1
+     run por (segmento, plataforma), sem duplicata e com `discover_ms`
+     populado.
+
+# Plano de análise dos relatórios
+
+O objetivo é transformar o teste reativado em **evidência**: saber se o
+pipeline está saudável e se o ranking presta, com critérios definidos antes
+de olhar os dados.
+
+## Fontes
+
+| Fonte | Como obter | Para quê |
+| --- | --- | --- |
+| Relatório da pausa | `manual/experimento-pausa-2026-10-14.md` + backup | linha de base pré-correção |
+| `collect_runs` | `cf status`, `cf collect-timings`, SQL em `analise.md` | saúde por fonte, plataforma, segmento e dia |
+| Envelopes dos jobs | log do worker (`← collect_job ● {…}`) | `ok`/`partial`, `source_errors`, `failures` |
+| Log `ERROR`/`WARNING` | `docker logs cf-worker \| grep ' ERROR content_factory'` | bug fora do contrato, linha de score descartada |
+| `video_metrics` / `video_scores` | SQL + `cf score-sample` / `cf score-correlation` | cobertura, estabilidade, ranking |
+| Redis `cf:cb:*`, `cf:rl:*` | `redis-cli --scan` | breaker aberto, janela de cota |
+
+## Cadência
+
+| Quando | Análise | Saída |
+| --- | --- | --- |
+| **D0 (deploy)** | fumaça: 1 run por (segmento, plataforma), sem duplicata, `discover_ms`/`persist_ms`/`quota_used` preenchidos, nenhum `ERROR` inesperado | ok/não ok no HANDOFF |
+| **Diário (após o collect das 20:00)** | ok/failed/blocked por coletor e fonte; `source_errors` do research; breakers abertos; `ERROR` no log | 1 linha por dia em `manual/experimento-reativado.md` |
+| **D+3** | cobertura de métricas (views, 2 snapshots); duração por plataforma comparada à linha de base; comparar o research que gravou com o que falhou | tabela de cobertura + nota |
+| **D+7 (fim da janela)** | validação do ranking B3 completa: estabilidade, ablação, sensibilidade, concordância humana, utilidade; anotação manual via `score-sample` | `manual/validacao-ranking.md` com veredito contra os limiares |
+
+## Perguntas que cada relatório responde
+
+1. **Coleta saudável?**
+   - por plataforma: % `ok` e erros por código;
+   - `rate_limited`/`blocked` sem causa externa é bug ou limite mal
+     calibrado.
+2. **Research útil?**
+   - `web_found`/`trends_found` por dia;
+   - quantos vídeos vieram **só** da busca social por keyword
+     (`video_segments.discovery_source`);
+   - a fase social roda mesmo com o Trends caindo?
+3. **Re-medição funciona?** % de vídeos com 2 ou mais snapshots e
+   intervalo médio entre eles.
+4. **Score diagnosticável?** `failures` do score com zeros esperados;
+   qualquer `data_error` vira investigação.
+5. **Ranking presta?** Os critérios do B3, com os limiares abaixo, fixados
+   **antes** de D+7.
+
+## Limiares (propostos; o usuário aprova antes de D+7)
+
+| Critério | Limiar proposto |
+| --- | --- |
+| Runs `ok` por plataforma ativa (YouTube, web, Instagram) | ≥ 90% |
+| Research com pelo menos 1 fonte ok por dia | 100% dos dias |
+| Cobertura de `views` (YouTube) | ≥ 80% |
+| Vídeos com 2 snapshots após D+3 | ≥ 60% |
+| Estabilidade do ranking (Spearman entre scores consecutivos) | ≥ 0,7 |
+| Concordância humana (Spearman) | ≥ 0,5 |
+| Utilidade no top-20 (anotação) | ≥ 60% |
+
+Fora do limiar: abrir achado no `REVISAO_*` com evidência. Não ajustar
+pesos sem passar pelo B3.
+
 # Restrição de escopo (decisão do usuário, 2026-10-14)
 
 **Nada será feito no projeto `insta_kb` até o content-factory fechar 100%.**
