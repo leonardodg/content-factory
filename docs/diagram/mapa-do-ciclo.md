@@ -236,7 +236,7 @@ sequenceDiagram
 | **Backoff do TikTok** | `_call_with_backoff` | resposta vazia: até 5 tentativas com `2^n + 0–2 s`, depois `blocked` |
 | **Breaker Suggest/Trends** | `CooldownBreaker` (em memória) | 5 falhas seguidas → `circuit_open` por 72 h (3 ciclos diários); chamadas durante o cooldown não o consomem |
 | **Breaker por plataforma no Redis** | `PlatformHealth` = `RedisRateLimiter` | 3 falhas seguidas **do discover** (`blocked`/`rate_limited`/`network`/`upstream_changed`), somando segmentos → `acquire` levanta `blocked` por 15 min; sucesso zera. Não contam `auth_expired`, `invalid_payload`, `internal_error` nem erro do próprio `acquire` |
-| **Retry do arq** | crons com `max_tries=1` (default do `cron()`) | sem re-execução; a nova tentativa é o próximo horário |
+| **Retry do arq** | crons com `max_tries=1` (default do `cron()`) | sem re-execução; a nova tentativa é o próximo horário (política em [ADR-0007](../adr/0007-politica-retry-jobs.md)) |
 | **Próximo tick** | cron | erro de hoje é retentado naturalmente no próximo horário |
 
 ## 7. Limites e seguranças
