@@ -5,11 +5,12 @@
 
 ## 🔄 EM ANDAMENTO
 
-_**Review pós-merge do PR #8 (2026-10-14) — Etapa 0 em execução na branch
-`fix/concorrencia-review` (Tasks 1–7 concluídas: lock testado contra Redis
-real, posse por UoW, web traduz erros do DDGS, exceção inesperada vira run
-failed, log com traceback por segmento, `started_at` cobre rede, teto por
-plataforma).** Plano:
+_**Review pós-merge do PR #8 (2026-10-14) — Etapa 0 CONCLUÍDA na branch
+`fix/concorrencia-review` (Tasks 1–8: lock testado contra Redis real, posse
+por UoW, web traduz erros do DDGS, exceção inesperada vira run failed, log
+com traceback por segmento, `started_at` cobre rede, teto por plataforma,
+integração da UoW concorrente). Pronta para review + merge antes de
+2026-10-19; Etapas 1–2 ficam para depois.** Plano:
 `docs/ai-plans/2026-10-14-content-factory-concorrencia-review-fixes.md`
 (16 tasks, branch sugerida `fix/concorrencia-review`). Gates do PR #8
 reconfirmados (285 passed com Postgres descartável, ruff/pyright 0, `alembic
@@ -430,7 +431,8 @@ guard-rail, tabela e orquestrador; Fases B–E pendem de decisão do usuário.
    por UoW (T2) + web traduz erros do DDGS (T3) + exceção inesperada no
    discover vira run `failed` (T4) + log com traceback por segmento (T5);
    [x] `started_at/finished_at` de volta a rede+persistência (T6) + teto por
-   plataforma `tiktok=1` (T7); [ ] teste de integração da UoW concorrente (T8).
+   plataforma `tiktok=1` (T7) + teste de integração da UoW concorrente (T8).
+   **Etapa 0 completa — 297 passed, todos os gates verdes.**
    Integração sempre em Postgres/Redis descartáveis (`TEST_REDIS_URL`
    novo), nunca nos do experimento.
 1. **Issues pós-merge** (backlog da REVISÃO §6 — #1 mascaramento/finally já
