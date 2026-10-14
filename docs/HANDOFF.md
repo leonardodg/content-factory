@@ -49,7 +49,12 @@ pós-implementação e achados A-1…A-7); plano:
   - campanhas `teste-ativo-*` órfãs continuam inativas (só as 3 novas
     contam em `active_segments()`).
 - **Limiares do B3 aprovados pelo usuário como estão** (2026-10-14).
-- **Próximo:** D0 (baseline de hoje), relatório diário, D+3 e D+7;
+- **D0 (2026-10-14): ✅ OK com ressalvas** — fumaça conforme o §Plano de
+  análise do plano: 1 run por (segmento, plataforma), sem duplicata,
+  `discover_ms`/`persist_ms`/`quota_used=102` preenchidos, 0 `ERROR`
+  inesperado. Ressalvas: TikTok `auth_expired` (rotacionar token) e web
+  degradado intermitente (A-2(b) no C2).
+- **Próximo:** relatórios de D+3 e D+7 (com baseline D0 já registrado),
   depois C1–C3, D1–D2, A-4…A-7 e a validação do ranking (B3).
 - **Restrição:** nada no `insta_kb` até o content-factory fechar 100%.
 
