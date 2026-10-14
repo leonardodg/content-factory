@@ -5,10 +5,12 @@ from datetime import UTC, datetime
 
 from content_factory.app.concurrency import PlatformSlots, bounded_gather
 from content_factory.app.gate_hits import counting
+from content_factory.app.platform_health import NoPlatformHealth, report_discover
 from content_factory.app.ports import (
     Collector,
     CollectRunRepository,
     Lock,
+    PlatformHealth,
     RateLimiter,
     SegmentRepository,
     VideoRepository,
@@ -47,6 +49,9 @@ class CollectDeps:
     # segmentos (Etapa 0 Task 7 — ex.: tiktok=1 serializa as sessões
     # Playwright no processo). Default vazio = sem teto.
     platform_slots: PlatformSlots = field(default_factory=PlatformSlots)
+    # Breaker por plataforma (spec §7): só falha do discover do lado da
+    # plataforma conta — regra em `app/platform_health.report_discover`.
+    health: PlatformHealth = field(default_factory=NoPlatformHealth)
 
 
 @dataclass
@@ -108,11 +113,15 @@ async def _discover_one(
                 found = await collector.discover(segment, limit)
             except CollectorError as exc:
                 error = exc
+                if discover_start is not None:  # erro do discover, não do acquire
+                    await report_discover(deps.health, platform, exc.code)
             except Exception as exc:
                 # run só guarda error_code: a causa vai para o log (Task 8.1)
                 logger.exception("discover fora do contrato: %s/%s", segment.slug, platform)
                 error = CollectorError("internal_error", platform, str(exc))
                 error.__cause__ = exc
+            else:
+                await report_discover(deps.health, platform, None)
         # discover_ms só existe se o acquire passou (falha no limiter = None)
         discover_ms = None if discover_start is None else _ms_between(discover_start, deps.clock())
         return DiscoverResult(

@@ -17,6 +17,7 @@ from content_factory.app.concurrency import PlatformSlots
 from content_factory.app.ports import (
     Collector,
     KeywordExpander,
+    PlatformHealth,
     RateLimiter,
     ResearchCampaignRepository,
     SocialDiscoverer,
@@ -89,6 +90,8 @@ class SharedDeps:
     web: KeywordExpander
     trends: TrendsProvider
     limiter: RateLimiter
+    # breaker por plataforma no Redis — o MESMO RedisRateLimiter (chaves cf:cb:*)
+    health: PlatformHealth
     lock_client: RedisOps
     platform_slots: PlatformSlots
     # COLLECT_MAX_CONCURRENCY, lido 1x no startup pelo worker: trocar exige restart
@@ -150,6 +153,7 @@ class AppDeps(SegmentDepsFactory):
                     lock=RedisLock(shared.lock_client),
                     max_concurrent_discoveries=shared.max_concurrent_discoveries,
                     platform_slots=shared.platform_slots,
+                    health=shared.health,
                 ),
                 score=ScoreDeps(
                     videos=videos,
@@ -170,6 +174,7 @@ class AppDeps(SegmentDepsFactory):
                     limiter=shared.limiter,
                     guard=FanoutGuard(segment.research or DepthConfig()),
                     platform_slots=shared.platform_slots,
+                    health=shared.health,
                 ),
             )
 
@@ -230,13 +235,15 @@ async def compose_app_deps(
             collector = registry.resolve([name])[0]
             if hasattr(collector, "discover_by_keywords"):
                 socials[name] = collector  # type: ignore[assignment]
+        limiter = RedisRateLimiter(shared_client)
         return AppDeps(
             shared=SharedDeps(
                 collectors=registry.resolve(list(registry.snapshot())),
                 socials=socials,
                 web=WebSuggestProvider(),
                 trends=TrendsGoogleProvider(),
-                limiter=RedisRateLimiter(shared_client),
+                limiter=limiter,
+                health=limiter,
                 lock_client=shared_client,
                 platform_slots=PlatformSlots(platform_limits),
                 max_concurrent_discoveries=max_concurrent_discoveries,

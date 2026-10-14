@@ -1048,3 +1048,60 @@ async def test_happy_path_records_source_runs_and_is_ok() -> None:
     assert runs["research:trends"].found == 1
     assert out.counts["source_errors"] == 0
     assert out.ok is True
+
+
+# --- Breaker por plataforma (plano 2026-10-14-content-factory-lacunas-mapa-do-ciclo) ---
+
+
+async def test_research_social_platform_failure_is_recorded() -> None:
+    from tests.stubs import FakeHealth
+
+    from content_factory.domain.errors import RateLimited
+
+    health = FakeHealth()
+    tracker = ConcurrencyTracker()
+    deps = _research_deps_with(
+        {
+            "tiktok": _tracked_social("tiktok", tracker, [], None, 0.0, RateLimited("tiktok")),
+            "instagram": _tracked_social("instagram", tracker, [], []),
+        }
+    )
+    deps.health = health
+    await run_research_cycle("candles", DepthConfig(), deps)
+    assert health.failures == ["tiktok"]
+    assert health.successes == ["instagram"]
+
+
+async def test_research_social_auth_and_bug_are_not_recorded() -> None:
+    from tests.stubs import FakeHealth
+
+    from content_factory.domain.errors import AuthExpired
+
+    health = FakeHealth()
+    tracker = ConcurrencyTracker()
+    deps = _research_deps_with(
+        {
+            "tiktok": _tracked_social("tiktok", tracker, [], None, 0.0, AuthExpired("tiktok")),
+            "instagram": _tracked_social("instagram", tracker, [], None, 0.0, KeyError("bug")),
+        }
+    )
+    deps.health = health
+    await run_research_cycle("candles", DepthConfig(), deps)
+    assert health.failures == [] and health.successes == []
+
+
+async def test_research_acquire_failure_is_not_recorded() -> None:
+    from tests.stubs import FakeHealth
+
+    health = FakeHealth()
+    deps = _research_deps_with({"tiktok": _tracked_social("tiktok", ConcurrencyTracker(), [], [])})
+    deps.health = health
+
+    class _BlockedTiktok(FakeLimiter):
+        async def acquire(self, platform: str) -> None:
+            if platform == "tiktok":
+                raise CollectorError("blocked", "tiktok")
+
+    deps.limiter = _BlockedTiktok()
+    await run_research_cycle("candles", DepthConfig(), deps)
+    assert health.failures == [] and health.successes == []

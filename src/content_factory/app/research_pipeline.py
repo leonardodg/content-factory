@@ -5,11 +5,13 @@ from datetime import UTC, datetime
 
 from content_factory.app.concurrency import PlatformSlots, bounded_gather
 from content_factory.app.gate_hits import counting
+from content_factory.app.platform_health import NoPlatformHealth, report_discover
 from content_factory.app.ports import (
     CollectRunRepository,
     KeywordExpander,
     KeywordSignalRepository,
     Lock,
+    PlatformHealth,
     RateLimiter,
     SegmentRepository,
     SocialDiscoverer,
@@ -62,6 +64,8 @@ class ResearchDeps:
     # Teto de discover_by_keywords() simultâneos POR PLATAFORMA, compartilhado
     # entre segmentos (Etapa 0 Task 7). Default vazio = sem teto.
     platform_slots: PlatformSlots = field(default_factory=PlatformSlots)
+    # Breaker por plataforma (spec §7), mesma regra de CollectDeps.health.
+    health: PlatformHealth = field(default_factory=NoPlatformHealth)
 
 
 @dataclass
@@ -104,14 +108,20 @@ async def _discover_social_one(
     async with deps.platform_slots.slot(platform):
         started_at = deps.clock()
         with counting() as gate_hits:
+            acquired = False
             try:
                 await deps.limiter.acquire(platform)
+                acquired = True
                 candidates = await discoverer.discover_by_keywords(keywords, [], 1)
             except Exception as exc:
                 if not isinstance(exc, CollectorError):
                     # run só guarda error_code: a causa vai para o log (Task 8.1)
                     logger.exception("discover fora do contrato: %s/%s", segment_slug, platform)
+                elif acquired:  # erro do discover, não do acquire
+                    await report_discover(deps.health, platform, exc.code)
                 error = exc
+            else:
+                await report_discover(deps.health, platform, None)
         return SocialDiscoverResult(
             platform=platform,
             candidates=candidates,

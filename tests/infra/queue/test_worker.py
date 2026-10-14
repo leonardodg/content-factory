@@ -965,6 +965,9 @@ async def test_segment_bundles_get_distinct_lock_instances_over_shared_client(
         assert bundle_a.collect.lock is not bundle_b.collect.lock
         assert bundle_a.research.lock is not bundle_b.research.lock
         assert bundle_a.collect.lock is not bundle_a.research.lock
+        # breaker por plataforma: o MESMO RedisRateLimiter compartilhado
+        assert bundle_a.collect.health is deps.shared.limiter
+        assert bundle_b.research.health is deps.shared.limiter
         client_a = cast(Any, bundle_a.collect.lock)._client
         client_b = cast(Any, bundle_b.collect.lock)._client
         assert client_a is client_b is deps.shared.lock_client

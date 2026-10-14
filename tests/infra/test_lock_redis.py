@@ -6,6 +6,7 @@ import uuid
 
 import pytest
 
+from content_factory.domain.errors import CollectorError
 from content_factory.infra.lock import RedisLock
 from content_factory.infra.redis_ops import redis_client
 from tests.conftest import requires_redis
@@ -54,3 +55,37 @@ async def test_stale_owner_two_bundles_sharing_client_keeps_new_owner() -> None:
             assert await probe.acquire_once(key) is False
         finally:
             await client.delete(key)
+
+
+@requires_redis
+async def test_platform_breaker_opens_across_segments_on_real_redis() -> None:
+    """Breaker por plataforma ligado: 3 falhas de discover (segmentos diferentes,
+    mesmo Redis) → o próximo acquire da plataforma levanta `blocked`."""
+    from content_factory.app.collect import CollectDeps, collect
+    from content_factory.domain.errors import NetworkError
+    from content_factory.infra.ratelimit import RedisRateLimiter
+    from tests.stubs import FakeCollector, FakeLock, FakeRepos
+
+    platform = f"plat-{uuid.uuid4().hex[:8]}"
+    url = os.environ["TEST_REDIS_URL"]
+    async with redis_client(url) as client:
+        limiter = RedisRateLimiter(client)
+        try:
+            for slug in ("a", "b", "c"):
+                repos = FakeRepos()
+                deps = CollectDeps(
+                    collectors=[FakeCollector(platform, fail=NetworkError(platform))],
+                    videos=repos.videos,
+                    segments=repos.segments,
+                    runs=repos.runs,
+                    limiter=limiter,
+                    lock=FakeLock(),
+                    health=limiter,
+                )
+                await collect(slug, [platform], 5, deps)
+            with pytest.raises(CollectorError) as exc_info:
+                await limiter.acquire(platform)
+            assert exc_info.value.code == "blocked"
+        finally:
+            await client.delete(f"cf:cb:{platform}:fails", f"cf:cb:{platform}:blocked")
+            await client.delete(f"cf:rl:{platform}")
