@@ -4,6 +4,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 
 from content_factory.app.concurrency import PlatformSlots, bounded_gather
+from content_factory.app.gate_hits import counting
 from content_factory.app.ports import (
     CollectRunRepository,
     KeywordExpander,
@@ -64,7 +65,7 @@ class SocialDiscoverResult:
     CollectorError como em collect) — preserva o `except Exception` do loop
     sequencial, onde erro de 1 rede vira CollectRun failed sem abortar as
     irmãs. Cancelamento (BaseException) continua propagando.
-    gate_hits_delta é medido nesta fase e transportado; started_at abre
+    gate_hits (desta chamada) é medido nesta fase e transportado; started_at abre
     esta fase (antes do acquire) e é transportado para a run; finished_at
     é medido na fase de persistência, como em collect().
     """
@@ -72,7 +73,7 @@ class SocialDiscoverResult:
     platform: str
     candidates: list[CandidateVideo] | None
     error: Exception | None
-    gate_hits_delta: int
+    gate_hits: int  # desta chamada (Etapa 1 Task 9)
     started_at: datetime
 
 
@@ -86,29 +87,29 @@ async def _discover_social_one(
     """Fase de rede para uma rede social: limiter.acquire + discover_by_keywords.
 
     Devolve SocialDiscoverResult em vez de levantar — a fase de
-    persistência decide status/counts/runs. gate_hits é lido como delta
-    before/after porque o discoverer é singleton no registry
-    (self.gate_hits acumula entre runs).
+    persistência decide status/counts/runs. gate_hits é contado POR
+    CHAMADA (`counting()`, Etapa 1 Task 9): o discoverer é singleton e
+    segmentos concorrentes o compartilham.
     """
-    gate_hits_before = getattr(discoverer, "gate_hits", 0)
     candidates: list[CandidateVideo] | None = None
     error: Exception | None = None
     # Teto por plataforma (Etapa 0 Task 7): a vaga cobre acquire + discover.
     async with deps.platform_slots.slot(platform):
         started_at = deps.clock()
-        try:
-            await deps.limiter.acquire(platform)
-            candidates = await discoverer.discover_by_keywords(keywords, [], 1)
-        except Exception as exc:
-            if not isinstance(exc, CollectorError):
-                # run só guarda error_code: a causa vai para o log (Task 8.1)
-                logger.exception("discover fora do contrato: %s/%s", segment_slug, platform)
-            error = exc
+        with counting() as gate_hits:
+            try:
+                await deps.limiter.acquire(platform)
+                candidates = await discoverer.discover_by_keywords(keywords, [], 1)
+            except Exception as exc:
+                if not isinstance(exc, CollectorError):
+                    # run só guarda error_code: a causa vai para o log (Task 8.1)
+                    logger.exception("discover fora do contrato: %s/%s", segment_slug, platform)
+                error = exc
         return SocialDiscoverResult(
             platform=platform,
             candidates=candidates,
             error=error,
-            gate_hits_delta=getattr(discoverer, "gate_hits", 0) - gate_hits_before,
+            gate_hits=gate_hits.total,
             started_at=started_at,
         )
 
@@ -237,14 +238,13 @@ async def run_research_cycle(
                         social_skipped += stats.skipped
             finally:
                 # mesmo padrão de collect() (REVISÃO Important #1/#2):
-                # transportado como delta da fase de rede (sobrevive a
-                # discover_by_keywords levantando depois de incrementar; o
-                # coletor é singleton no registry, self.gate_hits acumula
-                # entre runs). Sem isso, o envelope da pesquisa por keyword
-                # não distingue busca ampla por hashtag do fallback de conta
+                # contado por chamada na fase de rede e transportado
+                # (sobrevive a discover_by_keywords levantando depois do
+                # hit). Sem isso, o envelope da pesquisa por keyword não
+                # distingue busca ampla por hashtag do fallback de conta
                 # própria (gate #10) do Instagram.
-                if result.gate_hits_delta:
-                    counts[f"{platform}_gate_hits"] = result.gate_hits_delta
+                if result.gate_hits:
+                    counts[f"{platform}_gate_hits"] = result.gate_hits
                 run.finished_at = deps.clock()
                 await deps.runs.record(run)
         counts["social_found"] = social_found

@@ -277,6 +277,10 @@ vaga da plataforma antes do semáforo do segmento e montar o resultado num
 
 ## Task 9 — Contagem de `gate_hits` por chamada, não por instância
 
+> ✅ Feita. `app/gate_hits.py` (`counting()`/`record_gate_hit()`); o campo virou
+> `gate_hits` (não é mais delta). RED confirmado: no código antigo, 2 segmentos
+> concorrentes contavam 2 cada.
+
 Com segmentos concorrentes sobre o mesmo coletor singleton, o delta
 before/after de `self.gate_hits` soma hits de outros segmentos.
 

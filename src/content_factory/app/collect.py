@@ -4,6 +4,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 
 from content_factory.app.concurrency import PlatformSlots, bounded_gather
+from content_factory.app.gate_hits import counting
 from content_factory.app.ports import (
     Collector,
     CollectRunRepository,
@@ -65,7 +66,7 @@ class DiscoverResult:
     platform: str
     found: list[CandidateVideo] | None
     error: CollectorError | None
-    gate_hits_delta: int
+    gate_hits: int  # desta chamada (Etapa 1 Task 9)
     discover_ms: int | None
     started_at: datetime
 
@@ -86,11 +87,11 @@ async def _discover_one(
     Devolve DiscoverResult em vez de levantar — a fase de persistência
     decide status/counts/runs. Exceção fora do contrato vira
     `internal_error` (defesa em profundidade); só cancelamento propaga.
-    gate_hits é lido como delta before/after porque o collector é singleton
-    no registry (self.gate_hits acumula entre runs).
+    gate_hits é contado POR CHAMADA (`counting()`, Etapa 1 Task 9): o
+    collector é singleton e segmentos concorrentes o compartilham, então o
+    delta do atributo somaria hits de outros segmentos.
     """
     platform = collector.platform
-    gate_hits_before = getattr(collector, "gate_hits", 0)
     found: list[CandidateVideo] | None = None
     error: CollectorError | None = None
     discover_start: datetime | None = None
@@ -100,24 +101,25 @@ async def _discover_one(
     # persist_ms: finished_at sai após a rede de TODAS as irmãs (review).
     async with deps.platform_slots.slot(platform):
         started_at = deps.clock()
-        try:
-            await deps.limiter.acquire(platform)
-            discover_start = deps.clock()
-            found = await collector.discover(segment, limit)
-        except CollectorError as exc:
-            error = exc
-        except Exception as exc:
-            # run só guarda error_code: a causa vai para o log (Task 8.1)
-            logger.exception("discover fora do contrato: %s/%s", segment.slug, platform)
-            error = CollectorError("internal_error", platform, str(exc))
-            error.__cause__ = exc
+        with counting() as gate_hits:
+            try:
+                await deps.limiter.acquire(platform)
+                discover_start = deps.clock()
+                found = await collector.discover(segment, limit)
+            except CollectorError as exc:
+                error = exc
+            except Exception as exc:
+                # run só guarda error_code: a causa vai para o log (Task 8.1)
+                logger.exception("discover fora do contrato: %s/%s", segment.slug, platform)
+                error = CollectorError("internal_error", platform, str(exc))
+                error.__cause__ = exc
         # discover_ms só existe se o acquire passou (falha no limiter = None)
         discover_ms = None if discover_start is None else _ms_between(discover_start, deps.clock())
         return DiscoverResult(
             platform=platform,
             found=found,  # só atribuído no sucesso: erro ⇒ None
             error=error,
-            gate_hits_delta=getattr(collector, "gate_hits", 0) - gate_hits_before,
+            gate_hits=gate_hits.total,
             discover_ms=discover_ms,
             started_at=started_at,
         )
@@ -193,8 +195,8 @@ async def collect(
                         counts["updated"] = int(counts["updated"]) + stats.updated
                         counts["skipped"] = int(counts["skipped"]) + stats.skipped
             finally:
-                if result.gate_hits_delta:
-                    counts[f"{result.platform}_gate_hits"] = result.gate_hits_delta
+                if result.gate_hits:
+                    counts[f"{result.platform}_gate_hits"] = result.gate_hits
                 run.finished_at = deps.clock()
                 await deps.runs.record(run)
                 runs.append(run)

@@ -15,6 +15,7 @@ from tests.stubs import (
     FakeVideos,
 )
 
+from content_factory.app.gate_hits import record_gate_hit
 from content_factory.app.ports import KeywordSignalRepository, SocialDiscoverer
 from content_factory.app.research_pipeline import ResearchDeps, ResearchOutcome, run_research_cycle
 from content_factory.domain.errors import CollectorError
@@ -462,6 +463,7 @@ class _FakeGatedSocial:
         self, keywords: list[str], hashtags: list[str], depth: int
     ) -> list[CandidateVideo]:
         self.gate_hits += 2
+        record_gate_hit(2)
         return []
 
 
@@ -844,3 +846,32 @@ async def test_run_research_cycle_exposes_gate_hits_counter() -> None:
     )
     out = await run_research_cycle("candles", DepthConfig(), deps)
     assert out.counts["instagram_gate_hits"] == 2
+
+
+class _SharedGatedSocial:
+    """Etapa 1 Task 9: singleton com 1 hit por chamada e yield no meio."""
+
+    platform: ClassVar[str] = "instagram"
+
+    def __init__(self) -> None:
+        self.gate_hits = 0
+
+    async def discover_by_keywords(
+        self, keywords: list[str], hashtags: list[str], depth: int
+    ) -> list[CandidateVideo]:
+        from content_factory.app.gate_hits import record_gate_hit
+
+        self.gate_hits += 1
+        record_gate_hit()
+        await asyncio.sleep(0.01)
+        return []
+
+
+async def test_research_concurrent_segments_count_own_gate_hits() -> None:
+    shared = _SharedGatedSocial()
+    a, b = await asyncio.gather(
+        run_research_cycle("velas", DepthConfig(), _research_deps_with({"instagram": shared})),
+        run_research_cycle("sabonetes", DepthConfig(), _research_deps_with({"instagram": shared})),
+    )
+    assert a.counts["instagram_gate_hits"] == 1
+    assert b.counts["instagram_gate_hits"] == 1

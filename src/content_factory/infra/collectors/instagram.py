@@ -5,6 +5,7 @@ from typing import Any, ClassVar, cast
 
 import httpx
 
+from content_factory.app.gate_hits import record_gate_hit
 from content_factory.domain.errors import AuthExpired, NetworkError, UpstreamChanged
 from content_factory.domain.models import CandidateVideo, SegmentConfig
 from content_factory.infra.redact import redact
@@ -116,7 +117,8 @@ class InstagramCollector:
         return await self._own_media_by_terms(keywords, limit)
 
     async def _own_media_by_terms(self, terms: list[str], limit: int) -> list[CandidateVideo]:
-        self.gate_hits += 1
+        self.gate_hits += 1  # acumulado do singleton (leitura humana/legado)
+        record_gate_hit()  # contagem por chamada (Etapa 1 Task 9)
         logger.warning("instagram: gate #10 (App Review pendente) — usando mídia própria")
         out: list[CandidateVideo] = []
         after: str | None = None

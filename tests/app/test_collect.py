@@ -22,6 +22,7 @@ from content_factory.app.collect import (
     _discover_one,  # pyright: ignore[reportPrivateUsage]
     collect,
 )
+from content_factory.app.gate_hits import record_gate_hit
 from content_factory.app.ports import Collector, VideoRepository
 from content_factory.domain.errors import CollectorError, RateLimited
 from content_factory.domain.models import CandidateVideo, SegmentConfig, UpsertStats, VideoSnapshot
@@ -40,6 +41,7 @@ class _FakeGatedCollector:
 
     async def discover(self, segment: SegmentConfig, limit: int) -> list[CandidateVideo]:
         self.gate_hits += 2
+        record_gate_hit(2)
         return []
 
 
@@ -55,6 +57,7 @@ class _FakeGatedThenFailingCollector:
 
     async def discover(self, segment: SegmentConfig, limit: int) -> list[CandidateVideo]:
         self.gate_hits += 1
+        record_gate_hit()
         raise CollectorError("failed", "instagram")
 
 
@@ -362,7 +365,7 @@ async def test_discover_one_returns_result_with_discover_ms() -> None:
     assert result.found is not None and len(result.found) == 2
     assert result.error is None
     assert result.discover_ms == 150
-    assert result.gate_hits_delta == 0
+    assert result.gate_hits == 0
 
 
 async def test_discover_one_captures_collector_error_without_losing_gate_delta() -> None:
@@ -388,7 +391,7 @@ async def test_discover_one_captures_collector_error_without_losing_gate_delta()
     assert blocked.found is None
     assert blocked.error is not None and blocked.error.code == "blocked"
     assert blocked.discover_ms is None
-    assert blocked.gate_hits_delta == 0
+    assert blocked.gate_hits == 0
 
     net_deps = CollectDeps(
         collectors=[],
@@ -402,7 +405,7 @@ async def test_discover_one_captures_collector_error_without_losing_gate_delta()
     failed = await _discover_one(_FakeGatedThenFailingCollector(), segment, 5, net_deps)
     assert failed.found is None
     assert failed.error is not None and failed.error.code == "failed"
-    assert failed.gate_hits_delta == 1
+    assert failed.gate_hits == 1
     assert failed.discover_ms == 0
 
 
