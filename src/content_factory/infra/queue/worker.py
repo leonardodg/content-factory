@@ -1,7 +1,8 @@
 """Worker arq — jobs `collect_job`/`score_job`/`research_job` com cron diário.
 
-Camada de composição: monta os deps uma vez no startup (registry +
-repositórios + Redis) e os injeta no `ctx` do arq; os jobs chamam os MESMOS
+Env, jobs e `WorkerSettings`. A composição (`SharedDeps`/`AppDeps`) mora em
+`infra/queue/composition.py` (Etapa 2 Task 16): o startup lê as envs, compõe
+uma vez e injeta `app_deps` no `ctx` do arq; os jobs chamam os MESMOS
 use-cases da CLI (`app.collect`/`app.score`/`app.research_pipeline`) — zero
 lógica duplicada.
 
@@ -11,10 +12,8 @@ existem para o teste trocar por fakes sem tocar no arq/banco (fronteira = mock).
 
 import logging
 import os
-from collections.abc import AsyncGenerator, Awaitable, Callable
-from contextlib import AsyncExitStack, asynccontextmanager
-from dataclasses import dataclass
-from datetime import datetime, tzinfo
+from collections.abc import Awaitable, Callable
+from datetime import tzinfo
 from typing import Any, ClassVar
 from zoneinfo import ZoneInfo
 
@@ -22,26 +21,18 @@ from arq.connections import RedisSettings
 from arq.cron import CronJob, cron
 from arq.typing import StartupShutdown
 from arq.worker import Function, func
-from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
-from content_factory.app.collect import CollectDeps, collect
-from content_factory.app.concurrency import PlatformSlots, bounded_gather
+from content_factory.app.collect import collect
+from content_factory.app.concurrency import bounded_gather
 from content_factory.app.ports import (
-    Collector,
-    KeywordExpander,
-    RateLimiter,
     ResearchCampaignRepository,
-    SocialDiscoverer,
-    TrendsProvider,
 )
-from content_factory.app.research_pipeline import ResearchDeps, run_research_cycle
-from content_factory.app.score import ScoreDeps, score
-from content_factory.app.segment_deps import SegmentDepsBundle, SegmentDepsFactory
+from content_factory.app.research_pipeline import run_research_cycle
+from content_factory.app.score import score
 from content_factory.config import Settings, get_settings
-from content_factory.domain.fanout_guard import FanoutGuard
-from content_factory.domain.models import DepthConfig, ResearchCampaign, Segment
+from content_factory.domain.models import DepthConfig, Segment
+from content_factory.infra.queue.composition import AppDeps, compose_app_deps
 from content_factory.infra.redact import RedactingFilter, redact
-from content_factory.infra.redis_ops import RedisOps
 
 logger = logging.getLogger(__name__)
 
@@ -269,220 +260,17 @@ async def run_research_job(ctx: dict[str, Any]) -> dict[str, Any]:
     return await _gather_segments(active, _max_segments_from_env(), _one, "research")
 
 
-@dataclass
-class _FreshSessionCampaigns:
-    """`ResearchCampaignRepository` sobre a factory: 1 sessão fresca por chamada.
-
-    Task 11: com `max_jobs > 1` os jobs podem se sobrepor (collect das 8h +
-    score das 8h30 no mesmo worker) — um repo ligado à sessão de startup
-    quebraria com `IllegalStateChangeError` no uso concorrente. Cada chamada
-    abre sua própria sessão de leitura, então `active_segments()` é seguro
-    sob TaskGroup E entre jobs. `start`/`stop` comitam na própria sessão
-    (a CLI faz o mesmo com a factory direta).
-    """
-
-    factory: async_sessionmaker[AsyncSession]
-
-    async def active_segments(self) -> list[Segment]:
-        async with self.factory() as session:
-            from content_factory.infra.db.repositories import ResearchCampaignRepositoryImpl
-
-            return await ResearchCampaignRepositoryImpl(session).active_segments()
-
-    async def active_for_segment(self, segment_id: int) -> ResearchCampaign | None:
-        async with self.factory() as session:
-            from content_factory.infra.db.repositories import ResearchCampaignRepositoryImpl
-
-            return await ResearchCampaignRepositoryImpl(session).active_for_segment(segment_id)
-
-    async def start(self, segment_id: int, ends_at: datetime) -> ResearchCampaign:
-        async with self.factory() as session:
-            from content_factory.infra.db.repositories import ResearchCampaignRepositoryImpl
-
-            result = await ResearchCampaignRepositoryImpl(session).start(segment_id, ends_at)
-            await session.commit()
-            return result
-
-    async def stop(self, segment_id: int) -> None:
-        async with self.factory() as session:
-            from content_factory.infra.db.repositories import ResearchCampaignRepositoryImpl
-
-            await ResearchCampaignRepositoryImpl(session).stop(segment_id)
-            await session.commit()
-
-
-@dataclass(frozen=True)
-class SharedDeps:
-    """O que vive o processo inteiro e é task-safe (Etapa 2 Task 14).
-
-    Nada aqui liga sessão: coletores/providers são singletons do registry,
-    o limiter e o `lock_client` falam com o Redis compartilhado (cota e
-    breaker globais, Task 3), e `platform_slots` é UMA instância para o
-    processo (teto por plataforma entre segmentos, Etapa 0 Task 7). O
-    `RedisLock` NÃO mora aqui: o token de posse é por instância, então cada
-    bundle cria o seu sobre `lock_client` (Etapa 0 Task 2).
-    """
-
-    collectors: list[Collector]
-    socials: dict[str, SocialDiscoverer]
-    web: KeywordExpander
-    trends: TrendsProvider
-    limiter: RateLimiter
-    lock_client: RedisOps
-    platform_slots: PlatformSlots
-    # COLLECT_MAX_CONCURRENCY, lido 1x no startup: trocar exige restart
-    max_concurrent_discoveries: int
-
-
-@dataclass
-class AppDeps(SegmentDepsFactory):
-    """Deps de longa duração do worker — engine + factory compartilhados, sessão por UoW.
-
-    Etapa 2 Tasks 14/15: sem sessão de startup e sem deps "template" — os
-    `CollectDeps`/`ScoreDeps`/`ResearchDeps` nascem inteiros em
-    `create_segment_deps`, a partir de `shared` + a sessão da UoW. `campaigns`
-    abre 1 sessão fresca por chamada (`_FreshSessionCampaigns`), então jobs
-    sobrepostos (`max_jobs=3`) nunca disputam sessão. O engine é
-    compartilhado (task-safe) e fechado em `close`; a SESSÃO nunca é
-    compartilhada (AsyncSession não é task-safe).
-    """
-
-    shared: SharedDeps
-    campaigns: ResearchCampaignRepository
-    session_factory: async_sessionmaker[AsyncSession]
-    engine: AsyncEngine
-    close: Callable[[], Awaitable[None]]
-
-    @asynccontextmanager
-    async def create_segment_deps(self, segment: Segment) -> AsyncGenerator[SegmentDepsBundle]:
-        """1 segmento = 1 UoW = 1 transação, sob `bounded_gather` (Task 11).
-
-        Repositórios e `RedisLock` nascem aqui, por UoW; o resto vem de
-        `shared`. Exceção dentro do escopo reverte SÓ a sessão do segmento
-        (`session_scope`); o caller commita via `bundle.uow`.
-        """
-        from content_factory.infra.db.base import SessionUnitOfWork, session_scope
-        from content_factory.infra.db.repositories import (
-            CollectRunRepositoryImpl,
-            KeywordSignalRepositoryImpl,
-            ScoreRepositoryImpl,
-            SegmentRepositoryImpl,
-            TrendObservationRepositoryImpl,
-            VideoRepositoryImpl,
-        )
-        from content_factory.infra.lock import RedisLock
-
-        shared = self.shared
-        async with session_scope(self.session_factory) as session:
-            videos = VideoRepositoryImpl(session)
-            segments = SegmentRepositoryImpl(session)
-            runs = CollectRunRepositoryImpl(session)
-            yield SegmentDepsBundle(
-                uow=SessionUnitOfWork(session),
-                collect=CollectDeps(
-                    # todos os coletores registrados; o job filtra pela plataforma pedida
-                    collectors=shared.collectors,
-                    videos=videos,
-                    segments=segments,
-                    runs=runs,
-                    limiter=shared.limiter,
-                    lock=RedisLock(shared.lock_client),
-                    max_concurrent_discoveries=shared.max_concurrent_discoveries,
-                    platform_slots=shared.platform_slots,
-                ),
-                score=ScoreDeps(
-                    videos=videos,
-                    scores=ScoreRepositoryImpl(session),
-                    segment=segment,
-                    keywords=segment.keywords,
-                ),
-                research=ResearchDeps(
-                    web=shared.web,
-                    trends=shared.trends,
-                    socials=shared.socials,
-                    signals=KeywordSignalRepositoryImpl(session),
-                    trend_observations=TrendObservationRepositoryImpl(session),
-                    segments=segments,
-                    videos=videos,
-                    runs=runs,
-                    lock=RedisLock(shared.lock_client),
-                    limiter=shared.limiter,
-                    guard=FanoutGuard(segment.research or DepthConfig()),
-                    platform_slots=shared.platform_slots,
-                ),
-            )
-
-
 async def create_app_deps(settings: Settings) -> AppDeps:
-    """Fábrica do worker: `register_defaults` + engine + Redis compartilhado.
+    """Lê as envs de concorrência (só no startup: trocar exige restart) e compõe.
 
-    Não abre sessão nem resolve segmento: cada job lê os segmentos ativos
-    (`ResearchCampaignRepository.active_segments`) e cada segmento ganha sua
-    UoW em `create_segment_deps`. Engine e factory vêm de
-    `create_engine_and_factory` (Etapa 2 Task 15 — o engine é fechado em
-    `close`). Envs de concorrência (`COLLECT_MAX_CONCURRENCY`,
-    `PLATFORM_MAX_CONCURRENCY`) são lidas AQUI, no startup: trocar exige
-    restart (ao contrário de `COLLECT_PLATFORMS`/`COLLECT_LIMIT`, relidas a
-    cada tick).
-
-    Composição (Fase D→B): `web` = WebSuggestProvider (Google Suggest,
-    ADR-0005); `trends` = TrendsGoogleProvider; `socials` = coletores que
-    satisfazem SocialDiscoverer estruturalmente.
+    `COLLECT_MAX_CONCURRENCY` e `PLATFORM_MAX_CONCURRENCY` valem do startup,
+    ao contrário de `COLLECT_PLATFORMS`/`COLLECT_LIMIT`, relidas a cada tick.
     """
-    from content_factory.infra.collectors import register_defaults, registry
-    from content_factory.infra.collectors.trends_google import TrendsGoogleProvider
-    from content_factory.infra.collectors.web_suggest import WebSuggestProvider
-    from content_factory.infra.db.base import create_engine_and_factory
-    from content_factory.infra.ratelimit import RedisRateLimiter
-    from content_factory.infra.redis_ops import redis_client
-
-    stack = AsyncExitStack()
-    try:
-        client = await stack.enter_async_context(redis_client(settings.redis_url))
-        # Cota de API e breaker são globais por chave de API, não por fila
-        # (Task 3): com /1, /2, /3 cada worker teria sua própria janela
-        # cf:rl:youtube e seu próprio breaker — a cota real seria consumida
-        # em até 3x. Locks de segmento vão no mesmo cliente compartilhado,
-        # porque lock por fila não protege nada entre workers. O validator de
-        # Settings já resolve o default (rate_limit_redis_url = redis_url).
-        if settings.rate_limit_redis_url == settings.redis_url:
-            shared_client = client
-        else:
-            shared_client = await stack.enter_async_context(
-                redis_client(settings.rate_limit_redis_url)
-            )
-        engine, factory = create_engine_and_factory(settings)
-
-        async def _close() -> None:
-            await stack.aclose()
-            await engine.dispose()
-
-        register_defaults(settings)
-        # socials: só collectors que implementam discover_by_keywords (Fase C+)
-        socials: dict[str, SocialDiscoverer] = {}
-        for name in registry.snapshot():
-            collector = registry.resolve([name])[0]
-            if hasattr(collector, "discover_by_keywords"):
-                socials[name] = collector  # type: ignore[assignment]
-        return AppDeps(
-            shared=SharedDeps(
-                collectors=registry.resolve(list(registry.snapshot())),
-                socials=socials,
-                web=WebSuggestProvider(),
-                trends=TrendsGoogleProvider(),
-                limiter=RedisRateLimiter(shared_client),
-                lock_client=shared_client,
-                platform_slots=PlatformSlots(_platform_max_concurrency_from_env()),
-                max_concurrent_discoveries=int(_load_settings()["max_concurrency"]),
-            ),
-            campaigns=_FreshSessionCampaigns(factory),
-            session_factory=factory,
-            engine=engine,
-            close=_close,
-        )
-    except BaseException:
-        await stack.aclose()  # startup falhou: não deixa Redis órfão
-        raise
+    return await compose_app_deps(
+        settings,
+        max_concurrent_discoveries=int(_load_settings()["max_concurrency"]),
+        platform_limits=_platform_max_concurrency_from_env(),
+    )
 
 
 async def startup(ctx: dict[str, Any]) -> None:

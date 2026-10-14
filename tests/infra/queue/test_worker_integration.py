@@ -14,12 +14,20 @@ from typing import ClassVar, cast
 from uuid import uuid4
 
 import pytest
-from sqlalchemy import func, select
+from sqlalchemy import delete, func, select
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from content_factory.app.collect import CollectDeps
 from content_factory.config import Settings
 from content_factory.domain.models import CandidateVideo, CollectRun, SegmentConfig
-from content_factory.infra.db.orm import CollectRunRow, VideoSegmentRow
+from content_factory.infra.db.orm import (
+    CollectRunRow,
+    ResearchCampaignRow,
+    SegmentRow,
+    VideoMetricsRow,
+    VideoRow,
+    VideoSegmentRow,
+)
 from content_factory.infra.db.repositories import SegmentRepositoryImpl
 from content_factory.infra.queue import worker as w
 from tests.conftest import requires_infra, requires_redis
@@ -146,4 +154,29 @@ async def test_concurrent_segment_uows_isolate_commits(
     finally:
         for sid in started_ids:
             await deps.campaigns.stop(sid)
+        await _purge(deps.session_factory, tag)
         await deps.close()
+
+
+async def _purge(factory: async_sessionmaker[AsyncSession], tag: str) -> None:
+    """Etapa 2 (A7): apaga o que o teste criou — o banco descartável não acumula.
+
+    Ordem das FKs: métricas/vínculos → vídeos; runs/campanhas → segmentos.
+    O criador `stub` é compartilhado por upsert e fica.
+    """
+    async with factory() as session:
+        seg_ids = select(SegmentRow.id).where(SegmentRow.slug.like(f"t8-{tag}-%"))
+        video_ids = select(VideoRow.id).where(VideoRow.platform_video_id.like(f"t8-{tag}-%"))
+        await session.execute(
+            delete(VideoMetricsRow).where(VideoMetricsRow.video_id.in_(video_ids))
+        )
+        await session.execute(
+            delete(VideoSegmentRow).where(VideoSegmentRow.segment_id.in_(seg_ids))
+        )
+        await session.execute(delete(VideoRow).where(VideoRow.id.in_(video_ids)))
+        await session.execute(delete(CollectRunRow).where(CollectRunRow.segment_id.in_(seg_ids)))
+        await session.execute(
+            delete(ResearchCampaignRow).where(ResearchCampaignRow.segment_id.in_(seg_ids))
+        )
+        await session.execute(delete(SegmentRow).where(SegmentRow.slug.like(f"t8-{tag}-%")))
+        await session.commit()

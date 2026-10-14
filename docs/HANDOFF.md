@@ -5,6 +5,20 @@
 
 ## 🔄 EM ANDAMENTO
 
+_**Etapa 2 (refactor SOLID/DRY) CONCLUÍDA (2026-10-14) na branch
+`refactor/concorrencia-etapa2`, empilhada sobre `fix/concorrencia-review`:
+fazer o merge da Etapa 0 primeiro.** Commits por Task:
+- T12 `49ce64b`: `bounded_gather` único.
+- T13 `4a2f02a`: bundle em `app/segment_deps.py`; UoW só com
+  commit/rollback; teste de camadas por AST.
+- T14+T15 `f60b15d`: `SharedDeps` sem sessão de startup nem templates; `ctx`
+  só com `app_deps`/`campaigns_deps`; engine via `create_engine_and_factory`.
+- T16: `infra/queue/composition.py` sem env, worker com ~335 linhas, A5/A7.
+
+**A4 reavaliado, sem mudança.** Inverter a ordem deixaria o gargalo
+`tiktok=1` ocioso (ver plano). Gates: 314 passed com infra descartável.
+A Etapa 1 (T9–T11) continua pendente._
+
 _**Etapa 0 + review da implementação CONCLUÍDOS (2026-10-14), branch
 `fix/concorrencia-review` pronta para PR/merge antes de 2026-10-19.** As
 Tasks 1–8 (`978d984`..`8035758`) foram revisadas e auditadas. O review achou

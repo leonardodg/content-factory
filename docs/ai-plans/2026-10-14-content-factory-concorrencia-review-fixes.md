@@ -399,6 +399,17 @@ deles reintroduz o `IllegalStateChangeError` com `max_jobs=3`.
 
 ## Task 16 — Dividir `worker.py` e miudezas
 
+> ✅ Feita. `infra/queue/composition.py` (`SharedDeps`, `AppDeps`,
+> `_FreshSessionCampaigns` com `_campaign_repo`, `compose_app_deps`) **não lê
+> env**: `worker.create_app_deps` lê `COLLECT_MAX_CONCURRENCY` e
+> `PLATFORM_MAX_CONCURRENCY` e passa os valores, o que evita import circular.
+> `worker.py` caiu de ~610 para ~335 linhas. O `or` do `rate_limit_redis_url`
+> saiu na Task 14. **A5:** teste de caracterização do parser do env. **A7:**
+> `_purge` no teardown da integração (contagem `t8-%` estável entre execuções)
+> e removido o teste de lock quase duplicado. **Não feito:** a conversão
+> `int(...)` do `RedisOps.eval` em `RedisLock.release`. O retorno já é
+> descartado, então nenhum `Any` vaza, e a mudança não traria ganho.
+
 - `infra/queue/composition.py`: `AppDeps`, `SharedDeps`, `create_app_deps`,
   `_FreshSessionCampaigns` (com um helper `_repo(session)` no lugar dos 4
   imports locais repetidos). `worker.py` fica com env, jobs e `WorkerSettings`.

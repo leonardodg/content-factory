@@ -1367,7 +1367,9 @@ async def test_campaigns_repo_opens_fresh_session_per_call(
     def _factory() -> Any:
         return _session()
 
-    wrapper = w._FreshSessionCampaigns(cast("Any", _factory))  # pyright: ignore[reportPrivateUsage]
+    from content_factory.infra.queue import composition
+
+    wrapper = composition._FreshSessionCampaigns(cast("Any", _factory))  # pyright: ignore[reportPrivateUsage]
     await wrapper.active_segments()
     await wrapper.active_segments()
     assert len(seen) == 2
@@ -1401,3 +1403,18 @@ async def test_startup_configures_logging(monkeypatch: pytest.MonkeyPatch) -> No
     with pytest.raises(RuntimeError):
         await w.startup({})
     assert calls == ["x"]  # antes do guard: até o erro de startup sai formatado
+
+
+def test_platform_max_concurrency_from_env_parses_and_ignores_invalid(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Etapa 2 (A5): `plataforma=limite`, entrada inválida ignorada, default tiktok=1."""
+    parse = w._platform_max_concurrency_from_env  # pyright: ignore[reportPrivateUsage]
+    monkeypatch.delenv("PLATFORM_MAX_CONCURRENCY", raising=False)
+    assert parse() == {"tiktok": 1}
+    monkeypatch.setenv("PLATFORM_MAX_CONCURRENCY", " tiktok = 2 , instagram=1")
+    assert parse() == {"tiktok": 2, "instagram": 1}
+    monkeypatch.setenv("PLATFORM_MAX_CONCURRENCY", "tiktok=0,youtube=x,=3,semigual,web=1")
+    assert parse() == {"web": 1}
+    monkeypatch.setenv("PLATFORM_MAX_CONCURRENCY", "")
+    assert parse() == {}  # vazio = sem teto
