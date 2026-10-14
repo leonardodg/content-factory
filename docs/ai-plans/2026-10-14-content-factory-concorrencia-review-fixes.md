@@ -239,6 +239,9 @@ Achados novos, verificados empiricamente:
 
 ## Task 8.1 — Causa do `internal_error` visível (A1), antes do swap
 
+> ✅ Feita em `9db64ea`. `logger.exception` (ERROR) nos pontos de conversão;
+> no research só para não-`CollectorError` (discover e persistência).
+
 **Files:** `app/collect.py`, `app/research_pipeline.py`, testes em `tests/app/`.
 - Ao converter uma exceção fora do contrato em `internal_error` (collect) ou
   em run `failed` (research), registrar `logger.warning(..., exc_info=exc)`
@@ -248,6 +251,12 @@ Achados novos, verificados empiricamente:
   `exc_info` e plataforma; irmãs persistem (o teste da T4 continua verde).
 
 ## Task 8.2 — Log do worker redigido e com formato (A2 + A3), antes do swap
+
+> ✅ Feita. Desvio do texto abaixo: `propagate` ficou **ligado**. O root não tem
+> handler no worker, então não há duplicata, e o `caplog` dos testes continua
+> funcionando. `configure_logging()` roda no início do `startup`, antes do guard.
+> Verificado com o `default_log_config` do arq: linha `… ERROR
+> content_factory.app.collect …` e `ms_token=***` no traceback.
 
 **Files:** `infra/redact.py` (novo `RedactingFilter(logging.Filter)`),
 `infra/queue/worker.py` (`startup` instala handler com o filtro no logger

@@ -5,21 +5,23 @@
 
 ## 🔄 EM ANDAMENTO
 
-_**Review da implementação da Etapa 0 (2026-10-14):** Tasks 1–8 na branch
-`fix/concorrencia-review` (`978d984`..`8035758`) revisadas e auditadas. Os
-gates passam com infra descartável: 297 passed e 0 skip, `alembic check`,
+_**Etapa 0 + review da implementação CONCLUÍDOS (2026-10-14), branch
+`fix/concorrencia-review` pronta para PR/merge antes de 2026-10-19.** As
+Tasks 1–8 (`978d984`..`8035758`) foram revisadas e auditadas. O review achou
+2 problemas 🟠, já corrigidos:
+- **A1 → Task 8.1 (`9db64ea`):** exceção fora do contrato virava
+  `internal_error` mudo; agora gera `ERROR … fora do contrato: <slug>/<plataforma>`
+  com traceback.
+- **A2+A3 → Task 8.2:** o log do worker vazava segredo e saía sem
+  nível/timestamp; agora há `RedactingFilter` + handler próprio em
+  `content_factory`, conferido com a config real do arq.
+
+Gates com infra descartável: **306 passed, 0 skip**; `alembic check`,
 ruff/pyright 0, bandit, pip-audit sem vulns, `mkdocs --strict` e
-privacidade. Os 7 achados do review original estão endereçados. Há **2 achados
-🟠 novos a fechar antes do merge/swap** (Tasks 8.1/8.2 do plano):
-**A1**, a T4 transforma bug de coletor em `internal_error` mudo (sem
-mensagem na run e sem log, traceback perdido); **A2**, o `logger.exception`
-do worker grava o traceback **sem `redact()`** (spec §7, reproduzido com
-`ms_token` em claro). Há também 🟡 **A3**: o log de `content_factory.*` sai
-sem nível nem timestamp, porque o arq só configura o logger `arq`. Os 🟡
-A4–A7 (bloqueio na fila entre semáforo de segmento e vaga de plataforma,
-parser do env sem teste, DRY em `_discover_one`, sobras no teste de
-integração) vão para a Etapa 2. Detalhes em § "Review da implementação da
-Etapa 0" do plano._
+privacidade passam. Os 🟡 A4–A7 vão para a Etapa 2: bloqueio na fila entre
+o semáforo do segmento e a vaga da plataforma, parser do env sem teste, DRY
+em `_discover_one` e sobras no teste de integração. Detalhes em § "Review
+da implementação da Etapa 0" do plano._
 
 _**Review pós-merge do PR #8 (2026-10-14) — Etapa 0 implementada na branch
 `fix/concorrencia-review` (Tasks 1–8: lock testado contra Redis real, posse
@@ -449,9 +451,9 @@ guard-rail, tabela e orquestrador; Fases B–E pendem de decisão do usuário.
    [x] `started_at/finished_at` de volta a rede+persistência (T6) + teto por
    plataforma `tiktok=1` (T7) + teste de integração da UoW concorrente (T8).
    **Etapa 0 completa — 297 passed, todos os gates verdes.**
-   [ ] Tasks 8.1 (causa do `internal_error` no log) + 8.2 (log do worker
+   [x] Tasks 8.1 (causa do `internal_error` no log) + 8.2 (log do worker
    com `RedactingFilter` + nível/timestamp) — achados 🟠 A1/A2 do review da
-   implementação; fechar antes do merge/swap.
+   implementação. **Falta: PR + merge antes de 2026-10-19** (306 passed).
    Integração sempre em Postgres/Redis descartáveis (`TEST_REDIS_URL`
    novo), nunca nos do experimento.
 1. **Issues pós-merge** (backlog da REVISÃO §6 — #1 mascaramento/finally já

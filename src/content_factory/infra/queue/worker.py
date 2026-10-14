@@ -37,10 +37,32 @@ from content_factory.app.score import ScoreDeps, score
 from content_factory.config import Settings, get_settings
 from content_factory.domain.fanout_guard import FanoutGuard
 from content_factory.domain.models import DepthConfig, ResearchCampaign, Segment
-from content_factory.infra.redact import redact
+from content_factory.infra.redact import RedactingFilter, redact
 from content_factory.infra.redis_ops import RedisOps
 
 logger = logging.getLogger(__name__)
+
+LOG_HANDLER_NAME = "cf-worker"
+
+
+def configure_logging() -> None:
+    """Handler próprio para `content_factory.*` (Etapa 0 Task 8.2).
+
+    O CLI do arq só configura o logger `arq`; sem isto os registros do app
+    saem pelo `logging.lastResort` — sem timestamp, sem nível e sem
+    redação. Formato com nível/timestamp + `RedactingFilter` (spec §7).
+    Idempotente. `propagate` fica ligado: o root não tem handler no worker
+    (sem duplicata) e o `caplog` dos testes continua vendo os registros.
+    """
+    app_logger = logging.getLogger("content_factory")
+    if any(h.get_name() == LOG_HANDLER_NAME for h in app_logger.handlers):
+        return
+    handler = logging.StreamHandler()
+    handler.set_name(LOG_HANDLER_NAME)
+    handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s %(message)s"))
+    handler.addFilter(RedactingFilter())
+    app_logger.addHandler(handler)
+    app_logger.setLevel(logging.INFO)
 
 
 def parse_cron_hours(raw: str) -> set[int]:
@@ -528,6 +550,7 @@ async def create_app_deps(settings: Settings) -> AppDeps:
 
 async def startup(ctx: dict[str, Any]) -> None:
     """Injeta deps no `ctx` do arq (hook `on_startup`)."""
+    configure_logging()
     segment = os.getenv("COLLECT_SEGMENT")
     if segment:
         raise RuntimeError(

@@ -1616,3 +1616,32 @@ async def test_campaigns_repo_opens_fresh_session_per_call(
     await wrapper.active_segments()
     assert len(seen) == 2
     assert seen[0] is not seen[1]
+
+
+def test_configure_logging_installs_one_redacting_handler() -> None:
+    """Etapa 0 Task 8.2: o arq só configura o logger `arq` — sem isto, o log
+    de `content_factory.*` sai pelo lastResort, sem nível/timestamp e sem
+    redação. Idempotente (startup pode rodar de novo no mesmo processo)."""
+    from content_factory.infra.redact import RedactingFilter
+
+    w.configure_logging()
+    w.configure_logging()
+    logger = logging.getLogger("content_factory")
+    ours = [h for h in logger.handlers if h.get_name() == w.LOG_HANDLER_NAME]
+    assert len(ours) == 1
+    handler = ours[0]
+    assert any(isinstance(f, RedactingFilter) for f in handler.filters)
+    assert handler.formatter is not None
+    assert handler.formatter._fmt is not None
+    assert "%(levelname)s" in handler.formatter._fmt
+    assert "%(asctime)s" in handler.formatter._fmt
+    assert logger.level == logging.INFO
+
+
+async def test_startup_configures_logging(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[str] = []
+    monkeypatch.setattr(w, "configure_logging", lambda: calls.append("x"))
+    monkeypatch.setenv("COLLECT_SEGMENT", "velas")
+    with pytest.raises(RuntimeError):
+        await w.startup({})
+    assert calls == ["x"]  # antes do guard: até o erro de startup sai formatado

@@ -1,3 +1,4 @@
+import logging
 import os
 from collections.abc import Generator
 
@@ -23,3 +24,14 @@ def _isolate_collector_registry() -> Generator[None]:
     restore({})
     yield
     restore(state)
+
+
+@pytest.fixture(autouse=True)
+def _remove_worker_log_handler() -> Generator[None]:
+    """`configure_logging` muta o logger global `content_factory`: limpa entre testes."""
+    yield
+    logger = logging.getLogger("content_factory")
+    for handler in list(logger.handlers):
+        if handler.get_name() == "cf-worker":
+            logger.removeHandler(handler)
+    logger.setLevel(logging.NOTSET)
