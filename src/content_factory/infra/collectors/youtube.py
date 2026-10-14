@@ -13,27 +13,52 @@ API = "https://www.googleapis.com/youtube/v3"
 DURATION_RE = re.compile(r"PT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?")
 
 
-def _error_reason(response: httpx.Response) -> str:
-    """`error.errors[0].reason` da API (keyInvalid, quotaExceeded…), se legível."""
+# Motivos de erro que são credencial/configuração da chave — ação humana, não
+# cota: viram auth_expired e NÃO abrem o breaker. A API manda o motivo em
+# `error.errors[].reason` (legado: keyInvalid, accessNotConfigured…) ou só em
+# `error.details[].reason` (atual: chave inválida = 400 "badRequest" +
+# API_KEY_INVALID — revisão N-1/N-2, payload real de 2026-10-14).
+_CREDENTIAL_REASONS = frozenset(
+    {
+        "keyInvalid",
+        "keyExpired",
+        "accessNotConfigured",
+        "ipRefererBlocked",
+        "API_KEY_INVALID",
+        "API_KEY_EXPIRED",
+        "SERVICE_DISABLED",
+        "API_KEY_SERVICE_BLOCKED",
+        "API_KEY_HTTP_REFERRER_BLOCKED",
+        "API_KEY_IP_ADDRESS_BLOCKED",
+    }
+)
+
+
+def _reasons_of(entries: Any) -> list[str]:
+    if not isinstance(entries, list):
+        return []
+    out: list[str] = []
+    for entry in cast(list[Any], entries):
+        if isinstance(entry, dict):
+            reason: Any = cast(dict[str, Any], entry).get("reason")
+            if reason:
+                out.append(str(reason))
+    return out
+
+
+def _error_reasons(response: httpx.Response) -> list[str]:
+    """`reason` de `error.errors[]` e `error.details[]`, se o corpo for legível."""
     try:
         payload: Any = response.json()
     except ValueError:
-        return ""
+        return []
     if not isinstance(payload, dict):
-        return ""
-    data = cast(dict[str, Any], payload)
-    error: Any = data.get("error")
+        return []
+    error: Any = cast(dict[str, Any], payload).get("error")
     if not isinstance(error, dict):
-        return ""
-    errors: Any = cast(dict[str, Any], error).get("errors")
-    if not isinstance(errors, list) or not errors:
-        return ""
-    items = cast(list[Any], errors)
-    first: Any = items[0]
-    if not isinstance(first, dict):
-        return ""
-    reason: Any = cast(dict[str, Any], first).get("reason")
-    return str(reason or "")
+        return []
+    err = cast(dict[str, Any], error)
+    return [*_reasons_of(err.get("errors")), *_reasons_of(err.get("details"))]
 
 
 def _duration_seconds(iso: str) -> int | None:
@@ -77,14 +102,17 @@ class YoutubeCollector:
             # redact: a URL de erro carrega a API key na query (`key=`), como
             # o access_token no Instagram (revisão 2026-10-14 A2)
             raise NetworkError(self.platform, redact(str(exc))) from exc
-        # auditoria A-3: só cota é rate_limited; chave reprovada é credencial
-        if _error_reason(r) == "keyInvalid":
-            raise AuthExpired(
-                self.platform, "keyInvalid — YOUTUBE_API_KEY inválida (docs/dev/credentials.md)"
-            )
-        if r.status_code == 403:
-            raise RateLimited(self.platform, "quota ou origem bloqueada")
         if r.status_code >= 400:
+            # corpo só é decodificado no caminho de erro (sucesso decodifica 1x)
+            credential = [x for x in _error_reasons(r) if x in _CREDENTIAL_REASONS]
+            if credential:
+                # auditoria A-3 / revisão N-1/N-2: chave reprovada é credencial
+                raise AuthExpired(
+                    self.platform,
+                    f"{credential[0]} — YOUTUBE_API_KEY recusada (docs/dev/credentials.md)",
+                )
+            if r.status_code == 403:
+                raise RateLimited(self.platform, "quota ou origem bloqueada")
             raise UpstreamChanged(self.platform, f"HTTP {r.status_code}")
         try:
             raw: Any = r.json()
