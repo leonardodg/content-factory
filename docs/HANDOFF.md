@@ -543,11 +543,16 @@ guard-rail, tabela e orquestrador; Fases B–E pendem de decisão do usuário.
    **rotacionar (ação humana)**
 3. Fase de IA (replication/production + renormalização de pesos) e spec de
    segurança TOCTOU — próximos planos, não desta entrega
-4. ~~Worker multi-segmento — troca 3→1~~ **FEITO (2026-10-14)**: worker
-   único no ar (A3 completo), legados removidos. Resta o teste de
-   aceitação: `cf segment load` + `cf research start --weeks 1` pra um 4º
-   segmento SEM reiniciar container e confirmar no próximo tick de
-   `collect_job`/`score_job`/`research_job`
+4. ~~Worker multi-segmento — troca 3→1 + teste de aceitação~~
+   **FEITO (2026-10-14)**: worker único no ar (A3 completo), legados
+   removidos. **Aceitação do 4º segmento (21:22–21:28 UTC, `candles`, sem
+   reiniciar o container):** `cf segment load` (host) + `cf research start
+   --weeks 1` → ticks manuais de `research_job` (5 runs), `collect_job`
+   (2 ticks × 4 coletores) e `score_job` (`ok: true`, 50 scores) todos
+   incluíram o segmento novo dinamicamente; campanha `candles` parada em
+   seguida, de volta a 3 segmentos ativos. Nota: `cf segment load` não
+   funciona de dentro do worker (imagem não copia `segments/`) — rodar no
+   host ou em `cf-python`, como no guide-start.
 5. **Backlog pós-reativação (2026-10-14):** ciclo D em curso (D0 hoje,
    D+3, D+7 com relatórios manuais); depois C1–C3 (relatório diário
    automatizado, coleta só de insights), D1–D2 (alertas/limiares
