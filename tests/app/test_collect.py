@@ -1,4 +1,5 @@
 import asyncio
+import logging
 from collections.abc import Sequence
 from datetime import UTC, datetime, timedelta
 from typing import ClassVar
@@ -280,6 +281,33 @@ async def test_collect_records_discover_and_persist_ms_separately() -> None:
     assert run.persist_ms == 40
 
 
+async def test_collect_run_duration_covers_network_plus_persistence() -> None:
+    """Etapa 0 Task 6: finished_at - started_at == discover_ms + persist_ms.
+
+    started_at é capturado antes do limiter.acquire (abre a fase de rede);
+    finished_at no finally da persistência. Com clock fake que só avança em
+    discover/upsert, o tempo entre fases é zero e a duração volta a ser
+    comparável ao baseline congelado.
+    """
+    clock = _FakeClock()
+    repos = FakeRepos()
+    deps = CollectDeps(
+        collectors=[_TimedCollector("youtube", clock, discover_ms=150)],
+        videos=_TimedVideos(clock, persist_ms=40),
+        segments=repos.segments,
+        runs=repos.runs,
+        limiter=FakeLimiter(),
+        lock=FakeLock(),
+        clock=clock,
+    )
+    out = await collect("candles", ["youtube"], limit=5, deps=deps)
+    assert out.ok is True
+    run = out.runs[0]
+    assert (run.discover_ms, run.persist_ms) == (150, 40)
+    assert run.finished_at is not None
+    assert run.finished_at - run.started_at == timedelta(milliseconds=190)
+
+
 async def test_collect_failure_still_records_discover_ms_without_persist_ms() -> None:
     """discover() que levanta registra o custo da fase de rede; sem persistência."""
     clock = _FakeClock()
@@ -491,7 +519,7 @@ async def test_collect_respects_max_concurrent_discoveries() -> None:
 
 
 class _BoomCollector:
-    """Exceção fora do contrato: não é CollectorError, precisa propagar."""
+    """Exceção fora do contrato: vira run failed, sem cancelar as irmãs."""
 
     platform: ClassVar[str] = "youtube"
 
@@ -499,16 +527,16 @@ class _BoomCollector:
         raise ValueError("boom")
 
 
-async def test_collect_non_collector_error_propagates_and_releases_lock() -> None:
-    """Task 7: ValueError numa plataforma propaga (cancela as irmãs).
+async def test_collect_unexpected_error_becomes_failed_run_and_siblings_persist() -> None:
+    """Etapa 0 Task 4: ValueError numa plataforma vira run failed; irmãs persistem.
 
-    Nada persiste (edge da Task 6: aborta antes da fase de persistência),
-    lock liberado, nenhuma task pendente no loop.
+    Paridade com o research (que já captura Exception por rede): a exceção
+    inesperada não cancela as plataformas irmãs — lock liberado no finally.
     """
-    tracker = ConcurrencyTracker()
     collectors: list[Collector] = [
         _BoomCollector(),
-        TrackedCollector("tiktok", tracker, delay=30.0),
+        FakeCollector("tiktok", n=2),
+        FakeCollector("instagram", n=1),
     ]
     videos = FakeVideos()
     repos = FakeRepos()
@@ -521,13 +549,61 @@ async def test_collect_non_collector_error_propagates_and_releases_lock() -> Non
         limiter=FakeLimiter(),
         lock=lock,
     )
-    before = {id(t) for t in asyncio.all_tasks()}
-    with pytest.raises(ValueError, match="boom"):
-        await collect("candles", ["youtube", "tiktok"], limit=5, deps=deps)
+    out = await collect("candles", ["youtube", "tiktok", "instagram"], limit=5, deps=deps)
+    assert out.ok is False
+    assert out.partial is True
+    boom_run = next(r for r in out.runs if r.collector == "youtube")
+    assert boom_run.status == "failed"
+    assert boom_run.error_code == "internal_error"
+    assert boom_run.failed == 1
+    siblings = [r for r in out.runs if r.collector in {"tiktok", "instagram"}]
+    assert len(siblings) == 2 and all(r.status == "ok" for r in siblings)
+    assert videos.upserts != []
     assert lock.released == ["collect:candles"]
-    assert videos.upserts == []
-    lingering = [t for t in asyncio.all_tasks() if id(t) not in before and not t.done()]
-    assert lingering == []
+
+
+async def test_collect_unexpected_error_logs_cause_with_traceback(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Etapa 0 Task 8.1: o `internal_error` não pode ser mudo.
+
+    `CollectRun` só guarda `error_code` — a causa (tipo, mensagem, traceback)
+    tem de ir para o log, com segmento e plataforma.
+    """
+    repos = FakeRepos()
+    deps = CollectDeps(
+        collectors=[_BoomCollector(), FakeCollector("tiktok", n=1)],
+        videos=FakeVideos(),
+        segments=repos.segments,
+        runs=repos.runs,
+        limiter=FakeLimiter(),
+        lock=FakeLock(),
+    )
+    with caplog.at_level(logging.ERROR, logger="content_factory"):
+        await collect("candles", ["youtube", "tiktok"], limit=5, deps=deps)
+    records = [r for r in caplog.records if r.levelno == logging.ERROR]
+    assert len(records) == 1
+    record = records[0]
+    assert "candles" in record.getMessage() and "youtube" in record.getMessage()
+    assert record.exc_info is not None and isinstance(record.exc_info[1], ValueError)
+
+
+async def test_collect_contract_error_is_not_logged_as_error(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """CollectorError é contrato (vai para `error_code`): sem registro ERROR."""
+    repos = FakeRepos()
+    deps = CollectDeps(
+        collectors=[FakeCollector("youtube", n=1)],
+        videos=FakeVideos(),
+        segments=repos.segments,
+        runs=repos.runs,
+        limiter=FakeLimiter(fail=RateLimited("youtube")),
+        lock=FakeLock(),
+    )
+    with caplog.at_level(logging.ERROR, logger="content_factory"):
+        await collect("candles", ["youtube"], limit=5, deps=deps)
+    assert [r for r in caplog.records if r.levelno == logging.ERROR] == []
 
 
 async def test_collect_external_cancel_releases_lock() -> None:

@@ -14,6 +14,8 @@ jobs:
           --health-interval 5s --health-timeout 5s --health-retries 10
       redis:
         image: redis:7-alpine
+        # sem ports o serviço não é alcançável em localhost (job fora de container)
+        ports: ["6379:6379"]
         options: >-
           --health-cmd "redis-cli ping" --health-interval 5s
           --health-timeout 5s --health-retries 10
@@ -21,6 +23,7 @@ jobs:
       DATABASE_URL: postgresql+psycopg://contentfactory:ci@localhost/contentfactory
       TEST_DATABASE_URL: postgresql+psycopg://contentfactory:ci@localhost/contentfactory
       REDIS_URL: redis://localhost:6379/0
+      TEST_REDIS_URL: redis://localhost:6379/15
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v5

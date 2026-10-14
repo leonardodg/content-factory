@@ -1,8 +1,9 @@
-import asyncio
+import logging
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 
+from content_factory.app.concurrency import PlatformSlots, bounded_gather
 from content_factory.app.ports import (
     Collector,
     CollectRunRepository,
@@ -13,6 +14,8 @@ from content_factory.app.ports import (
 )
 from content_factory.domain.errors import CollectorError
 from content_factory.domain.models import CandidateVideo, CollectRun, SegmentConfig
+
+logger = logging.getLogger(__name__)
 
 
 def _utcnow() -> datetime:
@@ -39,15 +42,23 @@ class CollectDeps:
     # partida para benchmark, não limite seguro universal — a persistência
     # continua sempre sequencial na sessão compartilhada.
     max_concurrent_discoveries: int = 2
+    # Teto de discover() simultâneos POR PLATAFORMA, compartilhado entre
+    # segmentos (Etapa 0 Task 7 — ex.: tiktok=1 serializa as sessões
+    # Playwright no processo). Default vazio = sem teto.
+    platform_slots: PlatformSlots = field(default_factory=PlatformSlots)
 
 
 @dataclass
 class DiscoverResult:
     """Resultado da fase de rede para uma plataforma (Task 6).
 
-    Fronteira da concorrência (Task 7): só CollectorError é capturado aqui —
-    qualquer outra exceção propaga para o try/except por segmento do worker.
-    discover_ms é medido nesta fase e transportado; started_at/finished_at e
+    Fronteira da concorrência (Etapa 0 Task 4): CollectorError E qualquer
+    outra Exception viram `error` aqui — nenhuma exceção esperada escapa
+    para cancelar as irmãs (paridade com o research).     Só cancelamento
+    (BaseException) propaga. Exceção inesperada vira
+    `CollectorError("internal_error", ...)` com o original em `__cause__`.
+    discover_ms é medido nesta fase e transportado; started_at abre esta
+    fase (antes do acquire) e é transportado para a run; finished_at e
     persist_ms são medidos na fase de persistência de collect().
     """
 
@@ -56,6 +67,7 @@ class DiscoverResult:
     error: CollectorError | None
     gate_hits_delta: int
     discover_ms: int | None
+    started_at: datetime
 
 
 @dataclass
@@ -71,45 +83,44 @@ async def _discover_one(
 ) -> DiscoverResult:
     """Fase de rede para uma plataforma: limiter.acquire + discover.
 
-    Devolve DiscoverResult em vez de levantar CollectorError — a fase de
-    persistência decide status/counts/runs. Outras exceções propagam.
+    Devolve DiscoverResult em vez de levantar — a fase de persistência
+    decide status/counts/runs. Exceção fora do contrato vira
+    `internal_error` (defesa em profundidade); só cancelamento propaga.
     gate_hits é lido como delta before/after porque o collector é singleton
     no registry (self.gate_hits acumula entre runs).
     """
+    platform = collector.platform
     gate_hits_before = getattr(collector, "gate_hits", 0)
-    try:
-        await deps.limiter.acquire(collector.platform)
-    except CollectorError as exc:
-        gate_hits_after = getattr(collector, "gate_hits", 0)
+    found: list[CandidateVideo] | None = None
+    error: CollectorError | None = None
+    discover_start: datetime | None = None
+    # Teto por plataforma (Etapa 0 Task 7): a vaga cobre acquire + discover.
+    # started_at é lido DENTRO da vaga (mas antes do acquire) para a duração
+    # não contar espera na fila. Comparar com o baseline por discover_ms +
+    # persist_ms: finished_at sai após a rede de TODAS as irmãs (review).
+    async with deps.platform_slots.slot(platform):
+        started_at = deps.clock()
+        try:
+            await deps.limiter.acquire(platform)
+            discover_start = deps.clock()
+            found = await collector.discover(segment, limit)
+        except CollectorError as exc:
+            error = exc
+        except Exception as exc:
+            # run só guarda error_code: a causa vai para o log (Task 8.1)
+            logger.exception("discover fora do contrato: %s/%s", segment.slug, platform)
+            error = CollectorError("internal_error", platform, str(exc))
+            error.__cause__ = exc
+        # discover_ms só existe se o acquire passou (falha no limiter = None)
+        discover_ms = None if discover_start is None else _ms_between(discover_start, deps.clock())
         return DiscoverResult(
-            platform=collector.platform,
-            found=None,
-            error=exc,
-            gate_hits_delta=gate_hits_after - gate_hits_before,
-            discover_ms=None,
-        )
-    discover_start = deps.clock()
-    try:
-        found = await collector.discover(segment, limit)
-    except CollectorError as exc:
-        discover_ms = _ms_between(discover_start, deps.clock())
-        gate_hits_after = getattr(collector, "gate_hits", 0)
-        return DiscoverResult(
-            platform=collector.platform,
-            found=None,
-            error=exc,
-            gate_hits_delta=gate_hits_after - gate_hits_before,
+            platform=platform,
+            found=found,  # só atribuído no sucesso: erro ⇒ None
+            error=error,
+            gate_hits_delta=getattr(collector, "gate_hits", 0) - gate_hits_before,
             discover_ms=discover_ms,
+            started_at=started_at,
         )
-    discover_ms = _ms_between(discover_start, deps.clock())
-    gate_hits_after = getattr(collector, "gate_hits", 0)
-    return DiscoverResult(
-        platform=collector.platform,
-        found=found,
-        error=None,
-        gate_hits_delta=gate_hits_after - gate_hits_before,
-        discover_ms=discover_ms,
-    )
 
 
 async def collect(
@@ -130,39 +141,22 @@ async def collect(
         }
         runs: list[CollectRun] = []
         errors = 0
-        # Fase de rede (Task 7): TaskGroup + semáforo limitado. Cada task
-        # captura CollectorError na PRÓPRIA fronteira (dentro de
-        # _discover_one, que devolve DiscoverResult) — nenhuma exceção
-        # esperada escapa, para não cancelar as irmãs. Exceção
-        # não-CollectorError PROPAGA: cancela as irmãs e aborta antes de
-        # persistir (edge da Task 6 — worker faz rollback, estado final
-        # idêntico ao sequencial). Resultados indexados por posição: a
-        # persistência segue a ordem de deps.collectors, não a de término.
+        # Fase de rede (Task 7 + Etapa 0 Task 4 + Etapa 2 Task 12):
+        # bounded_gather = TaskGroup + semáforo, resultado na ordem de
+        # deps.collectors (não na de término). _discover_one captura TUDO na
+        # própria fronteira — nenhuma exceção esperada escapa para cancelar
+        # as irmãs; só cancelamento externo aborta o grupo.
         wanted = [c for c in deps.collectors if c.platform in platforms]
-        slots: dict[int, DiscoverResult] = {}
-        semaphore = asyncio.Semaphore(max(1, deps.max_concurrent_discoveries))
-
-        async def _run(index: int, collector: Collector) -> None:
-            async with semaphore:
-                slots[index] = await _discover_one(collector, segment, limit, deps)
-
-        try:
-            async with asyncio.TaskGroup() as task_group:
-                for index, collector in enumerate(wanted):
-                    task_group.create_task(_run(index, collector))
-        except ExceptionGroup as group:
-            # Contrato pré-concorrência: erro isolado de 1 plataforma sobe
-            # nu, como no caminho sequencial (o worker registra str(exc) no
-            # envelope do segmento). Grupo com 2+ falhas distintas propaga
-            # como ExceptionGroup — caso sem equivalente sequencial.
-            if len(group.exceptions) == 1:
-                raise group.exceptions[0] from None
-            raise
-        discoveries: list[DiscoverResult] = [slots[index] for index in range(len(wanted))]
+        discoveries = await bounded_gather(
+            wanted,
+            deps.max_concurrent_discoveries,
+            lambda collector: _discover_one(collector, segment, limit, deps),
+        )
         # Fase de persistência (sempre sequencial: mesma sessão Postgres).
         for result in discoveries:
-            started = deps.clock()
-            run = CollectRun(collector=result.platform, segment_id=segment.id, started_at=started)
+            run = CollectRun(
+                collector=result.platform, segment_id=segment.id, started_at=result.started_at
+            )
             run.discover_ms = result.discover_ms
             try:
                 if result.error is not None:

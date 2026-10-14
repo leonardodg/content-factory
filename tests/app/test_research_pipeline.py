@@ -1,6 +1,7 @@
 import asyncio
+import logging
 from collections.abc import Sequence
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import ClassVar
 
 import pytest
@@ -26,6 +27,7 @@ from content_factory.domain.models import (
     Segment,
     SegmentConfig,
     TrendPoint,
+    UpsertStats,
 )
 
 
@@ -147,6 +149,75 @@ async def test_run_research_cycle_releases_lock_even_on_success() -> None:
     deps, _, _ = _make_deps(lock=lock)
     await run_research_cycle("candles", DepthConfig(), deps)
     assert lock.released == ["research:candles"]
+
+
+class _ManualClock:
+    """Relógio manual: só avança quando o teste manda."""
+
+    def __init__(self) -> None:
+        self._now = datetime(2026, 10, 13, 12, 0, tzinfo=UTC)
+
+    def __call__(self) -> datetime:
+        return self._now
+
+    def advance_ms(self, ms: int) -> None:
+        self._now += timedelta(milliseconds=ms)
+
+
+class _TimedSocial:
+    platform: ClassVar[str] = "instagram"
+
+    def __init__(self, clock: _ManualClock, ms: int) -> None:
+        self._clock = clock
+        self._ms = ms
+
+    async def discover_by_keywords(
+        self, keywords: list[str], hashtags: list[str], depth: int
+    ) -> list[CandidateVideo]:
+        _ = hashtags, depth
+        self._clock.advance_ms(self._ms)
+        return [
+            CandidateVideo(
+                platform="instagram",
+                platform_video_id="ig-1",
+                url="https://example.invalid/ig-1",
+                creator_handle="stub",
+                title="reel",
+            )
+        ]
+
+
+@pytest.mark.asyncio
+async def test_research_run_duration_covers_network_plus_persistence() -> None:
+    """Etapa 0 Task 6: started_at abre a fase de rede (antes do acquire).
+
+    Com clock fake que só avança em discover_by_keywords, a duração cobre a
+    rede — comparável ao baseline congelado, como em collect().
+    """
+    clock = _ManualClock()
+    repos = FakeRepos()
+    runs = FakeRuns()
+    deps = ResearchDeps(
+        web=_FakeWeb(),
+        trends=_FakeTrends(),
+        socials={"instagram": _TimedSocial(clock, 200)},
+        signals=_FakeSignalRepo(),
+        trend_observations=FakeTrendObservations(),
+        segments=_FakeSegmentsWithKeywords(),
+        videos=repos.videos,
+        runs=runs,
+        lock=FakeLock(),
+        limiter=FakeLimiter(),
+        guard=FanoutGuard(DepthConfig()),
+        clock=clock,
+    )
+    out = await run_research_cycle("candles", DepthConfig(), deps)
+    assert out.ok is True
+    social_runs = [r for r in runs.recorded if r.collector == "research:instagram"]
+    assert len(social_runs) == 1
+    run = social_runs[0]
+    assert run.finished_at is not None
+    assert run.finished_at - run.started_at == timedelta(milliseconds=200)
 
 
 @pytest.mark.asyncio
@@ -678,6 +749,79 @@ async def test_research_unexpected_social_error_becomes_failed_run_and_continues
     assert by_collector["research:tiktok"].error_code == "internal_error"
     assert by_collector["research:tiktok"].failed == 1
     assert by_collector["research:instagram"].status == "ok"
+
+
+def _research_deps_with(
+    socials: dict[str, SocialDiscoverer], repos: FakeRepos | None = None
+) -> ResearchDeps:
+    repos = repos or FakeRepos()
+    return ResearchDeps(
+        web=_FakeWeb(),
+        trends=_FakeTrends(),
+        socials=socials,
+        signals=_FakeSignalRepo(),
+        trend_observations=FakeTrendObservations(),
+        segments=_SegmentsWithPlatforms(list(socials)),
+        videos=repos.videos,
+        runs=repos.runs,
+        lock=FakeLock(),
+        limiter=FakeLimiter(),
+        guard=FanoutGuard(DepthConfig()),
+    )
+
+
+async def test_research_unexpected_social_error_logs_cause(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Etapa 0 Task 8.1: exceção fora do contrato vai para o log com traceback."""
+    tracker = ConcurrencyTracker()
+    deps = _research_deps_with(
+        {"tiktok": _tracked_social("tiktok", tracker, [], None, 0.0, ValueError("boom"))}
+    )
+    with caplog.at_level(logging.ERROR, logger="content_factory"):
+        await run_research_cycle("candles", DepthConfig(), deps)
+    records = [r for r in caplog.records if r.levelno == logging.ERROR]
+    assert len(records) == 1
+    assert "candles" in records[0].getMessage() and "tiktok" in records[0].getMessage()
+    assert records[0].exc_info is not None and isinstance(records[0].exc_info[1], ValueError)
+
+
+async def test_research_contract_social_error_is_not_logged_as_error(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    tracker = ConcurrencyTracker()
+    blocked = CollectorError("blocked", "tiktok", "gate")
+    deps = _research_deps_with(
+        {"tiktok": _tracked_social("tiktok", tracker, [], None, 0.0, blocked)}
+    )
+    with caplog.at_level(logging.ERROR, logger="content_factory"):
+        await run_research_cycle("candles", DepthConfig(), deps)
+    assert [r for r in caplog.records if r.levelno == logging.ERROR] == []
+
+
+class _BoomVideos(FakeVideos):
+    async def upsert_candidates(
+        self, segment_id: int, source: str, candidates: Sequence[CandidateVideo]
+    ) -> UpsertStats:
+        raise KeyError("boom-upsert")
+
+
+async def test_research_unexpected_upsert_error_logs_cause(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    tracker = ConcurrencyTracker()
+    cand = CandidateVideo(
+        platform="tiktok", platform_video_id="t1", url="https://t.invalid/1", creator_handle="u"
+    )
+    repos = FakeRepos()
+    repos.videos = _BoomVideos()
+    deps = _research_deps_with({"tiktok": _tracked_social("tiktok", tracker, [], [cand])}, repos)
+    with caplog.at_level(logging.ERROR, logger="content_factory"):
+        out = await run_research_cycle("candles", DepthConfig(), deps)
+    assert out.counts.get("tiktok_failed") == 1
+    records = [r for r in caplog.records if r.levelno == logging.ERROR]
+    assert len(records) == 1 and "tiktok" in records[0].getMessage()
+    assert records[0].exc_info is not None and isinstance(records[0].exc_info[1], KeyError)
 
 
 @pytest.mark.asyncio

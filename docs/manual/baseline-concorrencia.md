@@ -9,6 +9,16 @@ As colunas `discover_ms`/`persist_ms` (Task 4, migração 0009) estão **nulas**
 para todo este período — esperado e documentado. A duração por run abaixo é
 `finished_at - started_at` (rede + persistência somadas).
 
+> **Como comparar runs novas com este baseline (review 2026-10-14):** use
+> **`discover_ms + persist_ms`**, não `finished_at - started_at`. Com as
+> plataformas concorrentes, `started_at` abre na fase de rede, mas
+> `finished_at` só é gravado na fase de persistência, que começa depois que
+> TODAS as plataformas do segmento terminam a rede. A diferença inclui
+> esperar a irmã mais lenta (ex.: youtube 2 s esperando tiktok 60 s). No
+> baseline (sequencial) as duas medidas coincidem; nas runs novas só a soma
+> `discover_ms + persist_ms` mede o trabalho da plataforma.
+> `finished_at - started_at` continua útil como duração de parede do segmento.
+
 ## Janela
 
 | Segmento | Primeira run | Última run |

@@ -99,9 +99,21 @@ O que procurar:
   normalmente e a sessão é commitada — auditada em `collect_runs` com
   `status`/`error_code` (queries em [Análise](analise.md));
 - **exceção não tratada no job** (bug): capturada POR SEGMENTO dentro da task
-  do TaskGroup e registrada no envelope (`segments: {slug: {ok: false, error}}`)
-  — a UoW do segmento reverte sozinha (`session_scope`), as irmãs commitam
-  normal; o que sobra é o traceback no log do worker;
+  do TaskGroup e registrada no envelope
+  (`segments: {slug: {ok: false, error, error_type}}`) — a UoW do segmento
+  reverte sozinha (`session_scope`), as irmãs commitam normal. O arq marca
+  o job como concluído (`●`) mesmo com `ok: false`: o sinal de falha é o
+  registro `ERROR` com traceback no log (`segmento <slug> falhou em
+  <collect|score|research>`) + o envelope — não o status do job. Os logs
+  de `content_factory.*` saem no formato
+  `<data hora> ERROR <logger> <mensagem>`, com cookies/tokens mascarados
+  (`***`, `RedactingFilter`); `grep ' ERROR content_factory'` acha todos;
+- **coletor com exceção fora do contrato** (bug, não `CollectorError`): a
+  run fica `failed` com `error_code = internal_error` e as plataformas
+  irmãs seguem. A causa NÃO vai para o banco (`collect_runs` só guarda o
+  código); ela fica no log como `ERROR … discover fora do contrato:
+  <slug>/<plataforma>` (ou `persistência fora do contrato` no research),
+  com traceback;
 - `RuntimeError` no startup (guard multi-segmento): `COLLECT_SEGMENT` está
   definido no ambiente — a imagem nova não roda sob o compose antigo de 3
   workers. Remova a env (troca pelo compose de worker único, só após
@@ -149,6 +161,7 @@ do processo — trocar exige restart do worker):
 | `COLLECT_CRON_HOURS` | `08,20` | horas do collect em BRT; valor inválido cai no default |
 | `COLLECT_MAX_CONCURRENCY` | `2` | teto de `discover()` simultâneos por collect (Task 7); ponto de partida para benchmark, não limite seguro universal; valor inválido ou < 1 cai em `2`/`1` |
 | `WORKER_MAX_SEGMENTS` | `3` | teto de segmentos simultâneos por job (Task 11); lido a cada tick, trocar não exige restart; valor inválido ou < 1 cai em `3`/`1` |
+| `PLATFORM_MAX_CONCURRENCY` | `tiktok=1` | teto de discovers simultâneos **por plataforma no processo**, entre segmentos (`plataforma=limite,…`); a env é SOMADA ao default, nunca remove o teto do TikTok; entrada inválida ou < 1 é ignorada; vale do startup (exige restart) |
 
 Onde mudar: bloco `environment:` do serviço `worker` em
 `.devcontainer/docker-compose.yml` (ou `.devcontainer/env/app.env`, que os

@@ -5,6 +5,56 @@
 
 ## 🔄 EM ANDAMENTO
 
+_**Concorrência pós-PR #8: review + correções na `main` (2026-10-14).**
+Plano: `docs/ai-plans/2026-10-14-content-factory-concorrencia-review-fixes.md`.
+Tudo foi num PR único (branch `refactor/concorrencia-etapa2`):
+- **Etapa 0** (T1–T8 + 8.1/8.2), pré-requisito da troca 3→1:
+  - lock com posse por UoW, testado contra Redis real (o 🔴 do review);
+  - erros do DDGS traduzidos para o contrato;
+  - exceção fora do contrato no coletor vira run `failed`/`internal_error`
+    com traceback no log, sem cancelar as irmãs;
+  - log por segmento com `error_type`;
+  - teto por plataforma `tiktok=1` no processo;
+  - integração da UoW concorrente;
+  - log redigido com nível e timestamp.
+- **Etapa 2** (T12–T16), refactor:
+  - `bounded_gather`;
+  - bundle fora de `ports.py` e UoW só com commit/rollback;
+  - `SharedDeps` sem sessão de startup nem templates;
+  - engine via `create_engine_and_factory`;
+  - `infra/queue/composition.py`.
+- **`/code-review` final:** 9 dos 10 achados procediam; 8 foram corrigidos
+  (`cc0e1f5`):
+  - CLI com log redigido;
+  - ratelimit do ddgs reembrulhado;
+  - dispose do engine;
+  - filtro de log que não levanta;
+  - env somada ao `tiktok=1`;
+  - métrica de duração;
+  - docstring;
+  - DRY.
+
+  O 9º (research após erro de banco) é pré-existente e foi para a Etapa 1.
+  O 10º não procedia.
+- **Comparação com o baseline:** usar `discover_ms + persist_ms`, não
+  `finished_at - started_at`. Com plataformas concorrentes, `finished_at`
+  inclui a espera pelas irmãs (ver `docs/manual/baseline-concorrencia.md`).
+- **A4 mantido de propósito.** A ordem semáforo do segmento → vaga da
+  plataforma fica; inverter deixaria ocioso o gargalo `tiktok=1`.
+- **Gates:** 322 passed com Postgres/Redis descartáveis (`cf-test-pg` /
+  `cf-test-redis`, 0 skip). ruff, pyright, `alembic check`, bandit,
+  pip-audit, `mkdocs --strict` e privacidade passam.
+- **Os 3 workers do experimento NÃO foram tocados:** seguem na imagem
+  pré-merge até 2026-10-19._
+
+_Restart do S.O. em 2026-10-13 ~21:49 UTC: os 3 `cf-worker-*`, Postgres e
+Redis voltaram sozinhos (`unless-stopped`) na MESMA imagem pré-merge
+(`active_segments` = 0 ocorrências conferido) — sem triplicação, nenhum
+horário de cron perdido. `cf-python` (CLI, `restart=no`) ficou parado:
+`docker start cf-python` quando precisar. `research_job` falhando nos 3
+segmentos com Google Trends HTTP 400 (`UpstreamChanged`) — pendência
+conhecida da Fase H._
+
 _Experimento de 7 dias em curso (até **2026-10-19**): 3 containers na imagem
 pré-concorrência — não fazer `--build`/restart neles; a troca 3 workers → 1
 worker único (`docker-compose.multi-segmento.yml`, já na main) SÓ após o
@@ -69,9 +119,11 @@ medição com rollback confirmado).
   página [fluxos da pipeline](diagram/fluxos.md) (cron, jobs, UoW, CLI,
   Redis) · manual atualizado (`fluxo-busca`, `operacao`, `analise`,
   `agentes`, `index`, `experimento-7-dias`, `anti-ban`, arquitetura)
-- [x] **Pendente pós-2026-10-19**: swap 3 workers → 1 (procedimento em
+- [ ] **Pendente pós-2026-10-19**: swap 3 workers → 1 (procedimento em
   `docs/manual/experimento-7-dias.md` § Pós-2026-10-19; exportar dados
-  antes de parar os containers)
+  antes de parar os containers). A Etapa 0 do plano
+  `2026-10-14-content-factory-concorrencia-review-fixes.md`, que bloqueava
+  o swap, já está na `main` (2026-10-14). O swap agora depende só da data.
 
 ### Worker multi-segmento dinâmico (2026-10-12)
 
@@ -392,6 +444,17 @@ guard-rail, tabela e orquestrador; Fases B–E pendem de decisão do usuário.
 
 ## ⛔ O que falta (próximos passos aprovados)
 
+0. **Concorrência: Etapa 1 do plano de review** (pode vir após
+   2026-10-19):
+   - T9: `gate_hits` por chamada (ContextVar);
+   - T10: breaker de `web_suggest`/`trends` por tempo;
+   - T11: falha de lote do score propaga;
+   - pendente do `/code-review`: a persistência do research precisa de
+     savepoint por plataforma, porque um erro de banco no upsert hoje deixa
+     a sessão em `PendingRollbackError` e derruba o segmento.
+
+   Etapas 0 e 2 já estão na `main`. Integração sempre em Postgres/Redis
+   descartáveis, nunca nos do experimento.
 1. **Issues pós-merge** (backlog da REVISÃO §6 — #1 mascaramento/finally já
    corrigido pelo savepoint; PR #3 merged `7d5d295`): lock token (#2 alta),
    INCR+EXPIRE (#3), detalhe de erro do score (#4) — **deferrals do collector

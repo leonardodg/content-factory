@@ -5,6 +5,13 @@ valor do lock; `release` só apaga quando o valor ainda é o token — via scrip
 Lua atômico. Sem isso, se o TTL do dono A expirar e B readquirir o mesmo lock,
 o `release` tardio de A apagaria o lock de B e dois processos coletariam o
 mesmo segmento. `GET` + `DEL` separados não são atômicos — por isso o Lua.
+
+Uma instância = um dono por chave (uma instância por unidade de trabalho):
+`acquire_once` numa chave que esta instância já possui levanta `RuntimeError`
+em vez de sobrescrever o token — sobrescrever faria o `release` tardio desta
+instância apagar o lock do novo dono. Segmentos concorrentes usam instâncias
+distintas sobre o mesmo cliente Redis (o token mora na instância, não no
+cliente).
 """
 
 import secrets
@@ -28,6 +35,10 @@ class RedisLock:
         self._tokens: dict[str, str] = {}
 
     async def acquire_once(self, key: str) -> bool:
+        if key in self._tokens:
+            raise RuntimeError(
+                f"RedisLock é de dono único por chave: {key!r} já pertence a esta instância"
+            )
         token = secrets.token_hex(16)
         acquired = bool(await self._client.set(key, token, nx=True, px=self._ttl_s * 1000))
         if acquired:

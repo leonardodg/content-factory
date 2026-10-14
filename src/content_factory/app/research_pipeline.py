@@ -1,7 +1,9 @@
-import asyncio
+import logging
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 
+from content_factory.app.concurrency import PlatformSlots, bounded_gather
 from content_factory.app.ports import (
     CollectRunRepository,
     KeywordExpander,
@@ -14,8 +16,15 @@ from content_factory.app.ports import (
     TrendsProvider,
     VideoRepository,
 )
+from content_factory.domain.errors import CollectorError
 from content_factory.domain.fanout_guard import FanoutGuard
 from content_factory.domain.models import CandidateVideo, CollectRun, DepthConfig, KeywordSignal
+
+logger = logging.getLogger(__name__)
+
+
+def _utcnow() -> datetime:
+    return datetime.now(UTC)
 
 
 @dataclass
@@ -39,6 +48,12 @@ class ResearchDeps:
     # @dataclass como CollectDeps, então o default mantém as chamadas
     # existentes (worker/testes) funcionando sem mudança.
     max_concurrent_discoveries: int = 2
+    # Mesmo padrão de CollectDeps: clock injetável, default = agora em UTC —
+    # chamadas existentes (worker/CLI) continuam funcionando sem mudança.
+    clock: Callable[[], datetime] = field(default_factory=lambda: _utcnow)
+    # Teto de discover_by_keywords() simultâneos POR PLATAFORMA, compartilhado
+    # entre segmentos (Etapa 0 Task 7). Default vazio = sem teto.
+    platform_slots: PlatformSlots = field(default_factory=PlatformSlots)
 
 
 @dataclass
@@ -49,17 +64,20 @@ class SocialDiscoverResult:
     CollectorError como em collect) — preserva o `except Exception` do loop
     sequencial, onde erro de 1 rede vira CollectRun failed sem abortar as
     irmãs. Cancelamento (BaseException) continua propagando.
-    gate_hits_delta é medido nesta fase e transportado; started_at/
-    finished_at são medidos na fase de persistência, como em collect().
+    gate_hits_delta é medido nesta fase e transportado; started_at abre
+    esta fase (antes do acquire) e é transportado para a run; finished_at
+    é medido na fase de persistência, como em collect().
     """
 
     platform: str
     candidates: list[CandidateVideo] | None
     error: Exception | None
     gate_hits_delta: int
+    started_at: datetime
 
 
 async def _discover_social_one(
+    segment_slug: str,
     platform: str,
     discoverer: SocialDiscoverer,
     keywords: list[str],
@@ -73,24 +91,26 @@ async def _discover_social_one(
     (self.gate_hits acumula entre runs).
     """
     gate_hits_before = getattr(discoverer, "gate_hits", 0)
-    try:
-        await deps.limiter.acquire(platform)
-        candidates = await discoverer.discover_by_keywords(keywords, [], 1)
-    except Exception as exc:
-        gate_hits_after = getattr(discoverer, "gate_hits", 0)
+    candidates: list[CandidateVideo] | None = None
+    error: Exception | None = None
+    # Teto por plataforma (Etapa 0 Task 7): a vaga cobre acquire + discover.
+    async with deps.platform_slots.slot(platform):
+        started_at = deps.clock()
+        try:
+            await deps.limiter.acquire(platform)
+            candidates = await discoverer.discover_by_keywords(keywords, [], 1)
+        except Exception as exc:
+            if not isinstance(exc, CollectorError):
+                # run só guarda error_code: a causa vai para o log (Task 8.1)
+                logger.exception("discover fora do contrato: %s/%s", segment_slug, platform)
+            error = exc
         return SocialDiscoverResult(
             platform=platform,
-            candidates=None,
-            error=exc,
-            gate_hits_delta=gate_hits_after - gate_hits_before,
+            candidates=candidates,
+            error=error,
+            gate_hits_delta=getattr(discoverer, "gate_hits", 0) - gate_hits_before,
+            started_at=started_at,
         )
-    gate_hits_after = getattr(discoverer, "gate_hits", 0)
-    return SocialDiscoverResult(
-        platform=platform,
-        candidates=candidates,
-        error=None,
-        gate_hits_delta=gate_hits_after - gate_hits_before,
-    )
 
 
 @dataclass
@@ -143,54 +163,36 @@ async def run_research_cycle(
         counts["signals_saved"] = await deps.signals.upsert_many(segment.id, all_signals)
 
         keywords_for_social = [s.keyword for s in all_signals]
-        # Fase de rede (Task 8): TaskGroup + semáforo limitado, mesmo padrão
-        # da Task 7 em collect(). Cada task captura Exception na PRÓPRIA
-        # fronteira (dentro de _discover_social_one, que devolve
-        # SocialDiscoverResult) — nenhum erro de rede escapa, para não
-        # cancelar as irmãs. O FanoutGuard NÃO é consultado aqui dentro:
-        # admit/truncate já aconteceram acima (seeds, web, trends), ANTES
-        # de agendar as tasks — o guard muta `_seen`/`_visited_count` e não
-        # é task-safe; consultá-lo sob concorrência corromperia o dedupe.
-        # Resultados indexados por posição: a persistência segue a ordem de
-        # deps.socials, não a de término.
+        # Fase de rede (Task 8 + Etapa 2 Task 12): bounded_gather, mesmo
+        # padrão de collect(). Cada task captura Exception na PRÓPRIA
+        # fronteira (_discover_social_one devolve SocialDiscoverResult) —
+        # nenhum erro de rede cancela as irmãs. O FanoutGuard NÃO é
+        # consultado aqui dentro: admit/truncate já aconteceram acima (seeds,
+        # web, trends), ANTES de agendar as tasks — o guard muta
+        # `_seen`/`_visited_count` e não é task-safe. Resultado na ordem de
+        # deps.socials, não na de término.
         wanted: list[tuple[str, SocialDiscoverer]] = [
             (platform, discoverer)
             for platform, discoverer in deps.socials.items()
             if platform in segment.platforms
         ]
-        slots: dict[int, SocialDiscoverResult] = {}
-        semaphore = asyncio.Semaphore(max(1, deps.max_concurrent_discoveries))
-
-        async def _run(index: int, platform: str, discoverer: SocialDiscoverer) -> None:
-            async with semaphore:
-                slots[index] = await _discover_social_one(
-                    platform, discoverer, keywords_for_social, deps
-                )
-
-        try:
-            async with asyncio.TaskGroup() as task_group:
-                for index, (platform, discoverer) in enumerate(wanted):
-                    task_group.create_task(_run(index, platform, discoverer))
-        except ExceptionGroup as group:
-            # Paridade com collect(): erro isolado de 1 rede sobe nu, como
-            # no caminho sequencial (o worker registra str(exc) no envelope
-            # do segmento). Inalcançável na prática — a fronteira da task
-            # captura Exception —, mas mantém o contrato se a fronteira for
-            # estreitada no futuro. Grupo com 2+ falhas distintas propaga
-            # como ExceptionGroup — caso sem equivalente sequencial.
-            if len(group.exceptions) == 1:
-                raise group.exceptions[0] from None
-            raise
-        discoveries: list[SocialDiscoverResult] = [slots[index] for index in range(len(wanted))]
+        discoveries = await bounded_gather(
+            wanted,
+            deps.max_concurrent_discoveries,
+            lambda pair: _discover_social_one(
+                segment_slug, pair[0], pair[1], keywords_for_social, deps
+            ),
+        )
         # Fase de persistência (sempre sequencial: mesma sessão Postgres).
         social_found = social_inserted = social_updated = social_skipped = 0
         social_platforms_attempted = len(discoveries)
         social_platform_errors = 0
         for result in discoveries:
             platform = result.platform
-            started = datetime.now(UTC)
             run = CollectRun(
-                collector=f"research:{platform}", segment_id=segment.id, started_at=started
+                collector=f"research:{platform}",
+                segment_id=segment.id,
+                started_at=result.started_at,
             )
             try:
                 if result.error is not None:
@@ -215,6 +217,10 @@ async def run_research_cycle(
                             segment.id, platform, result.candidates
                         )
                     except Exception as exc:
+                        if not isinstance(exc, CollectorError):
+                            logger.exception(
+                                "persistência fora do contrato: %s/%s", segment.slug, platform
+                            )
                         run.status = "failed"
                         run.error_code = getattr(exc, "code", "internal_error")
                         run.failed = 1
@@ -239,7 +245,7 @@ async def run_research_cycle(
                 # própria (gate #10) do Instagram.
                 if result.gate_hits_delta:
                     counts[f"{platform}_gate_hits"] = result.gate_hits_delta
-                run.finished_at = datetime.now(UTC)
+                run.finished_at = deps.clock()
                 await deps.runs.record(run)
         counts["social_found"] = social_found
         counts["social_inserted"] = social_inserted

@@ -1,11 +1,9 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
-from contextlib import AbstractAsyncContextManager
 from dataclasses import dataclass
 from datetime import datetime
-from types import TracebackType
-from typing import TYPE_CHECKING, ClassVar, Protocol, Self
+from typing import ClassVar, Protocol
 
 from content_factory.domain.models import (
     CandidateVideo,
@@ -20,58 +18,18 @@ from content_factory.domain.models import (
     VideoSnapshot,
 )
 
-if TYPE_CHECKING:
-    from content_factory.app.collect import CollectDeps
-    from content_factory.app.research_pipeline import ResearchDeps
-    from content_factory.app.score import ScoreDeps
-
 
 class UnitOfWork(Protocol):
-    """Sessão isolada por unidade de trabalho: 1 segmento = 1 UoW = 1 transação.
+    """Transação de 1 unidade de trabalho: 1 segmento = 1 UoW = 1 transação.
 
     O engine é compartilhado (task-safe); a sessão nunca é (AsyncSession não
-    é task-safe). Implementada por `infra.db.base.SessionUnitOfWork`. Na
-    Task 10 os jobs ainda abrem 1 UoW por segmento em loop sequencial; a
-    Task 11 executa as UoWs sob `TaskGroup`.
+    é task-safe). Implementada por `infra.db.base.SessionUnitOfWork`. Só
+    `commit`/`rollback` (ISP, Etapa 2 Task 13): o escopo — abrir, reverter
+    em exceção e fechar — é de `infra.db.base.session_scope`.
     """
 
-    async def __aenter__(self) -> Self: ...
-    async def __aexit__(
-        self,
-        exc_type: type[BaseException] | None,
-        exc: BaseException | None,
-        tb: TracebackType | None,
-    ) -> bool | None: ...
     async def commit(self) -> None: ...
     async def rollback(self) -> None: ...
-
-
-@dataclass
-class SegmentDepsBundle:
-    """Deps com escopo de 1 segmento, nascidas da mesma UoW (Task 10).
-
-    Repositórios (`collect`/`score`/`research`) ligam a sessão da UoW;
-    o resto (collectors, limiter, lock, providers) continua compartilhado.
-    O caller commita via `uow` (1 commit por segmento, no job).
-    """
-
-    uow: UnitOfWork
-    collect: CollectDeps
-    score: ScoreDeps
-    research: ResearchDeps
-
-
-class SegmentDepsFactory(Protocol):
-    """Fábrica de bundles por segmento a partir de UoWs próprias (Task 10/11).
-
-    Implementada por `AppDeps` (worker). Cada chamada abre uma UoW própria;
-    `async with factory.create_segment_deps(segment) as bundle` delimita a
-    transação do segmento.
-    """
-
-    def create_segment_deps(
-        self, segment: Segment
-    ) -> AbstractAsyncContextManager[SegmentDepsBundle]: ...
 
 
 class Collector(Protocol):
