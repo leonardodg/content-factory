@@ -24,4 +24,5 @@ services:
     environment:
       DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-contentfactory}:${POSTGRES_PASSWORD:-localdev}@postgres:5432/${POSTGRES_DB:-contentfactory}
       REDIS_URL: redis://redis:6379/0
+      COLLECT_PLATFORMS: ""  # vazio = usa segment.platforms (inclui tiktok)
     profiles: ["worker-multi"]
