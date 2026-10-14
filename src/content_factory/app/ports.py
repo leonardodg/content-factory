@@ -51,7 +51,10 @@ class SegmentDepsBundle:
     """Deps com escopo de 1 segmento, nascidas da mesma UoW (Task 10).
 
     Repositórios (`collect`/`score`/`research`) ligam a sessão da UoW;
-    o resto (collectors, limiter, lock, providers) continua compartilhado.
+    o resto (collectors, limiter, providers, cliente Redis) continua
+    compartilhado — mas o `lock` é uma instância nova por bundle (o token de
+    posse mora na instância; compartilhar a instância entre segmentos faria o
+    release tardio de um apagar o lock do outro).
     O caller commita via `uow` (1 commit por segmento, no job).
     """
 

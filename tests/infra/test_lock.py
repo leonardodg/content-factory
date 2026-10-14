@@ -1,12 +1,16 @@
+import pytest
+
 from content_factory.infra.lock import RedisLock
 from tests.stubs import FakeRedis
 
 
-async def test_lock_is_exclusive_until_released() -> None:
+async def test_lock_same_instance_reacquire_raises_until_released() -> None:
+    """Uma instância = um dono por chave: reaquisição sem release levanta."""
     client = FakeRedis()
     lock = RedisLock(client)
     assert await lock.acquire_once("collect:candles") is True
-    assert await lock.acquire_once("collect:candles") is False
+    with pytest.raises(RuntimeError, match="dono único"):
+        await lock.acquire_once("collect:candles")
     await lock.release("collect:candles")
     assert await lock.acquire_once("collect:candles") is True
 

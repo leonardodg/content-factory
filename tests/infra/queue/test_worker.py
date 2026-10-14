@@ -1056,6 +1056,63 @@ async def test_create_segment_deps_builds_per_segment_bundle(
     await deps.close()
 
 
+async def test_segment_bundles_get_distinct_lock_instances_over_shared_client(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Etapa 0 Task 2: cada bundle tem seu RedisLock; o cliente é compartilhado.
+
+    Topologia pós-fix (uma instância por segmento sobre o mesmo
+    `lock_client`): o token mora na instância, então o release tardio de um
+    segmento nunca apaga o lock do outro.
+    """
+    from contextlib import asynccontextmanager
+
+    import content_factory.infra.collectors as collectors_mod
+    import content_factory.infra.db.base as db_base
+    import content_factory.infra.redis_ops as redis_ops
+    from content_factory.config import Settings
+
+    @asynccontextmanager
+    async def _session() -> AsyncGenerator[_FakeSession]:
+        yield _FakeSession()
+
+    @asynccontextmanager
+    async def _redis(_url: str) -> AsyncGenerator[Any]:
+        yield object()
+
+    def _factory(_settings: Settings) -> Any:
+        return _session
+
+    def _register(_settings: Settings) -> None:
+        pass
+
+    class _Registry:
+        def snapshot(self) -> list[str]:
+            return []
+
+        def resolve(self, names: list[str]) -> list[object]:
+            return []
+
+    monkeypatch.setattr(db_base, "get_session_factory", _factory)
+    monkeypatch.setattr(redis_ops, "redis_client", _redis)
+    monkeypatch.setattr(collectors_mod, "register_defaults", _register)
+    monkeypatch.setattr(collectors_mod, "registry", _Registry())
+
+    deps = await w.create_app_deps(Settings())
+    seg_a = Segment(id=1, slug="velas", name="Velas", platforms=["youtube"], keywords=["k"])
+    seg_b = Segment(id=2, slug="sabonetes", name="Sabonetes", platforms=["youtube"], keywords=["k"])
+    async with (
+        deps.create_segment_deps(seg_a) as bundle_a,
+        deps.create_segment_deps(seg_b) as bundle_b,
+    ):
+        assert bundle_a.collect.lock is not bundle_b.collect.lock
+        assert bundle_a.research.lock is not bundle_b.research.lock
+        client_a = cast(Any, bundle_a.collect.lock)._client
+        client_b = cast(Any, bundle_b.collect.lock)._client
+        assert client_a is client_b is deps.lock_client
+    await deps.close()
+
+
 async def test_create_app_deps_close_disposes_engine(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

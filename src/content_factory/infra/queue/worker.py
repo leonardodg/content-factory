@@ -35,6 +35,7 @@ from content_factory.app.score import ScoreDeps, score
 from content_factory.config import Settings, get_settings
 from content_factory.domain.fanout_guard import FanoutGuard
 from content_factory.domain.models import DepthConfig, ResearchCampaign, Segment
+from content_factory.infra.redis_ops import RedisOps
 
 
 def parse_cron_hours(raw: str) -> set[int]:
@@ -268,14 +269,17 @@ class AppDeps(SegmentDepsFactory):
     Task 10/11: `collect`/`score`/`research` são TEMPLATES montados no
     startup sobre 1 sessão — os jobs NUNCA os usam como sessão; cada segmento
     constrói seu bundle via `create_segment_deps` (repositórios nascem por
-    UoW; collectors/limiter/lock/providers/clock/max_concurrency são
-    herdados dos templates e continuam compartilhados). `campaigns` abre 1
-    sessão fresca por chamada (`_FreshSessionCampaigns`), então jobs
-    sobrepostos nunca disputam sessão. O engine e os clientes Redis
-    continuam compartilhados (são task-safe); a SESSÃO NUNCA é (AsyncSession
-    não é task-safe). `commit`/`rollback` de startup e `job_end`/`on_job_end`
-    foram REMOVIDOS na Task 11: cada UoW já reverte em exceção via
-    `session_scope`, e não há mais sessão global a limpar após o job.
+    UoW; collectors/limiter/providers/clock/max_concurrency são herdados dos
+    templates e continuam compartilhados). `campaigns` abre 1 sessão fresca
+    por chamada (`_FreshSessionCampaigns`), então jobs sobrepostos nunca
+    disputam sessão. O engine e os clientes Redis continuam compartilhados
+    (são task-safe); a SESSÃO NUNCA é (AsyncSession não é task-safe).
+    Etapa 0 Task 2: o `lock` dos templates é placeholder — cada bundle ganha
+    seu próprio `RedisLock` sobre o `lock_client` compartilhado (a instância
+    de lock, com seu mapa de tokens, NÃO é task-safe entre segmentos).
+    `commit`/`rollback` de startup e `job_end`/`on_job_end` foram REMOVIDOS
+    na Task 11: cada UoW já reverte em exceção via `session_scope`, e não há
+    mais sessão global a limpar após o job.
     """
 
     collect: CollectDeps
@@ -285,15 +289,19 @@ class AppDeps(SegmentDepsFactory):
     close: Callable[[], Awaitable[None]]
     engine: AsyncEngine | None  # None só com o seam fake de teste (sem .kw["bind"])
     session_factory: async_sessionmaker[AsyncSession]
+    lock_client: RedisOps  # cliente compartilhado; cada bundle cria seu RedisLock
 
     @asynccontextmanager
     async def create_segment_deps(self, segment: Segment) -> AsyncGenerator[SegmentDepsBundle]:
         """1 segmento = 1 UoW = 1 transação, sob TaskGroup + semáforo (Task 11).
 
-        Repositórios nascem aqui, por UoW; o resto (collectors, limiter, lock,
+        Repositórios nascem aqui, por UoW; o resto (collectors, limiter,
         providers, max_concurrency) é herdado dos templates de startup e
-        continua compartilhado. Exceção dentro do escopo reverte SÓ a sessão
-        do segmento (`session_scope`); o caller commita via `bundle.uow`.
+        continua compartilhado. O `lock` NÃO é herdado: cada bundle ganha seu
+        próprio `RedisLock` sobre o `lock_client` compartilhado (Etapa 0
+        Task 2 — o token mora na instância). Exceção dentro do escopo reverte
+        SÓ a sessão do segmento (`session_scope`); o caller commita via
+        `bundle.uow`.
         """
         from content_factory.infra.db.base import SessionUnitOfWork, session_scope
         from content_factory.infra.db.repositories import (
@@ -304,6 +312,7 @@ class AppDeps(SegmentDepsFactory):
             TrendObservationRepositoryImpl,
             VideoRepositoryImpl,
         )
+        from content_factory.infra.lock import RedisLock
 
         async with session_scope(self.session_factory) as session:
             yield SegmentDepsBundle(
@@ -313,6 +322,7 @@ class AppDeps(SegmentDepsFactory):
                     videos=VideoRepositoryImpl(session),
                     segments=SegmentRepositoryImpl(session),
                     runs=CollectRunRepositoryImpl(session),
+                    lock=RedisLock(self.lock_client),
                 ),
                 score=replace(
                     self.score,
@@ -323,6 +333,7 @@ class AppDeps(SegmentDepsFactory):
                 ),
                 research=replace(
                     self.research,
+                    lock=RedisLock(self.lock_client),
                     signals=KeywordSignalRepositoryImpl(session),
                     trend_observations=TrendObservationRepositoryImpl(session),
                     segments=SegmentRepositoryImpl(session),
@@ -458,6 +469,7 @@ async def create_app_deps(settings: Settings) -> AppDeps:
             close=_close,
             engine=engine,
             session_factory=factory,
+            lock_client=shared,
         )
     except BaseException:
         await stack.aclose()  # startup falhou: não deixa sessão/Redis órfãos

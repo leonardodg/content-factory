@@ -5,8 +5,9 @@
 
 ## 🔄 EM ANDAMENTO
 
-_**Review pós-merge do PR #8 (2026-10-14) — plano de correções escrito,
-execução NÃO iniciada.** Plano:
+_**Review pós-merge do PR #8 (2026-10-14) — Etapa 0 em execução na branch
+`fix/concorrencia-review` (Tasks 1–2 concluídas: lock testado contra Redis
+real + posse por UoW).** Plano:
 `docs/ai-plans/2026-10-14-content-factory-concorrencia-review-fixes.md`
 (16 tasks, branch sugerida `fix/concorrencia-review`). Gates do PR #8
 reconfirmados (285 passed com Postgres descartável, ruff/pyright 0, `alembic
@@ -423,12 +424,13 @@ guard-rail, tabela e orquestrador; Fases B–E pendem de decisão do usuário.
 
 0. **Correções do review do PR #8** — executar a Etapa 0 (Tasks 1–8) de
    `docs/ai-plans/2026-10-14-content-factory-concorrencia-review-fixes.md`
-   **antes** de 2026-10-19: testes de lock em Redis real + lock por UoW,
-   web traduz erros do DDGS, exceção inesperada no discover vira run
-   `failed`, log com traceback por segmento, `started_at/finished_at` de
-   volta a rede+persistência, teto por plataforma (`tiktok=1`), teste de
-   integração da UoW concorrente. Integração sempre em Postgres/Redis
-   descartáveis (`TEST_REDIS_URL` novo), nunca nos do experimento.
+   **antes** de 2026-10-19: [x] testes de lock em Redis real (T1) + lock
+   por UoW (T2); [ ] web traduz erros do DDGS (T3), exceção inesperada no
+   discover vira run `failed` (T4), log com traceback por segmento (T5),
+   `started_at/finished_at` de volta a rede+persistência (T6), teto por
+   plataforma `tiktok=1` (T7), teste de integração da UoW concorrente (T8).
+   Integração sempre em Postgres/Redis descartáveis (`TEST_REDIS_URL`
+   novo), nunca nos do experimento.
 1. **Issues pós-merge** (backlog da REVISÃO §6 — #1 mascaramento/finally já
    corrigido pelo savepoint; PR #3 merged `7d5d295`): lock token (#2 alta),
    INCR+EXPIRE (#3), detalhe de erro do score (#4) — **deferrals do collector
