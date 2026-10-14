@@ -1453,15 +1453,17 @@ def test_platform_max_concurrency_from_env_merges_over_tiktok_default(
     """
     parse = w._platform_max_concurrency_from_env  # pyright: ignore[reportPrivateUsage]
     monkeypatch.delenv("PLATFORM_MAX_CONCURRENCY", raising=False)
-    assert parse() == {"tiktok": 1}
-    monkeypatch.setenv("PLATFORM_MAX_CONCURRENCY", " tiktok = 2 , instagram=1")
-    assert parse() == {"tiktok": 2, "instagram": 1}
-    monkeypatch.setenv("PLATFORM_MAX_CONCURRENCY", "instagram=1")
-    assert parse() == {"tiktok": 1, "instagram": 1}
-    monkeypatch.setenv("PLATFORM_MAX_CONCURRENCY", "tiktok=0,youtube=x,=3,semigual,web=1")
+    # auditoria A-2(a): web=1 no default — os 3 segmentos não podem bater na
+    # web ao mesmo tempo (ddgs agregador: Google 403/Brave 429 = found 0)
     assert parse() == {"tiktok": 1, "web": 1}
+    monkeypatch.setenv("PLATFORM_MAX_CONCURRENCY", " tiktok = 2 , instagram=1")
+    assert parse() == {"tiktok": 2, "web": 1, "instagram": 1}
+    monkeypatch.setenv("PLATFORM_MAX_CONCURRENCY", "instagram=1")
+    assert parse() == {"tiktok": 1, "web": 1, "instagram": 1}
+    monkeypatch.setenv("PLATFORM_MAX_CONCURRENCY", "tiktok=0,youtube=x,=3,semigual,web=3")
+    assert parse() == {"tiktok": 1, "web": 3}
     monkeypatch.setenv("PLATFORM_MAX_CONCURRENCY", "")
-    assert parse() == {"tiktok": 1}
+    assert parse() == {"tiktok": 1, "web": 1}
 
 
 async def test_create_app_deps_disposes_engine_when_startup_fails(

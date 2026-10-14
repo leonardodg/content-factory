@@ -166,7 +166,7 @@ do processo — trocar exige restart do worker):
 | `COLLECT_CRON_HOURS` | `08,20` | horas do collect em BRT; valor inválido cai no default |
 | `COLLECT_MAX_CONCURRENCY` | `2` | teto de `discover()` simultâneos por collect (Task 7); ponto de partida para benchmark, não limite seguro universal; valor inválido ou < 1 cai em `2`/`1` |
 | `WORKER_MAX_SEGMENTS` | `3` | teto de segmentos simultâneos por job (Task 11); lido a cada tick, trocar não exige restart; valor inválido ou < 1 cai em `3`/`1` |
-| `PLATFORM_MAX_CONCURRENCY` | `tiktok=1` | teto de discovers simultâneos **por plataforma no processo**, entre segmentos (`plataforma=limite,…`); a env é SOMADA ao default, nunca remove o teto do TikTok; entrada inválida ou < 1 é ignorada; vale do startup (exige restart) |
+| `PLATFORM_MAX_CONCURRENCY` | `tiktok=1,web=1` | teto de discovers simultâneos **por plataforma no processo**, entre segmentos (`plataforma=limite,…`); a env é SOMADA ao default, nunca remove o teto do TikTok; entrada inválida ou < 1 é ignorada; vale do startup (exige restart) |
 
 Fixos no código (não são env):
 

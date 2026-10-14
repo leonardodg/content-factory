@@ -79,15 +79,17 @@ def _max_segments_from_env() -> int:
 def _platform_max_concurrency_from_env() -> dict[str, int]:
     """Teto de discovers simultâneos por plataforma (env `PLATFORM_MAX_CONCURRENCY`).
 
-    Formato `tiktok=1,instagram=2`, SOMADO ao default `tiktok=1` (1 sessão
-    Playwright por vez no processo): a env ajusta ou acrescenta tetos, nunca
-    derruba o do TikTok. Entrada inválida (inclusive limite < 1) é ignorada. Vale do startup:
+    Formato `tiktok=1,instagram=2`, SOMADO ao default `tiktok=1,web=1` (1
+    sessão Playwright por vez no processo; web=1 porque os 3 segmentos não
+    podem bater no ddgs ao mesmo tempo — auditoria 2026-10-14 A-2(a)): a env
+    ajusta ou acrescenta tetos, nunca derruba o do TikTok. Entrada inválida
+    (inclusive limite < 1) é ignorada. Vale do startup:
     trocar exige restart do worker. Uma única instância de `PlatformSlots`
     é criada no startup e herdada por todos os bundles — o teto é por
     processo, não por segmento.
     """
     raw = os.getenv("PLATFORM_MAX_CONCURRENCY", "")
-    limits: dict[str, int] = {"tiktok": 1}
+    limits: dict[str, int] = {"tiktok": 1, "web": 1}
     for entry in raw.split(","):
         name, sep, value = entry.partition("=")
         name = name.strip()
