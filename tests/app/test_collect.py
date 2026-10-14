@@ -1,4 +1,5 @@
 import asyncio
+import logging
 from collections.abc import Sequence
 from datetime import UTC, datetime, timedelta
 from typing import ClassVar
@@ -559,6 +560,50 @@ async def test_collect_unexpected_error_becomes_failed_run_and_siblings_persist(
     assert len(siblings) == 2 and all(r.status == "ok" for r in siblings)
     assert videos.upserts != []
     assert lock.released == ["collect:candles"]
+
+
+async def test_collect_unexpected_error_logs_cause_with_traceback(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Etapa 0 Task 8.1: o `internal_error` não pode ser mudo.
+
+    `CollectRun` só guarda `error_code` — a causa (tipo, mensagem, traceback)
+    tem de ir para o log, com segmento e plataforma.
+    """
+    repos = FakeRepos()
+    deps = CollectDeps(
+        collectors=[_BoomCollector(), FakeCollector("tiktok", n=1)],
+        videos=FakeVideos(),
+        segments=repos.segments,
+        runs=repos.runs,
+        limiter=FakeLimiter(),
+        lock=FakeLock(),
+    )
+    with caplog.at_level(logging.ERROR, logger="content_factory"):
+        await collect("candles", ["youtube", "tiktok"], limit=5, deps=deps)
+    records = [r for r in caplog.records if r.levelno == logging.ERROR]
+    assert len(records) == 1
+    record = records[0]
+    assert "candles" in record.getMessage() and "youtube" in record.getMessage()
+    assert record.exc_info is not None and isinstance(record.exc_info[1], ValueError)
+
+
+async def test_collect_contract_error_is_not_logged_as_error(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """CollectorError é contrato (vai para `error_code`): sem registro ERROR."""
+    repos = FakeRepos()
+    deps = CollectDeps(
+        collectors=[FakeCollector("youtube", n=1)],
+        videos=FakeVideos(),
+        segments=repos.segments,
+        runs=repos.runs,
+        limiter=FakeLimiter(fail=RateLimited("youtube")),
+        lock=FakeLock(),
+    )
+    with caplog.at_level(logging.ERROR, logger="content_factory"):
+        await collect("candles", ["youtube"], limit=5, deps=deps)
+    assert [r for r in caplog.records if r.levelno == logging.ERROR] == []
 
 
 async def test_collect_external_cancel_releases_lock() -> None:

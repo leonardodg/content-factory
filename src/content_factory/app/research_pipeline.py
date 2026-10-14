@@ -1,4 +1,5 @@
 import asyncio
+import logging
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -16,8 +17,11 @@ from content_factory.app.ports import (
     TrendsProvider,
     VideoRepository,
 )
+from content_factory.domain.errors import CollectorError
 from content_factory.domain.fanout_guard import FanoutGuard
 from content_factory.domain.models import CandidateVideo, CollectRun, DepthConfig, KeywordSignal
+
+logger = logging.getLogger(__name__)
 
 
 def _utcnow() -> datetime:
@@ -74,6 +78,7 @@ class SocialDiscoverResult:
 
 
 async def _discover_social_one(
+    segment_slug: str,
     platform: str,
     discoverer: SocialDiscoverer,
     keywords: list[str],
@@ -95,6 +100,9 @@ async def _discover_social_one(
             await deps.limiter.acquire(platform)
             candidates = await discoverer.discover_by_keywords(keywords, [], 1)
         except Exception as exc:
+            if not isinstance(exc, CollectorError):
+                # run só guarda error_code: a causa vai para o log (Task 8.1)
+                logger.exception("discover fora do contrato: %s/%s", segment_slug, platform)
             gate_hits_after = getattr(discoverer, "gate_hits", 0)
             return SocialDiscoverResult(
                 platform=platform,
@@ -184,7 +192,7 @@ async def run_research_cycle(
         async def _run(index: int, platform: str, discoverer: SocialDiscoverer) -> None:
             async with semaphore:
                 slots[index] = await _discover_social_one(
-                    platform, discoverer, keywords_for_social, deps
+                    segment_slug, platform, discoverer, keywords_for_social, deps
                 )
 
         async with asyncio.TaskGroup() as task_group:
@@ -225,6 +233,10 @@ async def run_research_cycle(
                             segment.id, platform, result.candidates
                         )
                     except Exception as exc:
+                        if not isinstance(exc, CollectorError):
+                            logger.exception(
+                                "persistência fora do contrato: %s/%s", segment.slug, platform
+                            )
                         run.status = "failed"
                         run.error_code = getattr(exc, "code", "internal_error")
                         run.failed = 1

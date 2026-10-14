@@ -1,4 +1,5 @@
 import asyncio
+import logging
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -14,6 +15,8 @@ from content_factory.app.ports import (
 )
 from content_factory.domain.errors import CollectorError
 from content_factory.domain.models import CandidateVideo, CollectRun, SegmentConfig
+
+logger = logging.getLogger(__name__)
 
 
 def _utcnow() -> datetime:
@@ -107,6 +110,8 @@ async def _discover_one(
             )
         except Exception as exc:
             gate_hits_after = getattr(collector, "gate_hits", 0)
+            # run só guarda error_code: a causa vai para o log (Task 8.1)
+            logger.exception("discover fora do contrato: %s/%s", segment.slug, collector.platform)
             error = CollectorError("internal_error", collector.platform, str(exc))
             error.__cause__ = exc
             return DiscoverResult(
@@ -134,6 +139,8 @@ async def _discover_one(
         except Exception as exc:
             discover_ms = _ms_between(discover_start, deps.clock())
             gate_hits_after = getattr(collector, "gate_hits", 0)
+            # run só guarda error_code: a causa vai para o log (Task 8.1)
+            logger.exception("discover fora do contrato: %s/%s", segment.slug, collector.platform)
             error = CollectorError("internal_error", collector.platform, str(exc))
             error.__cause__ = exc
             return DiscoverResult(
