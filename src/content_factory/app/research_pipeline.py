@@ -1,4 +1,5 @@
 import asyncio
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 
@@ -16,6 +17,10 @@ from content_factory.app.ports import (
 )
 from content_factory.domain.fanout_guard import FanoutGuard
 from content_factory.domain.models import CandidateVideo, CollectRun, DepthConfig, KeywordSignal
+
+
+def _utcnow() -> datetime:
+    return datetime.now(UTC)
 
 
 @dataclass
@@ -39,6 +44,9 @@ class ResearchDeps:
     # @dataclass como CollectDeps, então o default mantém as chamadas
     # existentes (worker/testes) funcionando sem mudança.
     max_concurrent_discoveries: int = 2
+    # Mesmo padrão de CollectDeps: clock injetável, default = agora em UTC —
+    # chamadas existentes (worker/CLI) continuam funcionando sem mudança.
+    clock: Callable[[], datetime] = field(default_factory=lambda: _utcnow)
 
 
 @dataclass
@@ -49,14 +57,16 @@ class SocialDiscoverResult:
     CollectorError como em collect) — preserva o `except Exception` do loop
     sequencial, onde erro de 1 rede vira CollectRun failed sem abortar as
     irmãs. Cancelamento (BaseException) continua propagando.
-    gate_hits_delta é medido nesta fase e transportado; started_at/
-    finished_at são medidos na fase de persistência, como em collect().
+    gate_hits_delta é medido nesta fase e transportado; started_at abre
+    esta fase (antes do acquire) e é transportado para a run; finished_at
+    é medido na fase de persistência, como em collect().
     """
 
     platform: str
     candidates: list[CandidateVideo] | None
     error: Exception | None
     gate_hits_delta: int
+    started_at: datetime
 
 
 async def _discover_social_one(
@@ -73,6 +83,7 @@ async def _discover_social_one(
     (self.gate_hits acumula entre runs).
     """
     gate_hits_before = getattr(discoverer, "gate_hits", 0)
+    started_at = deps.clock()
     try:
         await deps.limiter.acquire(platform)
         candidates = await discoverer.discover_by_keywords(keywords, [], 1)
@@ -83,6 +94,7 @@ async def _discover_social_one(
             candidates=None,
             error=exc,
             gate_hits_delta=gate_hits_after - gate_hits_before,
+            started_at=started_at,
         )
     gate_hits_after = getattr(discoverer, "gate_hits", 0)
     return SocialDiscoverResult(
@@ -90,6 +102,7 @@ async def _discover_social_one(
         candidates=candidates,
         error=None,
         gate_hits_delta=gate_hits_after - gate_hits_before,
+        started_at=started_at,
     )
 
 
@@ -177,9 +190,10 @@ async def run_research_cycle(
         social_platform_errors = 0
         for result in discoveries:
             platform = result.platform
-            started = datetime.now(UTC)
             run = CollectRun(
-                collector=f"research:{platform}", segment_id=segment.id, started_at=started
+                collector=f"research:{platform}",
+                segment_id=segment.id,
+                started_at=result.started_at,
             )
             try:
                 if result.error is not None:
@@ -228,7 +242,7 @@ async def run_research_cycle(
                 # própria (gate #10) do Instagram.
                 if result.gate_hits_delta:
                     counts[f"{platform}_gate_hits"] = result.gate_hits_delta
-                run.finished_at = datetime.now(UTC)
+                run.finished_at = deps.clock()
                 await deps.runs.record(run)
         counts["social_found"] = social_found
         counts["social_inserted"] = social_inserted

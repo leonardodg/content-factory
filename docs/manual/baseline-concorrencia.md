@@ -9,6 +9,12 @@ As colunas `discover_ms`/`persist_ms` (Task 4, migração 0009) estão **nulas**
 para todo este período — esperado e documentado. A duração por run abaixo é
 `finished_at - started_at` (rede + persistência somadas).
 
+> Nota (Etapa 0 Task 6): a partir desta Task, `started_at` volta a ser
+> capturado antes da fase de rede, então `finished_at - started_at` em runs
+> novas é comparável a este baseline. Runs geradas entre o merge do PR #8 e
+> esta Task mediriam só a persistência — nenhuma em produção (os workers
+> seguem na imagem antiga).
+
 ## Janela
 
 | Segmento | Primeira run | Última run |

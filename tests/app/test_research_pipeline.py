@@ -1,6 +1,6 @@
 import asyncio
 from collections.abc import Sequence
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import ClassVar
 
 import pytest
@@ -147,6 +147,75 @@ async def test_run_research_cycle_releases_lock_even_on_success() -> None:
     deps, _, _ = _make_deps(lock=lock)
     await run_research_cycle("candles", DepthConfig(), deps)
     assert lock.released == ["research:candles"]
+
+
+class _ManualClock:
+    """Relógio manual: só avança quando o teste manda."""
+
+    def __init__(self) -> None:
+        self._now = datetime(2026, 10, 13, 12, 0, tzinfo=UTC)
+
+    def __call__(self) -> datetime:
+        return self._now
+
+    def advance_ms(self, ms: int) -> None:
+        self._now += timedelta(milliseconds=ms)
+
+
+class _TimedSocial:
+    platform: ClassVar[str] = "instagram"
+
+    def __init__(self, clock: _ManualClock, ms: int) -> None:
+        self._clock = clock
+        self._ms = ms
+
+    async def discover_by_keywords(
+        self, keywords: list[str], hashtags: list[str], depth: int
+    ) -> list[CandidateVideo]:
+        _ = hashtags, depth
+        self._clock.advance_ms(self._ms)
+        return [
+            CandidateVideo(
+                platform="instagram",
+                platform_video_id="ig-1",
+                url="https://example.invalid/ig-1",
+                creator_handle="stub",
+                title="reel",
+            )
+        ]
+
+
+@pytest.mark.asyncio
+async def test_research_run_duration_covers_network_plus_persistence() -> None:
+    """Etapa 0 Task 6: started_at abre a fase de rede (antes do acquire).
+
+    Com clock fake que só avança em discover_by_keywords, a duração cobre a
+    rede — comparável ao baseline congelado, como em collect().
+    """
+    clock = _ManualClock()
+    repos = FakeRepos()
+    runs = FakeRuns()
+    deps = ResearchDeps(
+        web=_FakeWeb(),
+        trends=_FakeTrends(),
+        socials={"instagram": _TimedSocial(clock, 200)},
+        signals=_FakeSignalRepo(),
+        trend_observations=FakeTrendObservations(),
+        segments=_FakeSegmentsWithKeywords(),
+        videos=repos.videos,
+        runs=runs,
+        lock=FakeLock(),
+        limiter=FakeLimiter(),
+        guard=FanoutGuard(DepthConfig()),
+        clock=clock,
+    )
+    out = await run_research_cycle("candles", DepthConfig(), deps)
+    assert out.ok is True
+    social_runs = [r for r in runs.recorded if r.collector == "research:instagram"]
+    assert len(social_runs) == 1
+    run = social_runs[0]
+    assert run.finished_at is not None
+    assert run.finished_at - run.started_at == timedelta(milliseconds=200)
 
 
 @pytest.mark.asyncio

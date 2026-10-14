@@ -47,10 +47,11 @@ class DiscoverResult:
 
     Fronteira da concorrência (Etapa 0 Task 4): CollectorError E qualquer
     outra Exception viram `error` aqui — nenhuma exceção esperada escapa
-    para cancelar as irmãs (paridade com o research). Só cancelamento
+    para cancelar as irmãs (paridade com o research).     Só cancelamento
     (BaseException) propaga. Exceção inesperada vira
     `CollectorError("internal_error", ...)` com o original em `__cause__`.
-    discover_ms é medido nesta fase e transportado; started_at/finished_at e
+    discover_ms é medido nesta fase e transportado; started_at abre esta
+    fase (antes do acquire) e é transportado para a run; finished_at e
     persist_ms são medidos na fase de persistência de collect().
     """
 
@@ -59,6 +60,7 @@ class DiscoverResult:
     error: CollectorError | None
     gate_hits_delta: int
     discover_ms: int | None
+    started_at: datetime
 
 
 @dataclass
@@ -81,6 +83,7 @@ async def _discover_one(
     no registry (self.gate_hits acumula entre runs).
     """
     gate_hits_before = getattr(collector, "gate_hits", 0)
+    started_at = deps.clock()
     try:
         await deps.limiter.acquire(collector.platform)
     except CollectorError as exc:
@@ -91,6 +94,7 @@ async def _discover_one(
             error=exc,
             gate_hits_delta=gate_hits_after - gate_hits_before,
             discover_ms=None,
+            started_at=started_at,
         )
     except Exception as exc:
         gate_hits_after = getattr(collector, "gate_hits", 0)
@@ -102,6 +106,7 @@ async def _discover_one(
             error=error,
             gate_hits_delta=gate_hits_after - gate_hits_before,
             discover_ms=None,
+            started_at=started_at,
         )
     discover_start = deps.clock()
     try:
@@ -115,6 +120,7 @@ async def _discover_one(
             error=exc,
             gate_hits_delta=gate_hits_after - gate_hits_before,
             discover_ms=discover_ms,
+            started_at=started_at,
         )
     except Exception as exc:
         discover_ms = _ms_between(discover_start, deps.clock())
@@ -127,6 +133,7 @@ async def _discover_one(
             error=error,
             gate_hits_delta=gate_hits_after - gate_hits_before,
             discover_ms=discover_ms,
+            started_at=started_at,
         )
     discover_ms = _ms_between(discover_start, deps.clock())
     gate_hits_after = getattr(collector, "gate_hits", 0)
@@ -136,6 +143,7 @@ async def _discover_one(
         error=None,
         gate_hits_delta=gate_hits_after - gate_hits_before,
         discover_ms=discover_ms,
+        started_at=started_at,
     )
 
 
@@ -178,8 +186,9 @@ async def collect(
         discoveries: list[DiscoverResult] = [slots[index] for index in range(len(wanted))]
         # Fase de persistência (sempre sequencial: mesma sessão Postgres).
         for result in discoveries:
-            started = deps.clock()
-            run = CollectRun(collector=result.platform, segment_id=segment.id, started_at=started)
+            run = CollectRun(
+                collector=result.platform, segment_id=segment.id, started_at=result.started_at
+            )
             run.discover_ms = result.discover_ms
             try:
                 if result.error is not None:

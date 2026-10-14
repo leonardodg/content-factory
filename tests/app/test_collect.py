@@ -280,6 +280,33 @@ async def test_collect_records_discover_and_persist_ms_separately() -> None:
     assert run.persist_ms == 40
 
 
+async def test_collect_run_duration_covers_network_plus_persistence() -> None:
+    """Etapa 0 Task 6: finished_at - started_at == discover_ms + persist_ms.
+
+    started_at é capturado antes do limiter.acquire (abre a fase de rede);
+    finished_at no finally da persistência. Com clock fake que só avança em
+    discover/upsert, o tempo entre fases é zero e a duração volta a ser
+    comparável ao baseline congelado.
+    """
+    clock = _FakeClock()
+    repos = FakeRepos()
+    deps = CollectDeps(
+        collectors=[_TimedCollector("youtube", clock, discover_ms=150)],
+        videos=_TimedVideos(clock, persist_ms=40),
+        segments=repos.segments,
+        runs=repos.runs,
+        limiter=FakeLimiter(),
+        lock=FakeLock(),
+        clock=clock,
+    )
+    out = await collect("candles", ["youtube"], limit=5, deps=deps)
+    assert out.ok is True
+    run = out.runs[0]
+    assert (run.discover_ms, run.persist_ms) == (150, 40)
+    assert run.finished_at is not None
+    assert run.finished_at - run.started_at == timedelta(milliseconds=190)
+
+
 async def test_collect_failure_still_records_discover_ms_without_persist_ms() -> None:
     """discover() que levanta registra o custo da fase de rede; sem persistência."""
     clock = _FakeClock()
