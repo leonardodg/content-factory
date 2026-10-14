@@ -965,6 +965,9 @@ async def test_segment_bundles_get_distinct_lock_instances_over_shared_client(
         assert bundle_a.collect.lock is not bundle_b.collect.lock
         assert bundle_a.research.lock is not bundle_b.research.lock
         assert bundle_a.collect.lock is not bundle_a.research.lock
+        # breaker por plataforma: o MESMO RedisRateLimiter compartilhado
+        assert bundle_a.collect.health is deps.shared.limiter
+        assert bundle_b.research.health is deps.shared.limiter
         client_a = cast(Any, bundle_a.collect.lock)._client
         client_b = cast(Any, bundle_b.collect.lock)._client
         assert client_a is client_b is deps.shared.lock_client
@@ -1441,3 +1444,82 @@ async def test_close_disposes_engine_even_if_redis_close_fails(
     with pytest.raises(ConnectionError):
         await deps.close()
     assert engine.disposed == 1
+
+
+async def test_score_job_batch_failure_reaches_envelope_and_rolls_back(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Etapa 1 Task 11: erro de lote do score chega ao envelope ORIGINAL e reverte.
+
+    Antes: `score()` engolia o erro (`scored=0`), o job commitava e — com
+    sessão real — o commit levantava `PendingRollbackError` no lugar dele.
+    """
+    from content_factory.app.score import score as real_score
+
+    class _ExplodingScores:
+        async def upsert_many(self, rows: object) -> int:
+            raise RuntimeError("conexão caiu")
+
+    class _Videos:
+        async def latest_for_segment(self, segment_id: int) -> list[object]:
+            from datetime import UTC, datetime
+
+            from content_factory.domain.models import VideoMetrics, VideoSnapshot
+
+            return [
+                VideoSnapshot(
+                    video_id=1,
+                    title="vela",
+                    description="",
+                    published_at=datetime(2026, 10, 1, tzinfo=UTC),
+                    metrics=VideoMetrics(views=1000),
+                )
+            ]
+
+    committed: list[str] = []
+    rolled_back: list[str] = []
+    base = _FakeAppDeps(committed, rolled_back)
+
+    class _AppDeps:
+        @asynccontextmanager
+        async def create_segment_deps(self, segment: Segment) -> AsyncGenerator[Any]:
+            async with base.create_segment_deps(segment) as bundle:
+                bundle.score = ScoreDeps(
+                    videos=_Videos(),  # type: ignore[arg-type]
+                    scores=_ExplodingScores(),  # type: ignore[arg-type]
+                    segment=segment,
+                    keywords=segment.keywords,
+                )
+                yield bundle
+
+    monkeypatch.setattr(w, "_score_impl", real_score)
+    campaigns = _FakeCampaignsMultiSegment(slugs=["velas"])
+    out = await w.run_score_job({"campaigns_deps": campaigns, "app_deps": _AppDeps()})
+    assert out["segments"]["velas"] == {
+        "ok": False,
+        "error": "conexão caiu",
+        "error_type": "RuntimeError",
+    }
+    assert committed == []
+    assert rolled_back == ["rollback"]
+
+
+def test_job_timeouts_are_explicit_and_below_lock_ttl() -> None:
+    """Plano lacunas-mapa-do-ciclo Task B: o default do arq (300 s) vale para o
+    job INTEIRO (3 segmentos) — com TikTok/Playwright serializado não cabe.
+    collect/research = 25 min, abaixo do TTL do lock (30 min): o lock nunca
+    expira com o job vivo. Vale na func() E no cron() (entradas separadas)."""
+    from datetime import timedelta
+
+    from content_factory.infra.lock import DEFAULT_TTL_S
+
+    def _seconds(value: object) -> float:
+        assert value is not None, "timeout não definido (cairia no default 300 s do arq)"
+        return value.total_seconds() if isinstance(value, timedelta) else float(value)  # type: ignore[arg-type]
+
+    expected = {"collect_job": 1500, "research_job": 1500, "score_job": 300}
+    funcs = {f.name: _seconds(f.timeout_s) for f in w.WorkerSettings.functions}
+    crons = {c.name: _seconds(c.timeout_s) for c in w.WorkerSettings.cron_jobs}
+    assert funcs == expected
+    assert crons == expected
+    assert max(expected.values()) < DEFAULT_TTL_S

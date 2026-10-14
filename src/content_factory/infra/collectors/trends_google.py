@@ -1,15 +1,20 @@
 """Google Trends via pytrends — scraping não-oficial, ver ADR-0004."""
 
 import asyncio
+import time
+from collections.abc import Callable
 from datetime import UTC
 from typing import Any
 
-from content_factory.domain.errors import CollectorError, NetworkError, RateLimited, UpstreamChanged
+from content_factory.domain.errors import NetworkError, RateLimited, UpstreamChanged
 from content_factory.domain.models import TrendPoint
+from content_factory.infra.collectors.breaker import CooldownBreaker
 
 PLATFORM = "google_trends"
 DEFAULT_BREAKER_THRESHOLD = 5
-DEFAULT_BREAKER_COOLDOWN = 3  # ciclos
+# 3 ciclos do research (cron diário 07:00) = 72 h: o que "3 ciclos" valia
+# com 1 worker por segmento; agora por tempo (Etapa 1 Task 10)
+DEFAULT_BREAKER_COOLDOWN_S = 3 * 24 * 3600
 
 
 class TrendsGoogleProvider:
@@ -17,7 +22,8 @@ class TrendsGoogleProvider:
 
     pytrends é síncrono (requests + pandas) — roda em `asyncio.to_thread`
     para não bloquear o event loop (mesmo padrão de `web.py`/ddgs).
-    Circuit breaker: M falhas consecutivas → desativa por N ciclos.
+    Circuit breaker: M falhas consecutivas → desativa por `breaker_cooldown_s`
+    (por tempo, `CooldownBreaker`).
     """
 
     def __init__(
@@ -26,14 +32,14 @@ class TrendsGoogleProvider:
         client: Any | None = None,
         *,
         breaker_threshold: int = DEFAULT_BREAKER_THRESHOLD,
-        breaker_cooldown_cycles: int = DEFAULT_BREAKER_COOLDOWN,
+        breaker_cooldown_s: float = DEFAULT_BREAKER_COOLDOWN_S,
+        clock: Callable[[], float] = time.monotonic,
     ) -> None:
         self._geo = geo
         self._client = client  # seam de teste; production cria sob demanda
-        self._breaker_threshold = breaker_threshold
-        self._breaker_cooldown = breaker_cooldown_cycles
-        self._consecutive_failures = 0
-        self._cooldown_remaining = 0
+        self._breaker = CooldownBreaker(
+            PLATFORM, threshold=breaker_threshold, cooldown_s=breaker_cooldown_s, clock=clock
+        )
 
     def _get_client(self) -> Any:
         if self._client is not None:
@@ -43,26 +49,24 @@ class TrendsGoogleProvider:
         return TrendReq(hl="pt-BR", tz=0)
 
     async def interest_over_time(self, keywords: list[str], timeframe: str) -> list[TrendPoint]:
-        if self._cooldown_remaining > 0:
-            self._cooldown_remaining -= 1
-            raise CollectorError("circuit_open", PLATFORM, "provider em cooldown")
+        self._breaker.check()
         if not keywords:
             return []
         try:
             df = await asyncio.to_thread(self._fetch, keywords, timeframe)
         except RateLimited:
-            self._register_failure()
+            self._breaker.record_failure()
             raise
         except NetworkError:
-            self._register_failure()
+            self._breaker.record_failure()
             raise
         except UpstreamChanged:
-            self._register_failure()
+            self._breaker.record_failure()
             raise
         except Exception as exc:
-            self._register_failure()
+            self._breaker.record_failure()
             raise self._classify(exc) from exc
-        self._consecutive_failures = 0  # sucesso reseta o breaker
+        self._breaker.record_success()
         return self._map(keywords, df)
 
     def _fetch(self, keywords: list[str], timeframe: str) -> Any:
@@ -85,12 +89,6 @@ class TrendsGoogleProvider:
         if isinstance(exc, requests.RequestException | ConnectionError | TimeoutError | OSError):
             return NetworkError(PLATFORM, str(exc))
         return UpstreamChanged(PLATFORM, str(exc))
-
-    def _register_failure(self) -> None:
-        self._consecutive_failures += 1
-        if self._consecutive_failures >= self._breaker_threshold:
-            self._cooldown_remaining = self._breaker_cooldown
-            self._consecutive_failures = 0
 
     def _map(self, keywords: list[str], df: Any) -> list[TrendPoint]:
         """Converte DataFrame do pytrends em lista de TrendPoint."""

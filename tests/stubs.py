@@ -356,3 +356,17 @@ class FakeRedis:
             self.expires.pop(keys[0], None)
             return 1
         return 0
+
+
+class FakeHealth:
+    """`PlatformHealth` em memória: registra falhas/sucessos por plataforma."""
+
+    def __init__(self) -> None:
+        self.failures: list[str] = []
+        self.successes: list[str] = []
+
+    async def record_failure(self, platform: str) -> None:
+        self.failures.append(platform)
+
+    async def record_success(self, platform: str) -> None:
+        self.successes.append(platform)

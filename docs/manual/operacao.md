@@ -112,8 +112,13 @@ O que procurar:
   run fica `failed` com `error_code = internal_error` e as plataformas
   irmãs seguem. A causa NÃO vai para o banco (`collect_runs` só guarda o
   código); ela fica no log como `ERROR … discover fora do contrato:
-  <slug>/<plataforma>` (ou `persistência fora do contrato` no research),
-  com traceback;
+  <slug>/<plataforma>`, com traceback;
+- **erro de infraestrutura na persistência** (ex.: conexão caiu no upsert;
+  erro de DADO de 1 candidato já é isolado por savepoint): propaga ORIGINAL
+  em collect, research e score (Etapa 1). A UoW do segmento reverte, o
+  envelope traz `{ok: false, error, error_type}` e o log traz o traceback.
+  Antes, a gravação da run num `finally` (ou o `scored=0` do score) trocava
+  a causa por um `PendingRollbackError`;
 - `RuntimeError` no startup (guard multi-segmento): `COLLECT_SEGMENT` está
   definido no ambiente — a imagem nova não roda sob o compose antigo de 3
   workers. Remova a env (troca pelo compose de worker único, só após
@@ -162,6 +167,20 @@ do processo — trocar exige restart do worker):
 | `COLLECT_MAX_CONCURRENCY` | `2` | teto de `discover()` simultâneos por collect (Task 7); ponto de partida para benchmark, não limite seguro universal; valor inválido ou < 1 cai em `2`/`1` |
 | `WORKER_MAX_SEGMENTS` | `3` | teto de segmentos simultâneos por job (Task 11); lido a cada tick, trocar não exige restart; valor inválido ou < 1 cai em `3`/`1` |
 | `PLATFORM_MAX_CONCURRENCY` | `tiktok=1` | teto de discovers simultâneos **por plataforma no processo**, entre segmentos (`plataforma=limite,…`); a env é SOMADA ao default, nunca remove o teto do TikTok; entrada inválida ou < 1 é ignorada; vale do startup (exige restart) |
+
+Fixos no código (não são env):
+
+- **Timeout por job** (`infra/queue/worker.py`): collect e research 25 min,
+  score 5 min, para o job inteiro (todos os segmentos). É menor que o TTL de
+  30 min do lock por segmento. Job cancelado por timeout aparece no log do
+  arq. Os crons usam `max_tries=1`, então não há re-execução: a próxima
+  tentativa é o próximo horário.
+- **Breaker por plataforma** (Redis, `cf:cb:<plataforma>:*`): 3 falhas
+  seguidas do discover, somando segmentos, com códigos `blocked`,
+  `rate_limited`, `network` ou `upstream_changed`, fazem o `acquire` da
+  plataforma levantar `blocked` por 15 min (run `blocked`). Sucesso zera.
+  `auth_expired`, `invalid_payload` e `internal_error` não contam. Para
+  destravar na mão: `redis-cli DEL cf:cb:<plataforma>:blocked`.
 
 Onde mudar: bloco `environment:` do serviço `worker` em
 `.devcontainer/docker-compose.yml` (ou `.devcontainer/env/app.env`, que os
@@ -235,11 +254,17 @@ manual no fim do período. O `research_job` no worker filtra
 ## 6. Limitações conhecidas
 
 - **Google Trends e Suggest são scraping não-oficial** (`pytrends` e
-  `suggestqueries.google.com`). Ambos usam circuit breaker (5 falhas →
-  cooldown 3 ciclos) e mapeiam erros para `RateLimited`/`NetworkError`/
-  `UpstreamChanged`. Se o Google mudar as endpoints, o `research_job`
-  não aborta o ciclo — só registra `trends_found=0` / `keywords_expanded=0`.
-  Ver ADR-0005.
+  `suggestqueries.google.com`). Ambos usam circuit breaker **por tempo**
+  (5 falhas consecutivas → cooldown de 72 h = 3 ciclos diários do research;
+  `infra/collectors/breaker.py`, em memória porque o worker é único) e
+  mapeiam erros para `RateLimited`/`NetworkError`/`UpstreamChanged`.
+  Erro de uma fonte (inclusive `circuit_open`) **não aborta** o research:
+  vira `CollectRun` `research:web_suggest`/`research:trends` com status
+  `failed` e o `error_code` do contrato (`internal_error` + log com
+  traceback se for exceção fora do contrato). O envelope traz
+  `web_failed`/`trends_failed`/`source_errors` e `ok: false`, e o ciclo
+  segue com os sinais que houver. Sem nenhum sinal, a fase social usa as
+  seeds do segmento. Ver ADR-0005.
 - **`defaults.env` não é montado no compose.** O arquivo
   `.devcontainer/env/defaults.env` é versionado, mas nenhum serviço o lê (o
   compose só monta `env/app.env` e o secret `secrets/secrets.env`). Os

@@ -277,6 +277,10 @@ vaga da plataforma antes do semáforo do segmento e montar o resultado num
 
 ## Task 9 — Contagem de `gate_hits` por chamada, não por instância
 
+> ✅ Feita. `app/gate_hits.py` (`counting()`/`record_gate_hit()`); o campo virou
+> `gate_hits` (não é mais delta). RED confirmado: no código antigo, 2 segmentos
+> concorrentes contavam 2 cada.
+
 Com segmentos concorrentes sobre o mesmo coletor singleton, o delta
 before/after de `self.gate_hits` soma hits de outros segmentos.
 
@@ -295,6 +299,13 @@ before/after de `self.gate_hits` soma hits de outros segmentos.
 
 ## Task 10 — Breaker de `web_suggest`/`trends` por tempo, não por chamada
 
+> ✅ Feita. `infra/collectors/breaker.CooldownBreaker`, compartilhado pelos 2
+> providers; default 72 h (3 ciclos diários do research, o que "3 ciclos" valia
+> com 1 worker por segmento); em memória (worker único), decisão no docstring.
+> **Achado colateral:** erro do Suggest/Trends aborta o research do segmento
+> (sem try em `expand`/`interest_over_time`), o que contradizia o `operacao.md`. A doc
+> foi corrigida e o caso registrado como pendência.
+
 O cooldown "em ciclos" decrementa a cada chamada: com 3 segmentos por tick ele
 dura 1/3 do previsto, e falhas de segmentos diferentes se somam.
 
@@ -312,6 +323,10 @@ dura 1/3 do previsto, e falhas de segmentos diferentes se somam.
 
 ## Task 11 — Falha de lote do score propaga
 
+> ✅ Feita. Worker: envelope com o erro original + rollback só da UoW (RED: era
+> `{ok: false, scored: 0}` e commitava). CLI: já capturava `Exception` → agora
+> `internal_error` com a mensagem real, não a genérica.
+
 `except Exception: scored = 0` em `score()` esconde o erro real; o `commit`
 seguinte levanta `PendingRollbackError` e só ele chega ao envelope.
 
@@ -325,6 +340,16 @@ seguinte levanta `PendingRollbackError` e só ele chega ao envelope.
   `..._propagates`: `pytest.raises` com a exceção original.
 - Test `tests/infra/queue/test_worker.py` — score de 1 segmento levantando →
   envelope com o erro **original**, não `PendingRollbackError`.
+
+## Task 11.1 — Erro de infra na persistência propaga sem mascaramento (pendência do /code-review)
+
+> ✅ Feita. Savepoint por plataforma **não** resolveria: erro de dado já é
+> isolado pelo savepoint por candidato em `upsert_candidates`, e o que escapa é
+> infraestrutura (sessão inutilizável). Correção: (1) a persistência do research
+> captura só `CollectorError`, em paridade com collect/score; (2) collect e
+> research perdem o `try/finally` que gravava a run na sessão quebrada, pois o
+> `PendingRollbackError` desse `runs.record` mascarava a causa. RED com
+> `runs.record` envenenado nos dois caminhos.
 
 ---
 

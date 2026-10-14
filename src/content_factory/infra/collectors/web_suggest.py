@@ -2,18 +2,22 @@
 
 import asyncio
 import json
+import time
 from collections.abc import Callable
 from typing import Any, ClassVar, cast
 
 import httpx
 
-from content_factory.domain.errors import CollectorError, NetworkError, RateLimited, UpstreamChanged
+from content_factory.domain.errors import NetworkError, RateLimited, UpstreamChanged
 from content_factory.domain.models import KeywordSignal
+from content_factory.infra.collectors.breaker import CooldownBreaker
 
 PLATFORM = "web_suggest"
 SUGGEST_URL = "https://suggestqueries.google.com/complete/search"
 DEFAULT_BREAKER_THRESHOLD = 5
-DEFAULT_BREAKER_COOLDOWN = 3  # ciclos
+# 3 ciclos do research (cron diário 07:00) = 72 h: o que "3 ciclos" valia
+# com 1 worker por segmento; agora por tempo (Etapa 1 Task 10)
+DEFAULT_BREAKER_COOLDOWN_S = 3 * 24 * 3600
 
 
 class WebSuggestProvider:
@@ -21,7 +25,8 @@ class WebSuggestProvider:
 
     Endpoint `suggestqueries.google.com/complete/search?client=firefox&q=...`
     devolve JSON: `["query", ["sug1", "sug2", ...]]`. Síncrono (httpx sync)
-    — roda em `asyncio.to_thread`. Circuit breaker: M falhas → N ciclos.
+    — roda em `asyncio.to_thread`. Circuit breaker: M falhas → cooldown por
+    tempo (`CooldownBreaker`).
     """
 
     platform: ClassVar[str] = PLATFORM
@@ -31,29 +36,27 @@ class WebSuggestProvider:
         transport: Callable[[httpx.Request], httpx.Response] | None = None,
         *,
         breaker_threshold: int = DEFAULT_BREAKER_THRESHOLD,
-        breaker_cooldown_cycles: int = DEFAULT_BREAKER_COOLDOWN,
+        breaker_cooldown_s: float = DEFAULT_BREAKER_COOLDOWN_S,
+        clock: Callable[[], float] = time.monotonic,
     ) -> None:
         self._transport = transport  # seam de teste; production usa rede real
-        self._breaker_threshold = breaker_threshold
-        self._breaker_cooldown = breaker_cooldown_cycles
-        self._consecutive_failures = 0
-        self._cooldown_remaining = 0
+        self._breaker = CooldownBreaker(
+            PLATFORM, threshold=breaker_threshold, cooldown_s=breaker_cooldown_s, clock=clock
+        )
 
     async def expand(self, seeds: list[str], depth: int) -> list[KeywordSignal]:
-        if self._cooldown_remaining > 0:
-            self._cooldown_remaining -= 1
-            raise CollectorError("circuit_open", PLATFORM, "provider em cooldown")
+        self._breaker.check()
         if not seeds:
             return []
         try:
             suggestions = await asyncio.to_thread(self._fetch_all, seeds)
         except NetworkError, RateLimited, UpstreamChanged:
-            self._register_failure()
+            self._breaker.record_failure()
             raise
         except Exception as exc:
-            self._register_failure()
+            self._breaker.record_failure()
             raise self._classify(exc) from exc
-        self._consecutive_failures = 0  # sucesso reseta o breaker
+        self._breaker.record_success()
         return self._map(suggestions, depth)
 
     def _fetch_all(self, seeds: list[str]) -> list[str]:
@@ -102,12 +105,6 @@ class WebSuggestProvider:
         if isinstance(exc, httpx.HTTPError | ConnectionError | TimeoutError | OSError):
             return NetworkError(PLATFORM, str(exc))
         return UpstreamChanged(PLATFORM, str(exc))
-
-    def _register_failure(self) -> None:
-        self._consecutive_failures += 1
-        if self._consecutive_failures >= self._breaker_threshold:
-            self._cooldown_remaining = self._breaker_cooldown
-            self._consecutive_failures = 0
 
     def _map(self, suggestions: list[str], depth: int) -> list[KeywordSignal]:
         return [

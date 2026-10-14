@@ -1,14 +1,17 @@
 import logging
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 
 from content_factory.app.concurrency import PlatformSlots, bounded_gather
+from content_factory.app.gate_hits import counting
+from content_factory.app.platform_health import NoPlatformHealth, report_discover
 from content_factory.app.ports import (
     CollectRunRepository,
     KeywordExpander,
     KeywordSignalRepository,
     Lock,
+    PlatformHealth,
     RateLimiter,
     SegmentRepository,
     SocialDiscoverer,
@@ -18,7 +21,14 @@ from content_factory.app.ports import (
 )
 from content_factory.domain.errors import CollectorError
 from content_factory.domain.fanout_guard import FanoutGuard
-from content_factory.domain.models import CandidateVideo, CollectRun, DepthConfig, KeywordSignal
+from content_factory.domain.models import (
+    CandidateVideo,
+    CollectRun,
+    DepthConfig,
+    KeywordSignal,
+    Segment,
+    TrendPoint,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -54,6 +64,8 @@ class ResearchDeps:
     # Teto de discover_by_keywords() simultâneos POR PLATAFORMA, compartilhado
     # entre segmentos (Etapa 0 Task 7). Default vazio = sem teto.
     platform_slots: PlatformSlots = field(default_factory=PlatformSlots)
+    # Breaker por plataforma (spec §7), mesma regra de CollectDeps.health.
+    health: PlatformHealth = field(default_factory=NoPlatformHealth)
 
 
 @dataclass
@@ -64,7 +76,7 @@ class SocialDiscoverResult:
     CollectorError como em collect) — preserva o `except Exception` do loop
     sequencial, onde erro de 1 rede vira CollectRun failed sem abortar as
     irmãs. Cancelamento (BaseException) continua propagando.
-    gate_hits_delta é medido nesta fase e transportado; started_at abre
+    gate_hits (desta chamada) é medido nesta fase e transportado; started_at abre
     esta fase (antes do acquire) e é transportado para a run; finished_at
     é medido na fase de persistência, como em collect().
     """
@@ -72,7 +84,7 @@ class SocialDiscoverResult:
     platform: str
     candidates: list[CandidateVideo] | None
     error: Exception | None
-    gate_hits_delta: int
+    gate_hits: int  # desta chamada (Etapa 1 Task 9)
     started_at: datetime
 
 
@@ -86,31 +98,76 @@ async def _discover_social_one(
     """Fase de rede para uma rede social: limiter.acquire + discover_by_keywords.
 
     Devolve SocialDiscoverResult em vez de levantar — a fase de
-    persistência decide status/counts/runs. gate_hits é lido como delta
-    before/after porque o discoverer é singleton no registry
-    (self.gate_hits acumula entre runs).
+    persistência decide status/counts/runs. gate_hits é contado POR
+    CHAMADA (`counting()`, Etapa 1 Task 9): o discoverer é singleton e
+    segmentos concorrentes o compartilham.
     """
-    gate_hits_before = getattr(discoverer, "gate_hits", 0)
     candidates: list[CandidateVideo] | None = None
     error: Exception | None = None
     # Teto por plataforma (Etapa 0 Task 7): a vaga cobre acquire + discover.
     async with deps.platform_slots.slot(platform):
         started_at = deps.clock()
-        try:
-            await deps.limiter.acquire(platform)
-            candidates = await discoverer.discover_by_keywords(keywords, [], 1)
-        except Exception as exc:
-            if not isinstance(exc, CollectorError):
-                # run só guarda error_code: a causa vai para o log (Task 8.1)
-                logger.exception("discover fora do contrato: %s/%s", segment_slug, platform)
-            error = exc
+        with counting() as gate_hits:
+            acquired = False
+            try:
+                await deps.limiter.acquire(platform)
+                acquired = True
+                candidates = await discoverer.discover_by_keywords(keywords, [], 1)
+            except Exception as exc:
+                if not isinstance(exc, CollectorError):
+                    # run só guarda error_code: a causa vai para o log (Task 8.1)
+                    logger.exception("discover fora do contrato: %s/%s", segment_slug, platform)
+                elif acquired:  # erro do discover, não do acquire
+                    await report_discover(deps.health, platform, exc.code)
+                error = exc
+            else:
+                await report_discover(deps.health, platform, None)
         return SocialDiscoverResult(
             platform=platform,
             candidates=candidates,
             error=error,
-            gate_hits_delta=getattr(discoverer, "gate_hits", 0) - gate_hits_before,
+            gate_hits=gate_hits.total,
             started_at=started_at,
         )
+
+
+TRENDS_SOURCE = "trends"  # chave do limiter e sufixo da run `research:trends`
+
+
+async def _run_source[T](
+    name: str,
+    segment: Segment,
+    deps: ResearchDeps,
+    call: Callable[[], Awaitable[list[T]]],
+) -> tuple[list[T], bool]:
+    """Chama 1 fonte (Suggest/Trends) e grava `research:<name>`; devolve (itens, falhou).
+
+    Mesmo contrato dos coletores em collect(): `CollectorError` → run
+    `failed` com o código do contrato; exceção fora do contrato →
+    `internal_error` + log com traceback (Task 8.1). Nunca levanta por erro
+    da fonte — o ciclo segue com lista vazia. Cancelamento propaga.
+    """
+    run = CollectRun(collector=f"research:{name}", segment_id=segment.id, started_at=deps.clock())
+    items: list[T] = []
+    failed = True
+    try:
+        items = await call()
+    except CollectorError as exc:
+        run.error_code = exc.code
+    except Exception:
+        logger.exception("fonte fora do contrato: %s/%s", segment.slug, name)
+        run.error_code = "internal_error"
+    else:
+        failed = False
+    if failed:
+        run.status = "failed"
+        run.failed = 1
+    else:
+        run.status = "ok"
+        run.found = len(items)
+    run.finished_at = deps.clock()
+    await deps.runs.record(run)
+    return items, failed
 
 
 @dataclass
@@ -139,13 +196,26 @@ async def run_research_cycle(
         }
 
         seeds = [k for k in segment.keywords if deps.guard.admit(k, 0)]
-        await deps.limiter.acquire(deps.web.platform)
-        web_signals = deps.guard.truncate(await deps.web.expand(seeds, 0), "web")
+
+        # Fontes (Suggest/Trends) resilientes: falha vira run `failed` e o
+        # ciclo segue com os sinais que houver (plano
+        # 2026-10-14-content-factory-research-fontes-resilientes) — antes,
+        # o Trends HTTP 400 diário abortava o segmento antes da fase social.
+        async def _expand() -> list[KeywordSignal]:
+            await deps.limiter.acquire(deps.web.platform)
+            return await deps.web.expand(seeds, 0)
+
+        web_raw, web_failed = await _run_source(deps.web.platform, segment, deps, _expand)
+        web_signals = deps.guard.truncate(web_raw, "web")
         counts["web_found"] = len(web_signals)
 
         trend_keywords = [s.keyword for s in web_signals if deps.guard.admit(s.keyword, 1)]
-        await deps.limiter.acquire("trends")
-        trend_points = await deps.trends.interest_over_time(trend_keywords, "week")
+
+        async def _trends() -> list[TrendPoint]:
+            await deps.limiter.acquire(TRENDS_SOURCE)
+            return await deps.trends.interest_over_time(trend_keywords, "week")
+
+        trend_points, trends_failed = await _run_source(TRENDS_SOURCE, segment, deps, _trends)
         trend_signals = deps.guard.truncate(
             [
                 KeywordSignal(keyword=p.keyword, source="trends", weight=p.interest / 100, depth=1)
@@ -154,6 +224,10 @@ async def run_research_cycle(
             "trends",
         )
         counts["trends_found"] = len(trend_signals)
+        counts["web_failed"] = int(web_failed)
+        counts["trends_failed"] = int(trends_failed)
+        source_errors = int(web_failed) + int(trends_failed)
+        counts["source_errors"] = source_errors
 
         # Fase F3: gravar série temporal append-only (separada do signal
         # de descoberta que faz upsert e sobrescreve o peso anterior)
@@ -162,7 +236,9 @@ async def run_research_cycle(
         all_signals = web_signals + trend_signals
         counts["signals_saved"] = await deps.signals.upsert_many(segment.id, all_signals)
 
-        keywords_for_social = [s.keyword for s in all_signals]
+        # sem nenhum sinal (fontes falharam ou vieram vazias), a fase social
+        # usa as seeds do segmento — senão as redes receberiam lista vazia
+        keywords_for_social = [s.keyword for s in all_signals] or seeds
         # Fase de rede (Task 8 + Etapa 2 Task 12): bounded_gather, mesmo
         # padrão de collect(). Cada task captura Exception na PRÓPRIA
         # fronteira (_discover_social_one devolve SocialDiscoverResult) —
@@ -194,59 +270,61 @@ async def run_research_cycle(
                 segment_id=segment.id,
                 started_at=result.started_at,
             )
-            try:
-                if result.error is not None:
-                    # erro de 1 rede social não aborta as demais (padrão de
-                    # collect(), que captura por coletor); visível no envelope
-                    exc = result.error
+            # Sem try/finally (Etapa 1, /code-review): erro fora do contrato
+            # (infra — a sessão fica inutilizável) PROPAGA original; gravar a
+            # run num `finally` levantaria PendingRollbackError e mascararia
+            # a causa. A UoW do segmento reverte tudo, então não há run a
+            # gravar nesse caminho.
+            if result.error is not None:
+                # erro de 1 rede social não aborta as demais (padrão de
+                # collect(), que captura por coletor); visível no envelope
+                exc = result.error
+                run.status = "failed"
+                run.error_code = getattr(exc, "code", "internal_error")
+                run.failed = 1  # Fase H: explícito no campo numérico
+                social_platform_errors += 1
+                counts[f"{platform}_failed"] = int(counts.get(f"{platform}_failed", 0)) + 1
+            else:
+                # invariante: erro↔candidates None (sem assert: B101; erro
+                # interno explícito se a fronteira for violada)
+                if result.candidates is None:
+                    raise RuntimeError(f"discover sem erro nem candidates: {platform}")
+                try:
+                    # Fase F2: persistir pelo MESMO contrato do collect() —
+                    # upsert_candidates faz ON CONFLICT DO UPDATE, ciclo
+                    # reexecutado não duplica vídeo.
+                    stats = await deps.videos.upsert_candidates(
+                        segment.id, platform, result.candidates
+                    )
+                except CollectorError as exc:
+                    # só o contrato vira run failed: erro de dado já é
+                    # isolado por savepoint no repo; o resto é
+                    # infraestrutura (sessão inutilizável) e PROPAGA —
+                    # o worker loga e reverte a UoW (Etapa 1, /code-review)
                     run.status = "failed"
                     run.error_code = getattr(exc, "code", "internal_error")
-                    run.failed = 1  # Fase H: explícito no campo numérico
+                    run.failed = 1
                     social_platform_errors += 1
                     counts[f"{platform}_failed"] = int(counts.get(f"{platform}_failed", 0)) + 1
                 else:
-                    # invariante: erro↔candidates None (sem assert: B101; erro
-                    # interno explícito se a fronteira for violada)
-                    if result.candidates is None:
-                        raise RuntimeError(f"discover sem erro nem candidates: {platform}")
-                    try:
-                        # Fase F2: persistir pelo MESMO contrato do collect() —
-                        # upsert_candidates faz ON CONFLICT DO UPDATE, ciclo
-                        # reexecutado não duplica vídeo.
-                        stats = await deps.videos.upsert_candidates(
-                            segment.id, platform, result.candidates
-                        )
-                    except Exception as exc:
-                        if not isinstance(exc, CollectorError):
-                            logger.exception(
-                                "persistência fora do contrato: %s/%s", segment.slug, platform
-                            )
-                        run.status = "failed"
-                        run.error_code = getattr(exc, "code", "internal_error")
-                        run.failed = 1
-                        social_platform_errors += 1
-                        counts[f"{platform}_failed"] = int(counts.get(f"{platform}_failed", 0)) + 1
-                    else:
-                        run.status = "ok"
-                        run.found = len(result.candidates)
-                        run.inserted, run.updated = stats.inserted, stats.updated
-                        run.skipped = stats.skipped  # Fase H: era run.failed = stats.skipped
-                        social_found += len(result.candidates)
-                        social_inserted += stats.inserted
-                        social_updated += stats.updated
-                        social_skipped += stats.skipped
-            finally:
-                # mesmo padrão de collect() (REVISÃO Important #1/#2):
-                # transportado como delta da fase de rede (sobrevive a
-                # discover_by_keywords levantando depois de incrementar; o
-                # coletor é singleton no registry, self.gate_hits acumula
-                # entre runs). Sem isso, o envelope da pesquisa por keyword
-                # não distingue busca ampla por hashtag do fallback de conta
-                # própria (gate #10) do Instagram.
-                if result.gate_hits_delta:
-                    counts[f"{platform}_gate_hits"] = result.gate_hits_delta
-                run.finished_at = deps.clock()
-                await deps.runs.record(run)
+                    run.status = "ok"
+                    run.found = len(result.candidates)
+                    run.inserted, run.updated = stats.inserted, stats.updated
+                    run.skipped = stats.skipped  # Fase H: era run.failed = stats.skipped
+                    social_found += len(result.candidates)
+                    social_inserted += stats.inserted
+                    social_updated += stats.updated
+                    social_skipped += stats.skipped
+            # mesmo padrão de collect() (REVISÃO Important #1/#2):
+            # contado por chamada na fase de rede e transportado
+            # (sobrevive a discover_by_keywords levantando depois do
+            # hit). Sem isso, o envelope da pesquisa por keyword não
+            # distingue busca ampla por hashtag do fallback de conta
+            # própria (gate #10) do Instagram.
+            if result.gate_hits:
+                counts[f"{platform}_gate_hits"] = result.gate_hits
+            run.finished_at = deps.clock()
+            await deps.runs.record(run)
         counts["social_found"] = social_found
         counts["social_inserted"] = social_inserted
         counts["social_updated"] = social_updated
@@ -254,10 +332,11 @@ async def run_research_cycle(
         counts["social_platforms_attempted"] = social_platforms_attempted
         counts["social_platform_errors"] = social_platform_errors
 
-        # Mesmo contrato de collect(): ok = nenhuma plataforma social
-        # configurada falhou; partial = falhou alguma mas outras
-        # inseriram/atualizaram candidato.
-        ok = social_platform_errors == 0
+        # Mesmo contrato de collect(): ok = nenhuma fonte (Suggest/Trends)
+        # nem rede social falhou; partial = falhou alguma, mas a fase social
+        # inseriu/atualizou candidato (sinais salvos não contam — quase todo
+        # ciclo salva sinal, e partial perderia o sentido).
+        ok = social_platform_errors == 0 and source_errors == 0
         partial = (not ok) and (social_inserted + social_updated > 0)
         return ResearchOutcome(ok=ok, partial=partial, counts=counts)
     finally:

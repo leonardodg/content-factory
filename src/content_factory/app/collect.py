@@ -4,10 +4,13 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 
 from content_factory.app.concurrency import PlatformSlots, bounded_gather
+from content_factory.app.gate_hits import counting
+from content_factory.app.platform_health import NoPlatformHealth, report_discover
 from content_factory.app.ports import (
     Collector,
     CollectRunRepository,
     Lock,
+    PlatformHealth,
     RateLimiter,
     SegmentRepository,
     VideoRepository,
@@ -46,6 +49,9 @@ class CollectDeps:
     # segmentos (Etapa 0 Task 7 — ex.: tiktok=1 serializa as sessões
     # Playwright no processo). Default vazio = sem teto.
     platform_slots: PlatformSlots = field(default_factory=PlatformSlots)
+    # Breaker por plataforma (spec §7): só falha do discover do lado da
+    # plataforma conta — regra em `app/platform_health.report_discover`.
+    health: PlatformHealth = field(default_factory=NoPlatformHealth)
 
 
 @dataclass
@@ -65,7 +71,7 @@ class DiscoverResult:
     platform: str
     found: list[CandidateVideo] | None
     error: CollectorError | None
-    gate_hits_delta: int
+    gate_hits: int  # desta chamada (Etapa 1 Task 9)
     discover_ms: int | None
     started_at: datetime
 
@@ -86,11 +92,11 @@ async def _discover_one(
     Devolve DiscoverResult em vez de levantar — a fase de persistência
     decide status/counts/runs. Exceção fora do contrato vira
     `internal_error` (defesa em profundidade); só cancelamento propaga.
-    gate_hits é lido como delta before/after porque o collector é singleton
-    no registry (self.gate_hits acumula entre runs).
+    gate_hits é contado POR CHAMADA (`counting()`, Etapa 1 Task 9): o
+    collector é singleton e segmentos concorrentes o compartilham, então o
+    delta do atributo somaria hits de outros segmentos.
     """
     platform = collector.platform
-    gate_hits_before = getattr(collector, "gate_hits", 0)
     found: list[CandidateVideo] | None = None
     error: CollectorError | None = None
     discover_start: datetime | None = None
@@ -100,24 +106,29 @@ async def _discover_one(
     # persist_ms: finished_at sai após a rede de TODAS as irmãs (review).
     async with deps.platform_slots.slot(platform):
         started_at = deps.clock()
-        try:
-            await deps.limiter.acquire(platform)
-            discover_start = deps.clock()
-            found = await collector.discover(segment, limit)
-        except CollectorError as exc:
-            error = exc
-        except Exception as exc:
-            # run só guarda error_code: a causa vai para o log (Task 8.1)
-            logger.exception("discover fora do contrato: %s/%s", segment.slug, platform)
-            error = CollectorError("internal_error", platform, str(exc))
-            error.__cause__ = exc
+        with counting() as gate_hits:
+            try:
+                await deps.limiter.acquire(platform)
+                discover_start = deps.clock()
+                found = await collector.discover(segment, limit)
+            except CollectorError as exc:
+                error = exc
+                if discover_start is not None:  # erro do discover, não do acquire
+                    await report_discover(deps.health, platform, exc.code)
+            except Exception as exc:
+                # run só guarda error_code: a causa vai para o log (Task 8.1)
+                logger.exception("discover fora do contrato: %s/%s", segment.slug, platform)
+                error = CollectorError("internal_error", platform, str(exc))
+                error.__cause__ = exc
+            else:
+                await report_discover(deps.health, platform, None)
         # discover_ms só existe se o acquire passou (falha no limiter = None)
         discover_ms = None if discover_start is None else _ms_between(discover_start, deps.clock())
         return DiscoverResult(
             platform=platform,
             found=found,  # só atribuído no sucesso: erro ⇒ None
             error=error,
-            gate_hits_delta=getattr(collector, "gate_hits", 0) - gate_hits_before,
+            gate_hits=gate_hits.total,
             discover_ms=discover_ms,
             started_at=started_at,
         )
@@ -158,46 +169,49 @@ async def collect(
                 collector=result.platform, segment_id=segment.id, started_at=result.started_at
             )
             run.discover_ms = result.discover_ms
-            try:
-                if result.error is not None:
-                    exc = result.error
+            # Sem try/finally (Etapa 1, /code-review): erro fora do contrato
+            # (infra — a sessão fica inutilizável) PROPAGA original; gravar a
+            # run num `finally` levantaria PendingRollbackError e mascararia
+            # a causa. A UoW do segmento reverte tudo, então não há run a
+            # gravar nesse caminho.
+            if result.error is not None:
+                exc = result.error
+                run.status = "blocked" if exc.code == "blocked" else "failed"
+                run.error_code = exc.code
+                run.failed = 1  # Fase H: explícito no campo numérico
+                errors += 1
+                counts["failed"] = int(counts["failed"]) + 1
+            else:
+                # invariante: erro↔found None (sem assert: B101; erro interno
+                # explícito se a fronteira de _discover_one for violada)
+                if result.found is None:
+                    raise RuntimeError(f"discover sem erro nem found: {result.platform}")
+                try:
+                    persist_start = deps.clock()
+                    stats = await deps.videos.upsert_candidates(
+                        segment.id, result.platform, result.found
+                    )
+                except CollectorError as exc:
                     run.status = "blocked" if exc.code == "blocked" else "failed"
                     run.error_code = exc.code
-                    run.failed = 1  # Fase H: explícito no campo numérico
+                    run.failed = 1
                     errors += 1
                     counts["failed"] = int(counts["failed"]) + 1
                 else:
-                    # invariante: erro↔found None (sem assert: B101; erro interno
-                    # explícito se a fronteira de _discover_one for violada)
-                    if result.found is None:
-                        raise RuntimeError(f"discover sem erro nem found: {result.platform}")
-                    try:
-                        persist_start = deps.clock()
-                        stats = await deps.videos.upsert_candidates(
-                            segment.id, result.platform, result.found
-                        )
-                    except CollectorError as exc:
-                        run.status = "blocked" if exc.code == "blocked" else "failed"
-                        run.error_code = exc.code
-                        run.failed = 1
-                        errors += 1
-                        counts["failed"] = int(counts["failed"]) + 1
-                    else:
-                        run.persist_ms = _ms_between(persist_start, deps.clock())
-                        run.status = "ok"
-                        run.found = len(result.found)
-                        run.inserted, run.updated = stats.inserted, stats.updated
-                        run.skipped = stats.skipped
-                        counts["found"] = int(counts["found"]) + len(result.found)
-                        counts["inserted"] = int(counts["inserted"]) + stats.inserted
-                        counts["updated"] = int(counts["updated"]) + stats.updated
-                        counts["skipped"] = int(counts["skipped"]) + stats.skipped
-            finally:
-                if result.gate_hits_delta:
-                    counts[f"{result.platform}_gate_hits"] = result.gate_hits_delta
-                run.finished_at = deps.clock()
-                await deps.runs.record(run)
-                runs.append(run)
+                    run.persist_ms = _ms_between(persist_start, deps.clock())
+                    run.status = "ok"
+                    run.found = len(result.found)
+                    run.inserted, run.updated = stats.inserted, stats.updated
+                    run.skipped = stats.skipped
+                    counts["found"] = int(counts["found"]) + len(result.found)
+                    counts["inserted"] = int(counts["inserted"]) + stats.inserted
+                    counts["updated"] = int(counts["updated"]) + stats.updated
+                    counts["skipped"] = int(counts["skipped"]) + stats.skipped
+            if result.gate_hits:
+                counts[f"{result.platform}_gate_hits"] = result.gate_hits
+            run.finished_at = deps.clock()
+            await deps.runs.record(run)
+            runs.append(run)
         ok = errors == 0
         return CollectOutcome(
             ok=ok,

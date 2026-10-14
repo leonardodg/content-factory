@@ -1,6 +1,8 @@
 from collections.abc import Sequence
 from datetime import UTC, datetime, timedelta
 
+import pytest
+
 from content_factory.app.ports import ScoreUpsertRow
 from content_factory.app.score import ScoreDeps, relevance_of, score
 from content_factory.domain.models import (
@@ -247,8 +249,13 @@ async def test_score_partial_when_one_batch_row_is_bad() -> None:
     assert [vid for vid, _ in scores.saved] == [1, 2, 4, 5]
 
 
-async def test_score_batch_connection_failure_scores_nothing() -> None:
-    """Task 13: falha do lote inteiro (ex.: conexão) ⇒ scored=0, partial=False."""
+async def test_score_batch_connection_failure_propagates() -> None:
+    """Etapa 1 Task 11: falha do lote inteiro (ex.: conexão) PROPAGA.
+
+    Antes virava `scored=0` e o commit seguinte levantava
+    `PendingRollbackError` — o erro real se perdia. Linhas ruins já são
+    isoladas dentro do repo; o que sobra aqui é infraestrutura.
+    """
 
     class ExplodingScores(FakeScores):
         async def upsert_many(self, rows: Sequence[ScoreUpsertRow]) -> int:
@@ -261,9 +268,8 @@ async def test_score_batch_connection_failure_scores_nothing() -> None:
         keywords=["vela"],
         clock=lambda: NOW,
     )
-    out = await score(deps)
-    assert out.scored == 0
-    assert out.ok is False and out.partial is False
+    with pytest.raises(RuntimeError, match="conexão caiu"):
+        await score(deps)
 
 
 def test_relevance_of_keyword_with_hash_matches_text_without_hash() -> None:

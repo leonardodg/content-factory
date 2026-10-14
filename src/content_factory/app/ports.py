@@ -168,6 +168,18 @@ class RateLimiter(Protocol):
     async def acquire(self, platform: str) -> None: ...  # bloqueia até liberar
 
 
+class PlatformHealth(Protocol):
+    """Breaker por plataforma (spec §7): N falhas seguidas → `blocked` no acquire.
+
+    Segregada de `RateLimiter` (ISP): quem só limita não precisa registrar
+    saúde. Implementada por `infra.ratelimit.RedisRateLimiter` (chaves
+    `cf:cb:*`, globais entre segmentos).
+    """
+
+    async def record_failure(self, platform: str) -> None: ...
+    async def record_success(self, platform: str) -> None: ...
+
+
 class Lock(Protocol):
     async def acquire_once(self, key: str) -> bool: ...  # False se já em execução
     async def release(self, key: str) -> None: ...  # SEM isso o lock fica eterno

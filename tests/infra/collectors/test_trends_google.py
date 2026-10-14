@@ -88,7 +88,7 @@ async def test_circuit_breaker_opens_after_consecutive_failures() -> None:
     import requests
 
     failing = _FakePytrends(fail=requests.ConnectionError("x"))
-    p = _provider(failing, breaker_threshold=3, breaker_cooldown_cycles=2)
+    p = _provider(failing, breaker_threshold=3, breaker_cooldown_s=60)
 
     # 3 falhas seguidas → breaker abre
     for _ in range(3):

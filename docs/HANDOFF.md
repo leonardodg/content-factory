@@ -5,6 +5,43 @@
 
 ## 🔄 EM ANDAMENTO
 
+_**Etapa 1 do plano de review CONCLUÍDA (2026-10-14), branch
+`fix/concorrencia-etapa1`.** A Etapa 0 e a Etapa 2 já estão na `main`
+(PR #9, `c401cf1`).
+- **T9 (`eece60b`):** `gate_hits` contado por chamada (`app/gate_hits.py`,
+  ContextVar). Antes, 2 segmentos concorrentes contavam 2 hits cada.
+- **T10 (`e2d8f17`):** breaker de `web_suggest`/`trends` por tempo
+  (`CooldownBreaker`, 72 h = 3 ciclos diários do research, em memória).
+- **T11 (`0f11cb2`):** falha de lote do score propaga com o erro original.
+- **Pendência do `/code-review` (`b6af6cc`):** erro de infra na
+  persistência de collect/research propaga original. O `try/finally` que
+  gravava a run na transação abortada trocava a causa por `InternalError`;
+  isso foi reproduzido em Postgres real e agora é coberto por teste de
+  integração.
+
+- **Research resiliente a falha de fonte** (plano
+  `2026-10-14-content-factory-research-fontes-resilientes.md`): erro do
+  Suggest ou do Trends (o HTTP 400 diário, ou `circuit_open`) não aborta
+  mais o segmento.
+  - A falha vira run `research:web_suggest`/`research:trends` `failed`.
+  - A fase social roda; sem nenhum sinal, usa as seeds do segmento.
+  - O envelope ganha `web_failed`/`trends_failed`/`source_errors`, com
+    `ok: false`.
+  - Após o swap, o esperado é `research:trends failed` em `collect_runs` com
+    as runs sociais `ok`.
+
+- **Lacunas do mapa do ciclo** (plano
+  `2026-10-14-content-factory-lacunas-mapa-do-ciclo.md`):
+  - o breaker por plataforma no Redis foi ligado ao discover
+    (`PlatformHealth`, 3 falhas de plataforma → `blocked` 15 min, somando
+    segmentos);
+  - timeout explícito por job: collect e research 25 min, score 5 min,
+    abaixo do TTL de 30 min do lock.
+
+  Página nova: [Mapa do ciclo](diagram/mapa-do-ciclo.md).
+
+Gates: ver o PR #10. Os workers do experimento não foram tocados._
+
 _**Concorrência pós-PR #8: review + correções na `main` (2026-10-14).**
 Plano: `docs/ai-plans/2026-10-14-content-factory-concorrencia-review-fixes.md`.
 Tudo foi num PR único (branch `refactor/concorrencia-etapa2`):
@@ -444,17 +481,6 @@ guard-rail, tabela e orquestrador; Fases B–E pendem de decisão do usuário.
 
 ## ⛔ O que falta (próximos passos aprovados)
 
-0. **Concorrência: Etapa 1 do plano de review** (pode vir após
-   2026-10-19):
-   - T9: `gate_hits` por chamada (ContextVar);
-   - T10: breaker de `web_suggest`/`trends` por tempo;
-   - T11: falha de lote do score propaga;
-   - pendente do `/code-review`: a persistência do research precisa de
-     savepoint por plataforma, porque um erro de banco no upsert hoje deixa
-     a sessão em `PendingRollbackError` e derruba o segmento.
-
-   Etapas 0 e 2 já estão na `main`. Integração sempre em Postgres/Redis
-   descartáveis, nunca nos do experimento.
 1. **Issues pós-merge** (backlog da REVISÃO §6 — #1 mascaramento/finally já
    corrigido pelo savepoint; PR #3 merged `7d5d295`): lock token (#2 alta),
    INCR+EXPIRE (#3), detalhe de erro do score (#4) — **deferrals do collector

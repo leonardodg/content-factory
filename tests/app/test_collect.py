@@ -11,6 +11,7 @@ from tests.stubs import (
     FakeLimiter,
     FakeLock,
     FakeRepos,
+    FakeRuns,
     FakeVideos,
     TrackedCollector,
 )
@@ -22,9 +23,16 @@ from content_factory.app.collect import (
     _discover_one,  # pyright: ignore[reportPrivateUsage]
     collect,
 )
+from content_factory.app.gate_hits import record_gate_hit
 from content_factory.app.ports import Collector, VideoRepository
 from content_factory.domain.errors import CollectorError, RateLimited
-from content_factory.domain.models import CandidateVideo, SegmentConfig, UpsertStats, VideoSnapshot
+from content_factory.domain.models import (
+    CandidateVideo,
+    CollectRun,
+    SegmentConfig,
+    UpsertStats,
+    VideoSnapshot,
+)
 
 
 class _FakeGatedCollector:
@@ -40,6 +48,7 @@ class _FakeGatedCollector:
 
     async def discover(self, segment: SegmentConfig, limit: int) -> list[CandidateVideo]:
         self.gate_hits += 2
+        record_gate_hit(2)
         return []
 
 
@@ -55,6 +64,7 @@ class _FakeGatedThenFailingCollector:
 
     async def discover(self, segment: SegmentConfig, limit: int) -> list[CandidateVideo]:
         self.gate_hits += 1
+        record_gate_hit()
         raise CollectorError("failed", "instagram")
 
 
@@ -362,7 +372,7 @@ async def test_discover_one_returns_result_with_discover_ms() -> None:
     assert result.found is not None and len(result.found) == 2
     assert result.error is None
     assert result.discover_ms == 150
-    assert result.gate_hits_delta == 0
+    assert result.gate_hits == 0
 
 
 async def test_discover_one_captures_collector_error_without_losing_gate_delta() -> None:
@@ -388,7 +398,7 @@ async def test_discover_one_captures_collector_error_without_losing_gate_delta()
     assert blocked.found is None
     assert blocked.error is not None and blocked.error.code == "blocked"
     assert blocked.discover_ms is None
-    assert blocked.gate_hits_delta == 0
+    assert blocked.gate_hits == 0
 
     net_deps = CollectDeps(
         collectors=[],
@@ -402,7 +412,7 @@ async def test_discover_one_captures_collector_error_without_losing_gate_delta()
     failed = await _discover_one(_FakeGatedThenFailingCollector(), segment, 5, net_deps)
     assert failed.found is None
     assert failed.error is not None and failed.error.code == "failed"
-    assert failed.gate_hits_delta == 1
+    assert failed.gate_hits == 1
     assert failed.discover_ms == 0
 
 
@@ -656,3 +666,32 @@ async def test_collect_rate_limited_is_failed_without_api_call() -> None:
     run = out.runs[0]
     assert run.status == "failed" and run.error_code == "rate_limited"
     assert run.failed == 1
+
+
+async def test_collect_infra_error_in_persistence_is_not_masked_by_run_record() -> None:
+    """Erro de infra no upsert propaga ORIGINAL — o `finally` gravava a run na
+    sessão quebrada e o `PendingRollbackError` dele mascarava a causa."""
+
+    class _BoomVideos(FakeVideos):
+        async def upsert_candidates(
+            self, segment_id: int, source: str, candidates: Sequence[CandidateVideo]
+        ) -> UpsertStats:
+            raise ConnectionError("conexão caiu")
+
+    class _PoisonedRuns(FakeRuns):
+        async def record(self, run: CollectRun) -> int:
+            raise RuntimeError("PendingRollbackError simulada")
+
+    repos = FakeRepos()
+    lock = FakeLock()
+    deps = CollectDeps(
+        collectors=[FakeCollector("youtube", n=1)],
+        videos=_BoomVideos(),
+        segments=repos.segments,
+        runs=_PoisonedRuns(),
+        limiter=FakeLimiter(),
+        lock=lock,
+    )
+    with pytest.raises(ConnectionError, match="conexão caiu"):
+        await collect("candles", ["youtube"], limit=5, deps=deps)
+    assert lock.released == ["collect:candles"]

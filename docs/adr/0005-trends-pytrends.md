@@ -33,7 +33,9 @@ devolve JSON: `["query", ["sug1", "sug2", ...]]`. Implementação:
 - `httpx` + `asyncio.to_thread` (mesmo padrão do TrendsProvider e web.py)
 - Mapeamento de erros idêntico: 429 → `RateLimited`, rede → `NetworkError`,
   resto → `UpstreamChanged`
-- **Circuit breaker** idêntico: 5 falhas → cooldown 3 ciclos
+- **Circuit breaker** idêntico: 5 falhas → cooldown 3 ciclos (desde 2026-10-14
+  por tempo: 72 h, `infra/collectors/breaker.py` — por chamada, com o worker
+  único, o cooldown durava 1/3 do previsto)
 - Seam de teste: `transport` parametrizável (MockTransport-style)
 
 ## Riscos aceitos
