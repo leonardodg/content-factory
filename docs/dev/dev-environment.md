@@ -57,6 +57,22 @@ uv run pytest -q
 Sem a variável, os testes de integração são **pulados** com motivo claro
 (`tests/conftest.py`).
 
+## Redis de testes — `TEST_REDIS_URL`
+
+Testes de lock/concorrência usam um Redis **descartável**, nunca o Redis do
+experimento (`content-factory-redis-1`, sem porta pública):
+
+```bash
+docker run -d --rm --name cf-test-redis -p 127.0.0.1:56379:6379 redis:7-alpine
+export TEST_REDIS_URL='redis://127.0.0.1:56379/15'
+uv run pytest -q -m "not e2e"
+docker rm -f cf-test-redis
+```
+
+Sem a variável, os testes de Redis são **pulados** (`requires_redis` em
+`tests/conftest.py`). O CI expõe `TEST_REDIS_URL=redis://localhost:6379/15`
+(banco 15, sem colisão com `REDIS_URL`).
+
 ## Gates (DoD — todos verdes antes de "pronto")
 
 | Gate | Comando |

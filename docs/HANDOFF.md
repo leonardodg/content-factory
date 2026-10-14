@@ -5,6 +5,33 @@
 
 ## 🔄 EM ANDAMENTO
 
+_**Review pós-merge do PR #8 (2026-10-14) — plano de correções escrito,
+execução NÃO iniciada.** Plano:
+`docs/ai-plans/2026-10-14-content-factory-concorrencia-review-fixes.md`
+(16 tasks, branch sugerida `fix/concorrencia-review`). Gates do PR #8
+reconfirmados (285 passed com Postgres descartável, ruff/pyright 0, `alembic
+check` limpo). Verificação em infra real descartável: UoW concorrente ✅,
+`upsert_many` 1200 linhas → 3 INSERTs ✅, Lua CAS entre instâncias ✅ —
+mas **🔴 `RedisLock` na MESMA instância (topologia do worker único) não
+protege**: release tardio apaga o lock do novo dono (reproduzido em Redis
+real; a suíte não pegou porque `FakeRedis.eval` reimplementa o Lua e o
+teste usa 2 instâncias). Também: 🟠 `DDGSException` do web cancela as
+plataformas irmãs e derruba o segmento (visto em produção: velas
+2026-10-13 11:00 UTC); 🟠 exceção por segmento sem log/traceback (arq conta
+sucesso); 🟠 `started_at/finished_at` só cobrem persistência (quebra a
+comparação com o baseline); 🟡 sem teto por plataforma (até 3 Playwright do
+TikTok simultâneos). **Etapa 0 do plano (Tasks 1–8) é pré-requisito da troca
+3 → 1 após 2026-10-19.** Etapas 1–2 (gate_hits por chamada, breaker por
+tempo, erro de lote do score, refactor SOLID) podem vir depois._
+
+_Restart do S.O. em 2026-10-13 ~21:49 UTC: os 3 `cf-worker-*`, Postgres e
+Redis voltaram sozinhos (`unless-stopped`) na MESMA imagem pré-merge
+(`active_segments` = 0 ocorrências conferido) — sem triplicação, nenhum
+horário de cron perdido. `cf-python` (CLI, `restart=no`) ficou parado:
+`docker start cf-python` quando precisar. `research_job` falhando nos 3
+segmentos com Google Trends HTTP 400 (`UpstreamChanged`) — pendência
+conhecida da Fase H._
+
 _Experimento de 7 dias em curso (até **2026-10-19**): 3 containers na imagem
 pré-concorrência — não fazer `--build`/restart neles; a troca 3 workers → 1
 worker único (`docker-compose.multi-segmento.yml`, já na main) SÓ após o
@@ -69,9 +96,11 @@ medição com rollback confirmado).
   página [fluxos da pipeline](diagram/fluxos.md) (cron, jobs, UoW, CLI,
   Redis) · manual atualizado (`fluxo-busca`, `operacao`, `analise`,
   `agentes`, `index`, `experimento-7-dias`, `anti-ban`, arquitetura)
-- [x] **Pendente pós-2026-10-19**: swap 3 workers → 1 (procedimento em
+- [ ] **Pendente pós-2026-10-19**: swap 3 workers → 1 (procedimento em
   `docs/manual/experimento-7-dias.md` § Pós-2026-10-19; exportar dados
-  antes de parar os containers)
+  antes de parar os containers) — **bloqueado pela Etapa 0 do plano
+  `2026-10-14-content-factory-concorrencia-review-fixes.md`** (review
+  2026-10-14, ver EM ANDAMENTO)
 
 ### Worker multi-segmento dinâmico (2026-10-12)
 
@@ -392,6 +421,14 @@ guard-rail, tabela e orquestrador; Fases B–E pendem de decisão do usuário.
 
 ## ⛔ O que falta (próximos passos aprovados)
 
+0. **Correções do review do PR #8** — executar a Etapa 0 (Tasks 1–8) de
+   `docs/ai-plans/2026-10-14-content-factory-concorrencia-review-fixes.md`
+   **antes** de 2026-10-19: testes de lock em Redis real + lock por UoW,
+   web traduz erros do DDGS, exceção inesperada no discover vira run
+   `failed`, log com traceback por segmento, `started_at/finished_at` de
+   volta a rede+persistência, teto por plataforma (`tiktok=1`), teste de
+   integração da UoW concorrente. Integração sempre em Postgres/Redis
+   descartáveis (`TEST_REDIS_URL` novo), nunca nos do experimento.
 1. **Issues pós-merge** (backlog da REVISÃO §6 — #1 mascaramento/finally já
    corrigido pelo savepoint; PR #3 merged `7d5d295`): lock token (#2 alta),
    INCR+EXPIRE (#3), detalhe de erro do score (#4) — **deferrals do collector
