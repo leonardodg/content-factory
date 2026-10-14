@@ -103,8 +103,11 @@ O que procurar:
   (`segments: {slug: {ok: false, error, error_type}}`) — a UoW do segmento
   reverte sozinha (`session_scope`), as irmãs commitam normal. O arq marca
   o job como concluído (`●`) mesmo com `ok: false`: o sinal de falha é o
-  registro `ERROR` com traceback no log (`segmento <slug> falhou em
-  <collect|score|research>`) + o envelope — não o status do job;
+  registro com traceback no log (`segmento <slug> falhou em
+  <collect|score|research>`) + o envelope — não o status do job. Até a
+  Task 8.2 do plano `2026-10-14-…-review-fixes` esse registro sai **sem
+  timestamp nem nível** (o arq só configura o logger `arq`): procure pela
+  frase `falhou em`, não por `ERROR`;
 - `RuntimeError` no startup (guard multi-segmento): `COLLECT_SEGMENT` está
   definido no ambiente — a imagem nova não roda sob o compose antigo de 3
   workers. Remova a env (troca pelo compose de worker único, só após

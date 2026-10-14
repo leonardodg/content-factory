@@ -5,12 +5,28 @@
 
 ## 🔄 EM ANDAMENTO
 
-_**Review pós-merge do PR #8 (2026-10-14) — Etapa 0 CONCLUÍDA na branch
+_**Review da implementação da Etapa 0 (2026-10-14):** Tasks 1–8 na branch
+`fix/concorrencia-review` (`978d984`..`8035758`) revisadas e auditadas. Os
+gates passam com infra descartável: 297 passed e 0 skip, `alembic check`,
+ruff/pyright 0, bandit, pip-audit sem vulns, `mkdocs --strict` e
+privacidade. Os 7 achados do review original estão endereçados. Há **2 achados
+🟠 novos a fechar antes do merge/swap** (Tasks 8.1/8.2 do plano):
+**A1**, a T4 transforma bug de coletor em `internal_error` mudo (sem
+mensagem na run e sem log, traceback perdido); **A2**, o `logger.exception`
+do worker grava o traceback **sem `redact()`** (spec §7, reproduzido com
+`ms_token` em claro). Há também 🟡 **A3**: o log de `content_factory.*` sai
+sem nível nem timestamp, porque o arq só configura o logger `arq`. Os 🟡
+A4–A7 (bloqueio na fila entre semáforo de segmento e vaga de plataforma,
+parser do env sem teste, DRY em `_discover_one`, sobras no teste de
+integração) vão para a Etapa 2. Detalhes em § "Review da implementação da
+Etapa 0" do plano._
+
+_**Review pós-merge do PR #8 (2026-10-14) — Etapa 0 implementada na branch
 `fix/concorrencia-review` (Tasks 1–8: lock testado contra Redis real, posse
 por UoW, web traduz erros do DDGS, exceção inesperada vira run failed, log
 com traceback por segmento, `started_at` cobre rede, teto por plataforma,
-integração da UoW concorrente). Pronta para review + merge antes de
-2026-10-19; Etapas 1–2 ficam para depois.** Plano:
+integração da UoW concorrente). Merge antes de 2026-10-19, depois das Tasks
+8.1/8.2; Etapas 1–2 ficam para depois.** Plano:
 `docs/ai-plans/2026-10-14-content-factory-concorrencia-review-fixes.md`
 (16 tasks, branch sugerida `fix/concorrencia-review`). Gates do PR #8
 reconfirmados (285 passed com Postgres descartável, ruff/pyright 0, `alembic
@@ -433,6 +449,9 @@ guard-rail, tabela e orquestrador; Fases B–E pendem de decisão do usuário.
    [x] `started_at/finished_at` de volta a rede+persistência (T6) + teto por
    plataforma `tiktok=1` (T7) + teste de integração da UoW concorrente (T8).
    **Etapa 0 completa — 297 passed, todos os gates verdes.**
+   [ ] Tasks 8.1 (causa do `internal_error` no log) + 8.2 (log do worker
+   com `RedactingFilter` + nível/timestamp) — achados 🟠 A1/A2 do review da
+   implementação; fechar antes do merge/swap.
    Integração sempre em Postgres/Redis descartáveis (`TEST_REDIS_URL`
    novo), nunca nos do experimento.
 1. **Issues pós-merge** (backlog da REVISÃO §6 — #1 mascaramento/finally já

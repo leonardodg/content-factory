@@ -215,6 +215,53 @@ Fecha a outra lacuna: hoje só fakes cobrem `create_segment_deps`.
 - Não registrar coletores reais: `register_defaults` não pode fazer rede no
   teste — confirmar que construir os coletores não abre conexão.
 
+## Review da implementação da Etapa 0 (2026-10-14)
+
+Tasks 1–8 implementadas na branch `fix/concorrencia-review` (commits
+`978d984`..`8035758`, 1 por Task). Gates reexecutados com infra descartável
+(`cf-test-pg`/`cf-test-redis`): **297 passed, 0 skip**; `alembic check`
+limpo; ruff/format, pyright 0; bandit 0; pip-audit sem vulnerabilidades;
+`mkdocs --strict` ok; privacidade ok (210 arquivos). Todos os critérios de
+saída da Etapa 0 (abaixo) estão cobertos por teste. Os 7 achados do review
+original estão endereçados (🔴 #1 por T1/T2, 🟠 #2–#4 por T3–T6, 🟡 #5 por T7).
+
+Achados novos, verificados empiricamente:
+
+| # | Sev. | Achado | Evidência |
+| --- | --- | --- | --- |
+| A1 | 🟠 | T4 transforma bug em `internal_error` **mudo**: `CollectRun` não tem mensagem, `_discover_one`/`_discover_social_one` não logam e o `__cause__` se perde. Antes, a exceção propagava e (com T5) teria traceback. | `collect.py:117-155`; `CollectRun` só tem `error_code` |
+| A2 | 🟠 | `logger.exception` em `_gather_segments` grava mensagem e traceback **sem `redact()`**, e só o envelope é redigido. Isso viola spec §7 (`infra/redact.py`). | Simulado com `default_log_config` do arq: `RuntimeError: boom ms_token=SECRET123` em claro no stderr |
+| A3 | 🟡 | Nenhum handler para `content_factory.*`: o arq configura só o logger `arq`. Por isso o registro sai pelo `logging.lastResort`, sem timestamp nem nível, e procurar "ERROR" no log (como diz `operacao.md`) não acha nada. | mesma simulação: saída só `segmento velas falhou em collect` + traceback |
+| A4 | 🟡 | Bloqueio na fila: o semáforo do segmento é adquirido **antes** da vaga global da plataforma. Um TikTok esperando vaga ocupa 1 dos `COLLECT_MAX_CONCURRENCY` do segmento. Afeta só vazão, sem deadlock. | `collect.py:188-190` + `_discover_one`; idem research |
+| A5 | 🟡 | `_platform_max_concurrency_from_env` sem teste do parser (entrada inválida, vazia, limite 0, default). | `grep` em `tests/` |
+| A6 | 🟡 | `_discover_one` repete 4 vezes a mesma construção de `DiscoverResult`, cerca de 60 linhas (DRY). | `collect.py:103-155` |
+| A7 | 🟡 | O teste de integração da T8 só para as campanhas: segmentos, vídeos e runs ficam acumulados no banco descartável. Os dois testes de "instâncias distintas" em `test_lock_redis.py` são quase duplicados. | `test_worker_integration.py` teardown |
+
+## Task 8.1 — Causa do `internal_error` visível (A1), antes do swap
+
+**Files:** `app/collect.py`, `app/research_pipeline.py`, testes em `tests/app/`.
+- Ao converter uma exceção fora do contrato em `internal_error` (collect) ou
+  em run `failed` (research), registrar `logger.warning(..., exc_info=exc)`
+  com o segmento e a plataforma (logging na camada app é permitido; `domain/`
+  segue puro).
+- RED: `caplog` com coletor levantando `KeyError` → 1 registro com
+  `exc_info` e plataforma; irmãs persistem (o teste da T4 continua verde).
+
+## Task 8.2 — Log do worker redigido e com formato (A2 + A3), antes do swap
+
+**Files:** `infra/redact.py` (novo `RedactingFilter(logging.Filter)`),
+`infra/queue/worker.py` (`startup` instala handler com o filtro no logger
+`content_factory`, formato `%(asctime)s %(levelname)s %(name)s %(message)s`,
+`propagate=False`), `docs/manual/operacao.md`.
+- O filtro aplica `redact()` em `record.getMessage()` **e** no traceback
+  formatado (`record.exc_text`, preenchido via `Formatter.formatException`).
+- RED: `caplog`/handler de teste com exceção contendo `ms_token=X` → nenhum
+  `X` no texto final; o nível `ERROR` aparece na linha.
+
+A4–A7 ficam para a Etapa 2 (A4/A6 na Task 12 `bounded_gather`: adquirir a
+vaga da plataforma antes do semáforo do segmento e montar o resultado num
+único ponto; A5/A7 como miudezas da Task 16).
+
 ---
 
 # Etapa 1 — Correções de semântica (pode entrar após 2026-10-19)
@@ -352,6 +399,8 @@ Nunca apontar `TEST_*` para `content-factory-postgres-1`/`-redis-1` (experimento
 - Log `ERROR` com traceback por segmento falho (`caplog`).
 - `finished_at - started_at` ≈ `discover_ms + persist_ms` em runs novas.
 - Pico de TikTok == 1 com 3 segmentos concorrentes.
+- (Tasks 8.1/8.2) `internal_error` com traceback no log, e log do worker
+  com nível/timestamp e sem segredo em claro.
 
 **Troca de ambiente (inalterada, só após 2026-10-19 e após a Etapa 0):**
 exportar dados do experimento → parar os 3 workers → subir
