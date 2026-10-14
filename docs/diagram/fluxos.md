@@ -112,12 +112,15 @@ savepoint; `partial = erros mas com persistidos`.
 
 ```mermaid
 flowchart TD
-    A["tick 07:00 · active_segments()"] --> B["TaskGroup por segmento"]
+    A["tick 07:00 · active_segments()"] --> B["bounded_gather por segmento"]
     B --> U["abrir UoW<br/>guard = FanoutGuard(segment.research)"]
     U --> G["guard admite seeds<br/>ANTES do fan-out"]
-    G --> WT["web + trends SEQUENCIAL<br/>web_suggest · trends_google"]
+    G --> WT["web + trends SEQUENCIAL<br/>CollectRun research:web_suggest / research:trends<br/>falha = run failed, ciclo SEGUE"]
     WT --> SIG["upsert signals + observations"]
-    SIG --> SO["TaskGroup + semáforo 2<br/>socials admitidos pelo guard"]
+    SIG --> KW{"algum sinal?"}
+    KW -- sim --> SO["bounded_gather 2<br/>socials admitidos pelo guard"]
+    KW -- não --> SEED["keywords = seeds do segmento"]
+    SEED --> SO
     SO --> S1["discover_by_keywords<br/>youtube"]
     SO --> S2["discover_by_keywords<br/>instagram"]
     S1 --> PE["persistência SEQUENCIAL<br/>upsert_candidates + CollectRun<br/>research:plataforma"]
@@ -127,7 +130,9 @@ flowchart TD
 ```
 
 O guard é consultado **antes** de agendar cada task (ele muta estado
-interno e não é task-safe). Erro de 1 rede social não aborta as demais.
+interno e não é task-safe). Erro de 1 rede social não aborta as demais, e
+erro do Suggest/Trends (incluindo `circuit_open`) também não: vira run
+`failed` e `web_failed`/`trends_failed`/`source_errors` no envelope.
 
 ## 6. CLI — envelope na saída, dados no banco
 

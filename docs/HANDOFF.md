@@ -19,8 +19,18 @@ _**Etapa 1 do plano de review CONCLUÍDA (2026-10-14), branch
   isso foi reproduzido em Postgres real e agora é coberto por teste de
   integração.
 
-Gates: 339 testes com infra descartável. Os workers do experimento não foram
-tocados._
+- **Research resiliente a falha de fonte** (plano
+  `2026-10-14-content-factory-research-fontes-resilientes.md`): erro do
+  Suggest ou do Trends (o HTTP 400 diário, ou `circuit_open`) não aborta
+  mais o segmento.
+  - A falha vira run `research:web_suggest`/`research:trends` `failed`.
+  - A fase social roda; sem nenhum sinal, usa as seeds do segmento.
+  - O envelope ganha `web_failed`/`trends_failed`/`source_errors`, com
+    `ok: false`.
+  - Após o swap, o esperado é `research:trends failed` em `collect_runs` com
+    as runs sociais `ok`.
+
+Gates: ver o PR #10. Os workers do experimento não foram tocados._
 
 _**Concorrência pós-PR #8: review + correções na `main` (2026-10-14).**
 Plano: `docs/ai-plans/2026-10-14-content-factory-concorrencia-review-fixes.md`.
@@ -461,15 +471,6 @@ guard-rail, tabela e orquestrador; Fases B–E pendem de decisão do usuário.
 
 ## ⛔ O que falta (próximos passos aprovados)
 
-0. **Research aborta o segmento quando o Suggest ou o Trends falham**
-   (achado na Etapa 1 T10, ainda não corrigido). Em `run_research_cycle`,
-   `deps.web.expand` e `deps.trends.interest_over_time` não têm proteção.
-   O Trends HTTP 400 diário (ou o `circuit_open`) derruba o research dos 3
-   segmentos antes da fase social, que nunca roda. Recomendação: tratar
-   como `collect()` trata cada coletor, ou seja, falha de fonte vira
-   contagem/run `failed` e o ciclo segue com os sinais que houver. Fazer
-   com TDD e plano próprio; a mudança altera o comportamento do
-   `research_job`.
 1. **Issues pós-merge** (backlog da REVISÃO §6 — #1 mascaramento/finally já
    corrigido pelo savepoint; PR #3 merged `7d5d295`): lock token (#2 alta),
    INCR+EXPIRE (#3), detalhe de erro do score (#4) — **deferrals do collector

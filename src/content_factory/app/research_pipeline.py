@@ -1,5 +1,5 @@
 import logging
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 
@@ -19,7 +19,14 @@ from content_factory.app.ports import (
 )
 from content_factory.domain.errors import CollectorError
 from content_factory.domain.fanout_guard import FanoutGuard
-from content_factory.domain.models import CandidateVideo, CollectRun, DepthConfig, KeywordSignal
+from content_factory.domain.models import (
+    CandidateVideo,
+    CollectRun,
+    DepthConfig,
+    KeywordSignal,
+    Segment,
+    TrendPoint,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -114,6 +121,45 @@ async def _discover_social_one(
         )
 
 
+TRENDS_SOURCE = "trends"  # chave do limiter e sufixo da run `research:trends`
+
+
+async def _run_source[T](
+    name: str,
+    segment: Segment,
+    deps: ResearchDeps,
+    call: Callable[[], Awaitable[list[T]]],
+) -> tuple[list[T], bool]:
+    """Chama 1 fonte (Suggest/Trends) e grava `research:<name>`; devolve (itens, falhou).
+
+    Mesmo contrato dos coletores em collect(): `CollectorError` → run
+    `failed` com o código do contrato; exceção fora do contrato →
+    `internal_error` + log com traceback (Task 8.1). Nunca levanta por erro
+    da fonte — o ciclo segue com lista vazia. Cancelamento propaga.
+    """
+    run = CollectRun(collector=f"research:{name}", segment_id=segment.id, started_at=deps.clock())
+    items: list[T] = []
+    failed = True
+    try:
+        items = await call()
+    except CollectorError as exc:
+        run.error_code = exc.code
+    except Exception:
+        logger.exception("fonte fora do contrato: %s/%s", segment.slug, name)
+        run.error_code = "internal_error"
+    else:
+        failed = False
+    if failed:
+        run.status = "failed"
+        run.failed = 1
+    else:
+        run.status = "ok"
+        run.found = len(items)
+    run.finished_at = deps.clock()
+    await deps.runs.record(run)
+    return items, failed
+
+
 @dataclass
 class ResearchOutcome:
     ok: bool
@@ -140,13 +186,26 @@ async def run_research_cycle(
         }
 
         seeds = [k for k in segment.keywords if deps.guard.admit(k, 0)]
-        await deps.limiter.acquire(deps.web.platform)
-        web_signals = deps.guard.truncate(await deps.web.expand(seeds, 0), "web")
+
+        # Fontes (Suggest/Trends) resilientes: falha vira run `failed` e o
+        # ciclo segue com os sinais que houver (plano
+        # 2026-10-14-content-factory-research-fontes-resilientes) — antes,
+        # o Trends HTTP 400 diário abortava o segmento antes da fase social.
+        async def _expand() -> list[KeywordSignal]:
+            await deps.limiter.acquire(deps.web.platform)
+            return await deps.web.expand(seeds, 0)
+
+        web_raw, web_failed = await _run_source(deps.web.platform, segment, deps, _expand)
+        web_signals = deps.guard.truncate(web_raw, "web")
         counts["web_found"] = len(web_signals)
 
         trend_keywords = [s.keyword for s in web_signals if deps.guard.admit(s.keyword, 1)]
-        await deps.limiter.acquire("trends")
-        trend_points = await deps.trends.interest_over_time(trend_keywords, "week")
+
+        async def _trends() -> list[TrendPoint]:
+            await deps.limiter.acquire(TRENDS_SOURCE)
+            return await deps.trends.interest_over_time(trend_keywords, "week")
+
+        trend_points, trends_failed = await _run_source(TRENDS_SOURCE, segment, deps, _trends)
         trend_signals = deps.guard.truncate(
             [
                 KeywordSignal(keyword=p.keyword, source="trends", weight=p.interest / 100, depth=1)
@@ -155,6 +214,10 @@ async def run_research_cycle(
             "trends",
         )
         counts["trends_found"] = len(trend_signals)
+        counts["web_failed"] = int(web_failed)
+        counts["trends_failed"] = int(trends_failed)
+        source_errors = int(web_failed) + int(trends_failed)
+        counts["source_errors"] = source_errors
 
         # Fase F3: gravar série temporal append-only (separada do signal
         # de descoberta que faz upsert e sobrescreve o peso anterior)
@@ -163,7 +226,9 @@ async def run_research_cycle(
         all_signals = web_signals + trend_signals
         counts["signals_saved"] = await deps.signals.upsert_many(segment.id, all_signals)
 
-        keywords_for_social = [s.keyword for s in all_signals]
+        # sem nenhum sinal (fontes falharam ou vieram vazias), a fase social
+        # usa as seeds do segmento — senão as redes receberiam lista vazia
+        keywords_for_social = [s.keyword for s in all_signals] or seeds
         # Fase de rede (Task 8 + Etapa 2 Task 12): bounded_gather, mesmo
         # padrão de collect(). Cada task captura Exception na PRÓPRIA
         # fronteira (_discover_social_one devolve SocialDiscoverResult) —
@@ -257,10 +322,11 @@ async def run_research_cycle(
         counts["social_platforms_attempted"] = social_platforms_attempted
         counts["social_platform_errors"] = social_platform_errors
 
-        # Mesmo contrato de collect(): ok = nenhuma plataforma social
-        # configurada falhou; partial = falhou alguma mas outras
-        # inseriram/atualizaram candidato.
-        ok = social_platform_errors == 0
+        # Mesmo contrato de collect(): ok = nenhuma fonte (Suggest/Trends)
+        # nem rede social falhou; partial = falhou alguma, mas a fase social
+        # inseriu/atualizou candidato (sinais salvos não contam — quase todo
+        # ciclo salva sinal, e partial perderia o sentido).
+        ok = social_platform_errors == 0 and source_errors == 0
         partial = (not ok) and (social_inserted + social_updated > 0)
         return ResearchOutcome(ok=ok, partial=partial, counts=counts)
     finally:

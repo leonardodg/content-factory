@@ -244,11 +244,13 @@ manual no fim do período. O `research_job` no worker filtra
   (5 falhas consecutivas → cooldown de 72 h = 3 ciclos diários do research;
   `infra/collectors/breaker.py`, em memória porque o worker é único) e
   mapeiam erros para `RateLimited`/`NetworkError`/`UpstreamChanged`.
-  **Atenção:** hoje um erro do Suggest/Trends (ou `circuit_open`) **aborta
-  o research do segmento**. `expand`/`interest_over_time` não são
-  protegidos, então a fase social nem roda e o envelope do segmento sai
-  `ok: false`. É o que acontece com o Trends HTTP 400 (pendência no
-  HANDOFF). Ver ADR-0005.
+  Erro de uma fonte (inclusive `circuit_open`) **não aborta** o research:
+  vira `CollectRun` `research:web_suggest`/`research:trends` com status
+  `failed` e o `error_code` do contrato (`internal_error` + log com
+  traceback se for exceção fora do contrato). O envelope traz
+  `web_failed`/`trends_failed`/`source_errors` e `ok: false`, e o ciclo
+  segue com os sinais que houver. Sem nenhum sinal, a fase social usa as
+  seeds do segmento. Ver ADR-0005.
 - **`defaults.env` não é montado no compose.** O arquivo
   `.devcontainer/env/defaults.env` é versionado, mas nenhum serviço o lê (o
   compose só monta `env/app.env` e o secret `secrets/secrets.env`). Os

@@ -221,12 +221,12 @@ async def run_research_job(ctx: dict[str, Any]) -> dict[str, Any]:
     devolve lista vazia e o loop não roda nenhuma vez. A chave antiga
     `"skipped"` saiu do envelope: vazio é `segments: {}`.
 
-    O bundle por segmento já traz `ResearchDeps` com o guard do segmento;
-    `run_research_cycle` só captura exceção por rede social (loop interno) —
-    uma falha de `web`/`trends` (ex.: `UpstreamChanged` fora do try/except)
-    sobe direto e é pega DENTRO da task do segmento, pra não cancelar as
-    irmãs concorrentes. Os segmentos rodam CONCORRENTES sob TaskGroup +
-    semáforo (`WORKER_MAX_SEGMENTS`).
+    O bundle por segmento já traz `ResearchDeps` com o guard do segmento.
+    `run_research_cycle` absorve falha de fonte (Suggest/Trends) e de rede
+    social como run `failed` e segue o ciclo; só o que escapa dele (lock,
+    segmento inexistente, erro de banco) chega a `_gather_segments`, que
+    isola o segmento. Os segmentos rodam concorrentes (`bounded_gather`,
+    `WORKER_MAX_SEGMENTS`).
     """
     campaigns: ResearchCampaignRepository = ctx["campaigns_deps"]
     app_deps: AppDeps = ctx["app_deps"]

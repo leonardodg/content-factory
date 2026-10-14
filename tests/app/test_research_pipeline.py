@@ -31,6 +31,13 @@ from content_factory.domain.models import (
     UpsertStats,
 )
 
+_SOURCE_RUNS = {"research:web_suggest", "research:trends"}
+
+
+def _social_runs(recorded: list[CollectRun]) -> list[CollectRun]:
+    """Runs das redes sociais — as fontes (Suggest/Trends) também gravam run."""
+    return [r for r in recorded if r.collector not in _SOURCE_RUNS]
+
 
 class _FakeWeb:
     platform: ClassVar[str] = "web_suggest"
@@ -297,7 +304,7 @@ async def test_run_research_cycle_persists_social_candidates() -> None:
     assert out.counts["social_inserted"] == 2
     # CollectRun auditável com prefixo research:
     assert isinstance(repos.runs, FakeRuns)
-    runs = repos.runs.recorded
+    runs = _social_runs(repos.runs.recorded)
     assert len(runs) == 1
     assert runs[0].collector == "research:instagram"
     assert runs[0].status == "ok"
@@ -338,10 +345,10 @@ async def test_run_research_cycle_social_failure_records_failed_run() -> None:
     assert out.partial is False  # nada foi inserido/atualizado
     assert out.counts.get("instagram_failed") == 1
     assert isinstance(repos.runs, FakeRuns)
-    assert repos.runs.recorded[0].status == "failed"
-    assert repos.runs.recorded[0].error_code == "blocked"
-    assert repos.runs.recorded[0].failed == 1  # Fase H: explícito no campo numérico
-    assert repos.runs.recorded[0].skipped == 0
+    assert _social_runs(repos.runs.recorded)[0].status == "failed"
+    assert _social_runs(repos.runs.recorded)[0].error_code == "blocked"
+    assert _social_runs(repos.runs.recorded)[0].failed == 1  # Fase H: explícito no campo numérico
+    assert _social_runs(repos.runs.recorded)[0].skipped == 0
 
 
 @pytest.mark.asyncio
@@ -573,7 +580,7 @@ async def test_research_social_persist_order_follows_socials_not_completion() ->
     out = await run_research_cycle("candles", DepthConfig(), deps)
     assert out.ok is True
     assert isinstance(repos.runs, FakeRuns)
-    assert [r.collector for r in repos.runs.recorded] == [
+    assert [r.collector for r in _social_runs(repos.runs.recorded)] == [
         "research:slow",
         "research:fast1",
         "research:fast2",
@@ -902,9 +909,14 @@ async def test_research_concurrent_segments_count_own_gate_hits() -> None:
 
 
 class _PoisonedRuns(FakeRuns):
-    """Sessão quebrada: depois de um erro de infra, qualquer escrita levanta."""
+    """Sessão quebrada pelo erro de infra no upsert: a escrita seguinte levanta.
+
+    As runs das fontes (Suggest/Trends) são gravadas ANTES do upsert e passam.
+    """
 
     async def record(self, run: CollectRun) -> int:
+        if run.collector in _SOURCE_RUNS:
+            return await super().record(run)
         raise RuntimeError("PendingRollbackError simulada")
 
 
@@ -920,3 +932,119 @@ async def test_research_infra_error_is_not_masked_by_run_record() -> None:
     deps = _research_deps_with({"tiktok": _tracked_social("tiktok", tracker, [], [cand])}, repos)
     with pytest.raises(KeyError, match="boom-upsert"):
         await run_research_cycle("candles", DepthConfig(), deps)
+
+
+# --- Fontes resilientes (plano 2026-10-14-content-factory-research-fontes-resilientes) ---
+
+
+class _BoomTrends:
+    def __init__(self, error: Exception) -> None:
+        self._error = error
+
+    async def interest_over_time(self, keywords: list[str], timeframe: str) -> list[TrendPoint]:
+        raise self._error
+
+
+class _BoomWeb:
+    platform: ClassVar[str] = "web_suggest"
+
+    def __init__(self, error: Exception) -> None:
+        self._error = error
+
+    async def expand(self, seeds: list[str], depth: int) -> list[KeywordSignal]:
+        raise self._error
+
+
+def _social_with_candidate(calls: list[list[str]]) -> SocialDiscoverer:
+    cand = CandidateVideo(
+        platform="instagram",
+        platform_video_id="ig-src",
+        url="https://instagram.com/reel/ig-src",
+        creator_handle="u",
+    )
+    return _tracked_social("instagram", ConcurrencyTracker(), calls, [cand])
+
+
+def _runs_by_collector(repos: FakeRepos) -> dict[str, CollectRun]:
+    assert isinstance(repos.runs, FakeRuns)
+    return {r.collector: r for r in repos.runs.recorded}
+
+
+async def test_trends_failure_does_not_abort_research() -> None:
+    """Trends HTTP 400 diário em produção abortava o segmento antes da fase social."""
+    from content_factory.domain.errors import UpstreamChanged
+
+    calls: list[list[str]] = []
+    repos = FakeRepos()
+    deps = _research_deps_with({"instagram": _social_with_candidate(calls)}, repos)
+    deps.trends = _BoomTrends(UpstreamChanged("google_trends", "HTTP 400"))
+    out = await run_research_cycle("candles", DepthConfig(), deps)
+    assert out.counts["trends_failed"] == 1
+    assert out.counts["web_failed"] == 0
+    assert out.counts["source_errors"] == 1
+    assert out.counts["social_inserted"] == 1  # a fase social rodou
+    assert calls == [["vela relacionada"]]  # com os sinais do Suggest
+    assert out.ok is False and out.partial is True
+    runs = _runs_by_collector(repos)
+    assert runs["research:trends"].status == "failed"
+    assert runs["research:trends"].error_code == "upstream_changed"
+    assert runs["research:web_suggest"].status == "ok"
+    assert runs["research:web_suggest"].found == 1
+
+
+async def test_web_circuit_open_does_not_abort_research() -> None:
+    calls: list[list[str]] = []
+    repos = FakeRepos()
+    deps = _research_deps_with({"instagram": _social_with_candidate(calls)}, repos)
+    deps.web = _BoomWeb(CollectorError("circuit_open", "web_suggest", "cooldown"))
+    out = await run_research_cycle("candles", DepthConfig(), deps)
+    assert out.counts["web_failed"] == 1
+    runs = _runs_by_collector(repos)
+    assert runs["research:web_suggest"].status == "failed"
+    assert runs["research:web_suggest"].error_code == "circuit_open"
+    assert runs["research:trends"].status == "ok"
+    assert out.counts["social_inserted"] == 1
+
+
+async def test_both_sources_failing_fall_back_to_seeds_for_social() -> None:
+    """Sem nenhum sinal, a fase social usa as seeds do segmento — senão a
+    resiliência não teria efeito (redes recebendo lista vazia)."""
+    from content_factory.domain.errors import UpstreamChanged
+
+    calls: list[list[str]] = []
+    repos = FakeRepos()
+    deps = _research_deps_with({"instagram": _social_with_candidate(calls)}, repos)
+    deps.web = _BoomWeb(CollectorError("circuit_open", "web_suggest", "cooldown"))
+    deps.trends = _BoomTrends(UpstreamChanged("google_trends", "HTTP 400"))
+    out = await run_research_cycle("candles", DepthConfig(), deps)
+    assert calls == [["vela"]]  # seeds do segmento
+    assert out.counts["source_errors"] == 2
+    assert out.counts["signals_saved"] == 0
+    assert out.partial is True  # candidato social inserido
+
+
+async def test_unexpected_source_error_is_internal_error_and_logged(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    repos = FakeRepos()
+    deps = _research_deps_with({}, repos)
+    deps.trends = _BoomTrends(KeyError("df sem coluna"))
+    with caplog.at_level(logging.ERROR, logger="content_factory"):
+        out = await run_research_cycle("candles", DepthConfig(), deps)
+    assert _runs_by_collector(repos)["research:trends"].error_code == "internal_error"
+    errors = [r for r in caplog.records if r.levelno == logging.ERROR]
+    assert len(errors) == 1 and "trends" in errors[0].getMessage()
+    assert errors[0].exc_info is not None
+    assert out.ok is False
+
+
+async def test_happy_path_records_source_runs_and_is_ok() -> None:
+    repos = FakeRepos()
+    deps = _research_deps_with({}, repos)
+    out = await run_research_cycle("candles", DepthConfig(), deps)
+    runs = _runs_by_collector(repos)
+    assert runs["research:web_suggest"].status == "ok"
+    assert runs["research:trends"].status == "ok"
+    assert runs["research:trends"].found == 1
+    assert out.counts["source_errors"] == 0
+    assert out.ok is True
