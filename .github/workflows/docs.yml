@@ -16,12 +16,10 @@ on:
       - "mkdocs.yml"
       - "pyproject.toml"
       - ".github/workflows/docs.yml"
+  # pull_request SEM paths: a ruleset da main exige o check "Build site" em
+  # TODO PR; com filtro, PRs que não tocam docs nunca geravam o check e o
+  # merge ficava BLOCKED para sempre (2026-10-14).
   pull_request:
-    paths:
-      - "docs/**"
-      - "mkdocs.yml"
-      - "pyproject.toml"
-      - ".github/workflows/docs.yml"
   workflow_dispatch:
 
 permissions:
