@@ -24,7 +24,7 @@ theme:
       toggle:
         icon: material/brightness-7
         name: Mudar para o modo escuro
-plugins: [search, mermaid2]
+plugins: [search]
 markdown_extensions:
   - admonition
   - tables

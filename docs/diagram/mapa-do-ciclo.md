@@ -23,30 +23,30 @@ que alimenta a fase de IA (ideias/roteiros, ainda não implementada).
 ## 1. Mapa mental
 
 ```mermaid
-mindmap
-  root((ciclo))
-    Entrada
-      segmento YAML
-      campanha ativa
-    research 07h
-      Suggest e Trends
-      busca social
-    collect 08h e 20h
-      YouTube Instagram
-      TikTok e web
-    score 08h30 e 21h30
-      viral_score
-    Reciclos
-      remede 2x por dia
-      velocity
-    Limites
-      janelas Redis
-      tiktok 1 por vez
-      timeout por job
-    Segurancas
-      lock por segmento
-      breakers
-      log redigido
+flowchart LR
+    ROOT(("ciclo"))
+    ROOT --> E["Entrada"]
+    E --> E1["segmento YAML"]
+    E --> E2["campanha ativa"]
+    ROOT --> R["research 07h"]
+    R --> R1["Suggest + Trends"]
+    R --> R2["busca social"]
+    ROOT --> C["collect 08h e 20h"]
+    C --> C1["YouTube · Instagram"]
+    C --> C2["TikTok · web"]
+    ROOT --> S["score 08h30 e 21h30"]
+    S --> S1["viral_score"]
+    ROOT --> RC["Reciclos"]
+    RC --> RC1["remede 2x por dia"]
+    RC --> RC2["velocity"]
+    ROOT --> L["Limites"]
+    L --> L1["janelas Redis"]
+    L --> L2["tiktok 1 por vez"]
+    L --> L3["timeout por job"]
+    ROOT --> SG["Seguranças"]
+    SG --> SG1["lock por segmento"]
+    SG --> SG2["breakers"]
+    SG --> SG3["log redigido"]
 ```
 
 Cada ramo é detalhado nas seções abaixo: jobs (§3), coletores (§4),
@@ -55,18 +55,14 @@ dados salvos (§5), reciclos (§6) e limites/seguranças (§7).
 ## 2. Relógio do worker (BRT, `America/Sao_Paulo`)
 
 ```mermaid
-timeline
-    title Um dia do worker
-    07h00 : research_job
-          : Suggest + Trends + busca social por keyword
-    08h00 : collect_job
-          : YouTube + Instagram + TikTok + web
-    08h30 : score_job
-          : pontua o último snapshot de cada vídeo
-    20h00 : collect_job
-          : re-mede os mesmos vídeos, segundo snapshot do dia
-    21h30 : score_job
-          : velocity já tem 2 snapshots para comparar
+flowchart TD
+    T1["07:00<br/><b>research_job</b><br/>Suggest + Trends +<br/>busca social por keyword"]
+    T2["08:00<br/><b>collect_job</b><br/>YouTube · Instagram ·<br/>TikTok · web"]
+    T3["08:30<br/><b>score_job</b><br/>pontua o último<br/>snapshot de cada vídeo"]
+    T4["20:00<br/><b>collect_job</b><br/>re-mede os mesmos vídeos<br/>(2º snapshot do dia)"]
+    T5["21:30<br/><b>score_job</b><br/>velocity já tem<br/>2 snapshots"]
+    T1 --> T2 --> T3 --> T4 --> T5
+    T5 -. "dia seguinte" .-> T1
 ```
 
 | Job | Cron (BRT) | Configurável | `unique` | Repete por |
