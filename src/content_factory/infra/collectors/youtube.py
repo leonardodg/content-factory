@@ -5,12 +5,35 @@ from typing import Any, ClassVar, cast
 import httpx
 
 from content_factory.app.call_counters import record_quota
-from content_factory.domain.errors import NetworkError, RateLimited, UpstreamChanged
+from content_factory.domain.errors import AuthExpired, NetworkError, RateLimited, UpstreamChanged
 from content_factory.domain.models import CandidateVideo, SegmentConfig
 from content_factory.infra.redact import redact
 
 API = "https://www.googleapis.com/youtube/v3"
 DURATION_RE = re.compile(r"PT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?")
+
+
+def _error_reason(response: httpx.Response) -> str:
+    """`error.errors[0].reason` da API (keyInvalid, quotaExceeded…), se legível."""
+    try:
+        payload: Any = response.json()
+    except ValueError:
+        return ""
+    if not isinstance(payload, dict):
+        return ""
+    data = cast(dict[str, Any], payload)
+    error: Any = data.get("error")
+    if not isinstance(error, dict):
+        return ""
+    errors: Any = cast(dict[str, Any], error).get("errors")
+    if not isinstance(errors, list) or not errors:
+        return ""
+    items = cast(list[Any], errors)
+    first: Any = items[0]
+    if not isinstance(first, dict):
+        return ""
+    reason: Any = cast(dict[str, Any], first).get("reason")
+    return str(reason or "")
 
 
 def _duration_seconds(iso: str) -> int | None:
@@ -42,12 +65,23 @@ class YoutubeCollector:
         self._client = httpx.AsyncClient(transport=transport, timeout=20)
 
     async def _get(self, path: str, params: dict[str, str]) -> dict[str, Any]:
+        if not self._key:
+            # auditoria A-3: credencial ausente não é cota — falha antes da
+            # chamada (mesmo padrão do TikTok), sem abrir o breaker
+            raise AuthExpired(
+                self.platform, "YOUTUBE_API_KEY ausente — ver docs/dev/credentials.md"
+            )
         try:
             r = await self._client.get(f"{API}/{path}", params={**params, "key": self._key})
         except httpx.HTTPError as exc:
             # redact: a URL de erro carrega a API key na query (`key=`), como
             # o access_token no Instagram (revisão 2026-10-14 A2)
             raise NetworkError(self.platform, redact(str(exc))) from exc
+        # auditoria A-3: só cota é rate_limited; chave reprovada é credencial
+        if _error_reason(r) == "keyInvalid":
+            raise AuthExpired(
+                self.platform, "keyInvalid — YOUTUBE_API_KEY inválida (docs/dev/credentials.md)"
+            )
         if r.status_code == 403:
             raise RateLimited(self.platform, "quota ou origem bloqueada")
         if r.status_code >= 400:
