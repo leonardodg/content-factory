@@ -6,6 +6,7 @@ import httpx
 
 from content_factory.domain.errors import NetworkError, RateLimited, UpstreamChanged
 from content_factory.domain.models import CandidateVideo, SegmentConfig
+from content_factory.infra.redact import redact
 
 API = "https://www.googleapis.com/youtube/v3"
 DURATION_RE = re.compile(r"PT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?")
@@ -46,7 +47,9 @@ class YoutubeCollector:
         try:
             r = await self._client.get(f"{API}/{path}", params={**params, "key": self._key})
         except httpx.HTTPError as exc:
-            raise NetworkError(self.platform, str(exc)) from exc
+            # redact: a URL de erro carrega a API key na query (`key=`), como
+            # o access_token no Instagram (revisão 2026-10-14 A2)
+            raise NetworkError(self.platform, redact(str(exc))) from exc
         if r.status_code == 403:
             raise RateLimited(self.platform, "quota ou origem bloqueada")
         if r.status_code >= 400:
