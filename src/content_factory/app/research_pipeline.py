@@ -167,20 +167,9 @@ async def run_research_cycle(
                     platform, discoverer, keywords_for_social, deps
                 )
 
-        try:
-            async with asyncio.TaskGroup() as task_group:
-                for index, (platform, discoverer) in enumerate(wanted):
-                    task_group.create_task(_run(index, platform, discoverer))
-        except ExceptionGroup as group:
-            # Paridade com collect(): erro isolado de 1 rede sobe nu, como
-            # no caminho sequencial (o worker registra str(exc) no envelope
-            # do segmento). Inalcançável na prática — a fronteira da task
-            # captura Exception —, mas mantém o contrato se a fronteira for
-            # estreitada no futuro. Grupo com 2+ falhas distintas propaga
-            # como ExceptionGroup — caso sem equivalente sequencial.
-            if len(group.exceptions) == 1:
-                raise group.exceptions[0] from None
-            raise
+        async with asyncio.TaskGroup() as task_group:
+            for index, (platform, discoverer) in enumerate(wanted):
+                task_group.create_task(_run(index, platform, discoverer))
         discoveries: list[SocialDiscoverResult] = [slots[index] for index in range(len(wanted))]
         # Fase de persistência (sempre sequencial: mesma sessão Postgres).
         social_found = social_inserted = social_updated = social_skipped = 0

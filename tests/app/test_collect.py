@@ -491,7 +491,7 @@ async def test_collect_respects_max_concurrent_discoveries() -> None:
 
 
 class _BoomCollector:
-    """Exceção fora do contrato: não é CollectorError, precisa propagar."""
+    """Exceção fora do contrato: vira run failed, sem cancelar as irmãs."""
 
     platform: ClassVar[str] = "youtube"
 
@@ -499,16 +499,16 @@ class _BoomCollector:
         raise ValueError("boom")
 
 
-async def test_collect_non_collector_error_propagates_and_releases_lock() -> None:
-    """Task 7: ValueError numa plataforma propaga (cancela as irmãs).
+async def test_collect_unexpected_error_becomes_failed_run_and_siblings_persist() -> None:
+    """Etapa 0 Task 4: ValueError numa plataforma vira run failed; irmãs persistem.
 
-    Nada persiste (edge da Task 6: aborta antes da fase de persistência),
-    lock liberado, nenhuma task pendente no loop.
+    Paridade com o research (que já captura Exception por rede): a exceção
+    inesperada não cancela as plataformas irmãs — lock liberado no finally.
     """
-    tracker = ConcurrencyTracker()
     collectors: list[Collector] = [
         _BoomCollector(),
-        TrackedCollector("tiktok", tracker, delay=30.0),
+        FakeCollector("tiktok", n=2),
+        FakeCollector("instagram", n=1),
     ]
     videos = FakeVideos()
     repos = FakeRepos()
@@ -521,13 +521,17 @@ async def test_collect_non_collector_error_propagates_and_releases_lock() -> Non
         limiter=FakeLimiter(),
         lock=lock,
     )
-    before = {id(t) for t in asyncio.all_tasks()}
-    with pytest.raises(ValueError, match="boom"):
-        await collect("candles", ["youtube", "tiktok"], limit=5, deps=deps)
+    out = await collect("candles", ["youtube", "tiktok", "instagram"], limit=5, deps=deps)
+    assert out.ok is False
+    assert out.partial is True
+    boom_run = next(r for r in out.runs if r.collector == "youtube")
+    assert boom_run.status == "failed"
+    assert boom_run.error_code == "internal_error"
+    assert boom_run.failed == 1
+    siblings = [r for r in out.runs if r.collector in {"tiktok", "instagram"}]
+    assert len(siblings) == 2 and all(r.status == "ok" for r in siblings)
+    assert videos.upserts != []
     assert lock.released == ["collect:candles"]
-    assert videos.upserts == []
-    lingering = [t for t in asyncio.all_tasks() if id(t) not in before and not t.done()]
-    assert lingering == []
 
 
 async def test_collect_external_cancel_releases_lock() -> None:

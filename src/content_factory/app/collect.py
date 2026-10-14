@@ -45,8 +45,11 @@ class CollectDeps:
 class DiscoverResult:
     """Resultado da fase de rede para uma plataforma (Task 6).
 
-    Fronteira da concorrência (Task 7): só CollectorError é capturado aqui —
-    qualquer outra exceção propaga para o try/except por segmento do worker.
+    Fronteira da concorrência (Etapa 0 Task 4): CollectorError E qualquer
+    outra Exception viram `error` aqui — nenhuma exceção esperada escapa
+    para cancelar as irmãs (paridade com o research). Só cancelamento
+    (BaseException) propaga. Exceção inesperada vira
+    `CollectorError("internal_error", ...)` com o original em `__cause__`.
     discover_ms é medido nesta fase e transportado; started_at/finished_at e
     persist_ms são medidos na fase de persistência de collect().
     """
@@ -71,8 +74,9 @@ async def _discover_one(
 ) -> DiscoverResult:
     """Fase de rede para uma plataforma: limiter.acquire + discover.
 
-    Devolve DiscoverResult em vez de levantar CollectorError — a fase de
-    persistência decide status/counts/runs. Outras exceções propagam.
+    Devolve DiscoverResult em vez de levantar — a fase de persistência
+    decide status/counts/runs. Exceção fora do contrato vira
+    `internal_error` (defesa em profundidade); só cancelamento propaga.
     gate_hits é lido como delta before/after porque o collector é singleton
     no registry (self.gate_hits acumula entre runs).
     """
@@ -88,6 +92,17 @@ async def _discover_one(
             gate_hits_delta=gate_hits_after - gate_hits_before,
             discover_ms=None,
         )
+    except Exception as exc:
+        gate_hits_after = getattr(collector, "gate_hits", 0)
+        error = CollectorError("internal_error", collector.platform, str(exc))
+        error.__cause__ = exc
+        return DiscoverResult(
+            platform=collector.platform,
+            found=None,
+            error=error,
+            gate_hits_delta=gate_hits_after - gate_hits_before,
+            discover_ms=None,
+        )
     discover_start = deps.clock()
     try:
         found = await collector.discover(segment, limit)
@@ -98,6 +113,18 @@ async def _discover_one(
             platform=collector.platform,
             found=None,
             error=exc,
+            gate_hits_delta=gate_hits_after - gate_hits_before,
+            discover_ms=discover_ms,
+        )
+    except Exception as exc:
+        discover_ms = _ms_between(discover_start, deps.clock())
+        gate_hits_after = getattr(collector, "gate_hits", 0)
+        error = CollectorError("internal_error", collector.platform, str(exc))
+        error.__cause__ = exc
+        return DiscoverResult(
+            platform=collector.platform,
+            found=None,
+            error=error,
             gate_hits_delta=gate_hits_after - gate_hits_before,
             discover_ms=discover_ms,
         )
@@ -130,14 +157,13 @@ async def collect(
         }
         runs: list[CollectRun] = []
         errors = 0
-        # Fase de rede (Task 7): TaskGroup + semáforo limitado. Cada task
-        # captura CollectorError na PRÓPRIA fronteira (dentro de
+        # Fase de rede (Task 7 + Etapa 0 Task 4): TaskGroup + semáforo
+        # limitado. Cada task captura TUDO na PRÓPRIA fronteira (dentro de
         # _discover_one, que devolve DiscoverResult) — nenhuma exceção
-        # esperada escapa, para não cancelar as irmãs. Exceção
-        # não-CollectorError PROPAGA: cancela as irmãs e aborta antes de
-        # persistir (edge da Task 6 — worker faz rollback, estado final
-        # idêntico ao sequencial). Resultados indexados por posição: a
-        # persistência segue a ordem de deps.collectors, não a de término.
+        # esperada escapa, para não cancelar as irmãs; só cancelamento
+        # externo (BaseException) aborta o grupo. Resultados indexados por
+        # posição: a persistência segue a ordem de deps.collectors, não a
+        # de término.
         wanted = [c for c in deps.collectors if c.platform in platforms]
         slots: dict[int, DiscoverResult] = {}
         semaphore = asyncio.Semaphore(max(1, deps.max_concurrent_discoveries))
@@ -146,18 +172,9 @@ async def collect(
             async with semaphore:
                 slots[index] = await _discover_one(collector, segment, limit, deps)
 
-        try:
-            async with asyncio.TaskGroup() as task_group:
-                for index, collector in enumerate(wanted):
-                    task_group.create_task(_run(index, collector))
-        except ExceptionGroup as group:
-            # Contrato pré-concorrência: erro isolado de 1 plataforma sobe
-            # nu, como no caminho sequencial (o worker registra str(exc) no
-            # envelope do segmento). Grupo com 2+ falhas distintas propaga
-            # como ExceptionGroup — caso sem equivalente sequencial.
-            if len(group.exceptions) == 1:
-                raise group.exceptions[0] from None
-            raise
+        async with asyncio.TaskGroup() as task_group:
+            for index, collector in enumerate(wanted):
+                task_group.create_task(_run(index, collector))
         discoveries: list[DiscoverResult] = [slots[index] for index in range(len(wanted))]
         # Fase de persistência (sempre sequencial: mesma sessão Postgres).
         for result in discoveries:
