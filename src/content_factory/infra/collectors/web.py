@@ -6,7 +6,12 @@ from typing import ClassVar
 from ddgs.ddgs import DDGS
 from ddgs.exceptions import DDGSException, RatelimitException, TimeoutException
 
-from content_factory.domain.errors import NetworkError, RateLimited, UpstreamChanged
+from content_factory.domain.errors import (
+    CollectorError,
+    NetworkError,
+    RateLimited,
+    UpstreamChanged,
+)
 from content_factory.domain.models import CandidateVideo, SegmentConfig
 
 
@@ -22,18 +27,15 @@ class WebCollector:
         q = " OR ".join(segment.keywords[:3])
         # DDGS é síncrono (rede) — roda em thread; o lambda lê o global DDGS a
         # cada chamada, que é o que monkeypatch.setattr(web_mod, "DDGS", ...) troca.
-        # Erros do ddgs viram o contrato de CollectorError (subclasses antes
-        # da base); "No results found" é busca vazia, não erro.
+        # Erros do ddgs viram o contrato de CollectorError (`_classify`);
+        # "No results found" é busca vazia, não erro.
         try:
             results = await asyncio.to_thread(lambda: DDGS().text(q, max_results=limit))
-        except RatelimitException as exc:
-            raise RateLimited(self.platform, str(exc)) from exc
-        except TimeoutException as exc:
-            raise NetworkError(self.platform, str(exc)) from exc
         except DDGSException as exc:
-            if "no results found" in str(exc).lower():
+            raise_or_empty = _classify(self.platform, exc)
+            if raise_or_empty is None:
                 return []
-            raise UpstreamChanged(self.platform, str(exc)) from exc
+            raise raise_or_empty from exc
         return [
             CandidateVideo(
                 platform=self.platform,
@@ -56,3 +58,22 @@ class WebCollector:
             )
             for r in results
         ]
+
+
+def _classify(platform: str, exc: DDGSException) -> CollectorError | None:
+    """`DDGSException` → contrato; `None` = busca vazia.
+
+    `DDGS.text` agrega as engines e levanta `DDGSException(err)` com o erro
+    da ÚLTIMA engine como argumento (só "timed out" vira `TimeoutException`),
+    então o tipo real pode estar em `exc.args[0]` — e um erro de cliente
+    HTTP (429) chega só como texto.
+    """
+    inner = exc.args[0] if exc.args and isinstance(exc.args[0], BaseException) else exc
+    text = str(exc).lower()
+    if isinstance(inner, RatelimitException) or "ratelimit" in text or "429" in text:
+        return RateLimited(platform, str(exc))
+    if isinstance(inner, TimeoutException) or "timed out" in text or "timeout" in text:
+        return NetworkError(platform, str(exc))
+    if "no results found" in text:
+        return None
+    return UpstreamChanged(platform, str(exc))

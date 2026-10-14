@@ -32,6 +32,6 @@ def _remove_worker_log_handler() -> Generator[None]:
     yield
     logger = logging.getLogger("content_factory")
     for handler in list(logger.handlers):
-        if handler.get_name() == "cf-worker":
+        if handler.get_name() == "cf-app":
             logger.removeHandler(handler)
     logger.setLevel(logging.NOTSET)

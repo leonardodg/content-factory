@@ -50,3 +50,10 @@ def test_redacting_filter_never_drops_records() -> None:
     logger, stream = _logger_with_filter("tests.redact.plain")
     logger.info("coleta %s ok", "candles")
     assert stream.getvalue() == "INFO coleta candles ok\n"
+
+
+def test_redacting_filter_never_raises_on_bad_format_args() -> None:
+    """Review: getMessage() com args errados não pode subir para o app."""
+    logger, stream = _logger_with_filter("tests.redact.badargs")
+    logger.info("dois %s %s", "um-só")  # não levanta
+    assert "dois %s %s" in stream.getvalue()

@@ -31,32 +31,11 @@ from content_factory.app.research_pipeline import run_research_cycle
 from content_factory.app.score import score
 from content_factory.config import Settings, get_settings
 from content_factory.domain.models import DepthConfig, Segment
+from content_factory.infra.logs import configure_logging
 from content_factory.infra.queue.composition import AppDeps, compose_app_deps
-from content_factory.infra.redact import RedactingFilter, redact
+from content_factory.infra.redact import redact
 
 logger = logging.getLogger(__name__)
-
-LOG_HANDLER_NAME = "cf-worker"
-
-
-def configure_logging() -> None:
-    """Handler próprio para `content_factory.*` (Etapa 0 Task 8.2).
-
-    O CLI do arq só configura o logger `arq`; sem isto os registros do app
-    saem pelo `logging.lastResort` — sem timestamp, sem nível e sem
-    redação. Formato com nível/timestamp + `RedactingFilter` (spec §7).
-    Idempotente. `propagate` fica ligado: o root não tem handler no worker
-    (sem duplicata) e o `caplog` dos testes continua vendo os registros.
-    """
-    app_logger = logging.getLogger("content_factory")
-    if any(h.get_name() == LOG_HANDLER_NAME for h in app_logger.handlers):
-        return
-    handler = logging.StreamHandler()
-    handler.set_name(LOG_HANDLER_NAME)
-    handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s %(message)s"))
-    handler.addFilter(RedactingFilter())
-    app_logger.addHandler(handler)
-    app_logger.setLevel(logging.INFO)
 
 
 def parse_cron_hours(raw: str) -> set[int]:
@@ -100,14 +79,15 @@ def _max_segments_from_env() -> int:
 def _platform_max_concurrency_from_env() -> dict[str, int]:
     """Teto de discovers simultâneos por plataforma (env `PLATFORM_MAX_CONCURRENCY`).
 
-    Formato `tiktok=1,instagram=2`; entrada inválida é ignorada. Default
-    `tiktok=1` (1 sessão Playwright por vez no processo). Vale do startup:
+    Formato `tiktok=1,instagram=2`, SOMADO ao default `tiktok=1` (1 sessão
+    Playwright por vez no processo): a env ajusta ou acrescenta tetos, nunca
+    derruba o do TikTok. Entrada inválida (inclusive limite < 1) é ignorada. Vale do startup:
     trocar exige restart do worker. Uma única instância de `PlatformSlots`
     é criada no startup e herdada por todos os bundles — o teto é por
     processo, não por segmento.
     """
-    raw = os.getenv("PLATFORM_MAX_CONCURRENCY", "tiktok=1")
-    limits: dict[str, int] = {}
+    raw = os.getenv("PLATFORM_MAX_CONCURRENCY", "")
+    limits: dict[str, int] = {"tiktok": 1}
     for entry in raw.split(","):
         name, sep, value = entry.partition("=")
         name = name.strip()
@@ -186,13 +166,14 @@ async def run_collect_job(ctx: dict[str, Any]) -> dict[str, Any]:
 
     `COLLECT_SEGMENT` não é mais lido: a lista vem de
     `ResearchCampaignRepository.active_segments()`. Os segmentos rodam
-    CONCORRENTES sob TaskGroup + semáforo (`WORKER_MAX_SEGMENTS`, default
-    3), cada um na SUA sessão (`create_segment_deps`): 1 segmento com erro
-    não reverte os outros — `collect()` só captura `CollectorError`
-    internamente (por plataforma); qualquer outra exceção de um collector
-    (ex.: `DDGSException` do web) é pega DENTRO da task do segmento (o
-    escopo da UoW já reverteu), pra não cancelar as irmãs nem perder o
-    commit já feito das anteriores.
+    concorrentes (`bounded_gather`, `WORKER_MAX_SEGMENTS`, default 3), cada
+    um na SUA sessão (`create_segment_deps`). Dentro do segmento, `collect()`
+    converte QUALQUER exceção de um coletor em run `failed` por plataforma
+    (`CollectorError` pelo contrato; o resto vira `internal_error` + log com
+    traceback) e as irmãs persistem normalmente. Só o que escapa de
+    `collect()` (ex.: lock, segmento inexistente, erro de banco) chega a
+    `_gather_segments`: lá a UoW do segmento já reverteu, o erro vira
+    `{ok: false, error, error_type}` + log, e os outros segmentos seguem.
     """
     cfg = _load_settings()
     campaigns: ResearchCampaignRepository = ctx["campaigns_deps"]

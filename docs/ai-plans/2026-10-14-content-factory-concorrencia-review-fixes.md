@@ -451,4 +451,23 @@ exportar dados do experimento → parar os 3 workers → subir
 registrados, `active_segments()` com 3 segmentos e, no primeiro tick, `ERROR`
 ausente no log e `collect-timings` populando `discover_ms`/`persist_ms`.
 Comparar com `docs/manual/baseline-concorrencia.md` usando
-`finished_at - started_at` (comparável após a Task 6).
+`discover_ms + persist_ms` (ver nota do review em `baseline-concorrencia.md`: `finished_at - started_at` inclui a espera pelas plataformas irmãs).
+
+---
+
+# Code review final (2026-10-14, `/code-review` sobre `main...refactor/concorrencia-etapa2`)
+
+São 10 achados, cada um conferido no código:
+
+| # | Achado | Veredito | Ação |
+| --- | --- | --- | --- |
+| 1 | `logger.exception` novo também roda na CLI, que não tinha handler → traceback sem redação no stderr | procede | `infra/logs.configure_logging` compartilhado; a CLI chama em WARNING |
+| 2 | `DDGS.text` reembrulha o erro da engine em `DDGSException(err)` → ratelimit vira `upstream_changed` | procede (conferido na fonte do ddgs) | `web._classify` olha `exc.args[0]` e o texto (429/ratelimit/timeout) |
+| 3 | research segue na mesma sessão após erro de banco no upsert → `PendingRollbackError` derruba o segmento | procede, **pré-existente** (o `except Exception` é anterior) | pendência da Etapa 1 (junto da T11): savepoint na persistência por plataforma |
+| 4 | engine não descartado se o startup falha depois de criá-lo, ou se o close do Redis levanta | procede | `stack.push_async_callback(engine.dispose)` |
+| 5 | `RedactingFilter` chama `getMessage()` fora da proteção do logging | procede | try/except, cai na mensagem crua (redigida) |
+| 6 | `finished_at` inclui a espera pelas irmãs → duração não comparável ao baseline | procede (a T6 não resolvia) | métrica de comparação passa a ser `discover_ms + persist_ms` (doc do baseline) |
+| 7 | `PLATFORM_MAX_CONCURRENCY` setado derruba o `tiktok=1`; `tiktok=0` = sem teto | procede | a env soma ao default; limite < 1 é ignorado |
+| 8 | research ignora `COLLECT_MAX_CONCURRENCY` | **não é regressão** (sempre usou o default 2; a env é de collect) | nada |
+| 9 | docstring de `run_collect_job` desatualizada | procede | reescrita |
+| 10 | `found=None if error…` redundante; research com 2 returns | procede (menor) | um único return nos dois |

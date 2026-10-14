@@ -91,8 +91,9 @@ async def _discover_social_one(
     (self.gate_hits acumula entre runs).
     """
     gate_hits_before = getattr(discoverer, "gate_hits", 0)
-    # Teto por plataforma (Etapa 0 Task 7): a vaga cobre acquire + discover;
-    # started_at é lido DENTRO da vaga para a duração medir trabalho (Task 6).
+    candidates: list[CandidateVideo] | None = None
+    error: Exception | None = None
+    # Teto por plataforma (Etapa 0 Task 7): a vaga cobre acquire + discover.
     async with deps.platform_slots.slot(platform):
         started_at = deps.clock()
         try:
@@ -102,20 +103,12 @@ async def _discover_social_one(
             if not isinstance(exc, CollectorError):
                 # run só guarda error_code: a causa vai para o log (Task 8.1)
                 logger.exception("discover fora do contrato: %s/%s", segment_slug, platform)
-            gate_hits_after = getattr(discoverer, "gate_hits", 0)
-            return SocialDiscoverResult(
-                platform=platform,
-                candidates=None,
-                error=exc,
-                gate_hits_delta=gate_hits_after - gate_hits_before,
-                started_at=started_at,
-            )
-        gate_hits_after = getattr(discoverer, "gate_hits", 0)
+            error = exc
         return SocialDiscoverResult(
             platform=platform,
             candidates=candidates,
-            error=None,
-            gate_hits_delta=gate_hits_after - gate_hits_before,
+            error=error,
+            gate_hits_delta=getattr(discoverer, "gate_hits", 0) - gate_hits_before,
             started_at=started_at,
         )
 

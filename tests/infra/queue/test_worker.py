@@ -1376,26 +1376,6 @@ async def test_campaigns_repo_opens_fresh_session_per_call(
     assert seen[0] is not seen[1]
 
 
-def test_configure_logging_installs_one_redacting_handler() -> None:
-    """Etapa 0 Task 8.2: o arq só configura o logger `arq` — sem isto, o log
-    de `content_factory.*` sai pelo lastResort, sem nível/timestamp e sem
-    redação. Idempotente (startup pode rodar de novo no mesmo processo)."""
-    from content_factory.infra.redact import RedactingFilter
-
-    w.configure_logging()
-    w.configure_logging()
-    logger = logging.getLogger("content_factory")
-    ours = [h for h in logger.handlers if h.get_name() == w.LOG_HANDLER_NAME]
-    assert len(ours) == 1
-    handler = ours[0]
-    assert any(isinstance(f, RedactingFilter) for f in handler.filters)
-    assert handler.formatter is not None
-    assert handler.formatter._fmt is not None
-    assert "%(levelname)s" in handler.formatter._fmt
-    assert "%(asctime)s" in handler.formatter._fmt
-    assert logger.level == logging.INFO
-
-
 async def test_startup_configures_logging(monkeypatch: pytest.MonkeyPatch) -> None:
     calls: list[str] = []
     monkeypatch.setattr(w, "configure_logging", lambda: calls.append("x"))
@@ -1405,16 +1385,59 @@ async def test_startup_configures_logging(monkeypatch: pytest.MonkeyPatch) -> No
     assert calls == ["x"]  # antes do guard: até o erro de startup sai formatado
 
 
-def test_platform_max_concurrency_from_env_parses_and_ignores_invalid(
+def test_platform_max_concurrency_from_env_merges_over_tiktok_default(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Etapa 2 (A5): `plataforma=limite`, entrada inválida ignorada, default tiktok=1."""
+    """Etapa 2 (A5) + review: a env SOMA ao default `tiktok=1`, nunca o derruba.
+
+    `instagram=1` não pode tirar o teto do TikTok, e `tiktok=0`/inválido
+    não vira "sem teto" — o pico de Playwright é o que a Task 7 evita.
+    """
     parse = w._platform_max_concurrency_from_env  # pyright: ignore[reportPrivateUsage]
     monkeypatch.delenv("PLATFORM_MAX_CONCURRENCY", raising=False)
     assert parse() == {"tiktok": 1}
     monkeypatch.setenv("PLATFORM_MAX_CONCURRENCY", " tiktok = 2 , instagram=1")
     assert parse() == {"tiktok": 2, "instagram": 1}
+    monkeypatch.setenv("PLATFORM_MAX_CONCURRENCY", "instagram=1")
+    assert parse() == {"tiktok": 1, "instagram": 1}
     monkeypatch.setenv("PLATFORM_MAX_CONCURRENCY", "tiktok=0,youtube=x,=3,semigual,web=1")
-    assert parse() == {"web": 1}
+    assert parse() == {"tiktok": 1, "web": 1}
     monkeypatch.setenv("PLATFORM_MAX_CONCURRENCY", "")
-    assert parse() == {}  # vazio = sem teto
+    assert parse() == {"tiktok": 1}
+
+
+async def test_create_app_deps_disposes_engine_when_startup_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Review: engine criado e startup falhando depois → pool não vaza."""
+    import content_factory.infra.collectors as collectors_mod
+    from content_factory.config import Settings
+
+    _, session_factory = _recording_sessions()
+    engine = _patch_composition(monkeypatch, session_factory)
+
+    def _boom(_settings: object) -> None:
+        raise RuntimeError("registry quebrado")
+
+    monkeypatch.setattr(collectors_mod, "register_defaults", _boom)
+    with pytest.raises(RuntimeError, match="registry quebrado"):
+        await w.create_app_deps(Settings())
+    assert engine.disposed == 1
+
+
+async def test_close_disposes_engine_even_if_redis_close_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from content_factory.config import Settings
+
+    @asynccontextmanager
+    async def _bad_redis(_url: str) -> AsyncGenerator[Any]:
+        yield object()
+        raise ConnectionError("redis caiu no close")
+
+    _, session_factory = _recording_sessions()
+    engine = _patch_composition(monkeypatch, session_factory, _bad_redis)
+    deps = await w.create_app_deps(Settings())
+    with pytest.raises(ConnectionError):
+        await deps.close()
+    assert engine.disposed == 1

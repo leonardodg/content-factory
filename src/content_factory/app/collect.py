@@ -96,7 +96,8 @@ async def _discover_one(
     discover_start: datetime | None = None
     # Teto por plataforma (Etapa 0 Task 7): a vaga cobre acquire + discover.
     # started_at é lido DENTRO da vaga (mas antes do acquire) para a duração
-    # medir trabalho, não espera na fila — comparável ao baseline (Task 6).
+    # não contar espera na fila. Comparar com o baseline por discover_ms +
+    # persist_ms: finished_at sai após a rede de TODAS as irmãs (review).
     async with deps.platform_slots.slot(platform):
         started_at = deps.clock()
         try:
@@ -114,7 +115,7 @@ async def _discover_one(
         discover_ms = None if discover_start is None else _ms_between(discover_start, deps.clock())
         return DiscoverResult(
             platform=platform,
-            found=None if error is not None else found,
+            found=found,  # só atribuído no sucesso: erro ⇒ None
             error=error,
             gate_hits_delta=getattr(collector, "gate_hits", 0) - gate_hits_before,
             discover_ms=discover_ms,

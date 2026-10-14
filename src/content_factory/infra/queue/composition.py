@@ -216,10 +216,12 @@ async def compose_app_deps(
                 redis_client(settings.rate_limit_redis_url)
             )
         engine, factory = create_engine_and_factory(settings)
+        # 1º callback = último a rodar: dispose acontece mesmo se o startup
+        # falhar adiante ou se o close de um cliente Redis levantar
+        stack.push_async_callback(engine.dispose)
 
         async def _close() -> None:
             await stack.aclose()
-            await engine.dispose()
 
         register_defaults(settings)
         # socials: só collectors que implementam discover_by_keywords (Fase C+)
@@ -245,5 +247,5 @@ async def compose_app_deps(
             close=_close,
         )
     except BaseException:
-        await stack.aclose()  # startup falhou: não deixa Redis órfão
+        await stack.aclose()  # startup falhou: não deixa Redis nem pool órfãos
         raise

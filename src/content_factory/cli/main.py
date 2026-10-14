@@ -1,4 +1,5 @@
 import asyncio
+import logging
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
@@ -18,6 +19,7 @@ from content_factory.app.score import ScoreDeps, ScoreOutcome, score
 from content_factory.cli.output import dumps, envelope_err, envelope_ok, exit_code_for
 from content_factory.domain.errors import CollectorError, DomainError, SegmentNotFound
 from content_factory.domain.models import CandidateVideo, ResearchCampaign, Segment
+from content_factory.infra.logs import configure_logging
 from content_factory.infra.redact import redact
 
 app = typer.Typer(no_args_is_help=True)
@@ -532,6 +534,9 @@ def research_status(segment: str = typer.Option(..., "--segment", help="slug do 
 
 
 def main() -> None:
+    # o app loga exceção fora do contrato (collect/research): sem handler
+    # próprio o traceback sairia em claro pelo lastResort (spec §7)
+    configure_logging(logging.WARNING)
     try:
         code = app(standalone_mode=False)
     except typer.TyperException as exc:

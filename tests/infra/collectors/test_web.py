@@ -123,3 +123,35 @@ def test_register_defaults_registers_web() -> None:
 
     register_defaults(Settings())
     assert isinstance(registry.get("web"), WebCollector)
+
+
+@pytest.mark.asyncio
+async def test_discover_wrapped_ratelimit_maps_to_rate_limited(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Review: `DDGS.text` reembrulha o erro da engine em `DDGSException(err)`."""
+    wrapped = DDGSException(RatelimitException("https://duckduckgo.com 202 Ratelimit"))
+    monkeypatch.setattr(web_mod, "DDGS", lambda: BoomDDGS(wrapped))
+    with pytest.raises(RateLimited):
+        await WebCollector().discover(SEG, limit=5)
+
+
+@pytest.mark.asyncio
+async def test_discover_wrapped_timeout_maps_to_network_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    wrapped = DDGSException(TimeoutException("engine timeout"))
+    monkeypatch.setattr(web_mod, "DDGS", lambda: BoomDDGS(wrapped))
+    with pytest.raises(NetworkError):
+        await WebCollector().discover(SEG, limit=5)
+
+
+@pytest.mark.asyncio
+async def test_discover_wrapped_http_429_maps_to_rate_limited(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Erro de engine não-ddgs (ex.: HTTP 429 do cliente) chega só como texto."""
+    wrapped = DDGSException(RuntimeError("HTTP status 429 Too Many Requests"))
+    monkeypatch.setattr(web_mod, "DDGS", lambda: BoomDDGS(wrapped))
+    with pytest.raises(RateLimited):
+        await WebCollector().discover(SEG, limit=5)

@@ -25,11 +25,16 @@ class RedactingFilter(logging.Filter):
     sobem propagados de loggers filhos (`content_factory.app.collect` etc.).
     Muta o registro (msg já interpolada, `args` zerado, `exc_text` pronto) —
     os demais handlers do mesmo registro também recebem a versão redigida.
-    Nunca descarta registro.
+    Nunca descarta registro nem levanta (formato com args errados vira a
+    mensagem crua, redigida).
     """
 
     def filter(self, record: logging.LogRecord) -> bool:
-        record.msg = redact(record.getMessage())
+        try:
+            message = record.getMessage()
+        except Exception:  # args que não batem com o formato: não sobe para o app
+            message = str(record.msg)
+        record.msg = redact(message)
         record.args = None
         if record.exc_info and not record.exc_text:
             record.exc_text = _TRACEBACK_FORMATTER.formatException(record.exc_info)
