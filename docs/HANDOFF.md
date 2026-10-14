@@ -5,6 +5,23 @@
 
 ## 🔄 EM ANDAMENTO
 
+_**Etapa 1 do plano de review CONCLUÍDA (2026-10-14), branch
+`fix/concorrencia-etapa1`.** A Etapa 0 e a Etapa 2 já estão na `main`
+(PR #9, `c401cf1`).
+- **T9 (`eece60b`):** `gate_hits` contado por chamada (`app/gate_hits.py`,
+  ContextVar). Antes, 2 segmentos concorrentes contavam 2 hits cada.
+- **T10 (`e2d8f17`):** breaker de `web_suggest`/`trends` por tempo
+  (`CooldownBreaker`, 72 h = 3 ciclos diários do research, em memória).
+- **T11 (`0f11cb2`):** falha de lote do score propaga com o erro original.
+- **Pendência do `/code-review` (`b6af6cc`):** erro de infra na
+  persistência de collect/research propaga original. O `try/finally` que
+  gravava a run na transação abortada trocava a causa por `InternalError`;
+  isso foi reproduzido em Postgres real e agora é coberto por teste de
+  integração.
+
+Gates: 339 testes com infra descartável. Os workers do experimento não foram
+tocados._
+
 _**Concorrência pós-PR #8: review + correções na `main` (2026-10-14).**
 Plano: `docs/ai-plans/2026-10-14-content-factory-concorrencia-review-fixes.md`.
 Tudo foi num PR único (branch `refactor/concorrencia-etapa2`):
@@ -444,17 +461,15 @@ guard-rail, tabela e orquestrador; Fases B–E pendem de decisão do usuário.
 
 ## ⛔ O que falta (próximos passos aprovados)
 
-0. **Concorrência: Etapa 1 do plano de review** (pode vir após
-   2026-10-19):
-   - T9: `gate_hits` por chamada (ContextVar);
-   - T10: breaker de `web_suggest`/`trends` por tempo;
-   - T11: falha de lote do score propaga;
-   - pendente do `/code-review`: a persistência do research precisa de
-     savepoint por plataforma, porque um erro de banco no upsert hoje deixa
-     a sessão em `PendingRollbackError` e derruba o segmento.
-
-   Etapas 0 e 2 já estão na `main`. Integração sempre em Postgres/Redis
-   descartáveis, nunca nos do experimento.
+0. **Research aborta o segmento quando o Suggest ou o Trends falham**
+   (achado na Etapa 1 T10, ainda não corrigido). Em `run_research_cycle`,
+   `deps.web.expand` e `deps.trends.interest_over_time` não têm proteção.
+   O Trends HTTP 400 diário (ou o `circuit_open`) derruba o research dos 3
+   segmentos antes da fase social, que nunca roda. Recomendação: tratar
+   como `collect()` trata cada coletor, ou seja, falha de fonte vira
+   contagem/run `failed` e o ciclo segue com os sinais que houver. Fazer
+   com TDD e plano próprio; a mudança altera o comportamento do
+   `research_job`.
 1. **Issues pós-merge** (backlog da REVISÃO §6 — #1 mascaramento/finally já
    corrigido pelo savepoint; PR #3 merged `7d5d295`): lock token (#2 alta),
    INCR+EXPIRE (#3), detalhe de erro do score (#4) — **deferrals do collector
