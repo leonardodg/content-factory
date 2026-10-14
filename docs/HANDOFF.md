@@ -5,36 +5,52 @@
 
 ## 🔄 EM ANDAMENTO
 
-_**Revisão sênior 2026-10-14 — correções na `main` (PR #14, `5c14a6d`); deploy PENDENTE.**
-Registro e auditoria: [`REVISAO_2026-10-14.md`](REVISAO_2026-10-14.md); plano:
+_**Revisão sênior 2026-10-14 — DEPLOY E REATIVAÇÃO CONCLUÍDOS (2026-10-14).**
+Registro: [`REVISAO_2026-10-14.md`](REVISAO_2026-10-14.md) (com a auditoria
+pós-implementação e achados A-1…A-7); plano:
 `ai-plans/2026-10-14-content-factory-revisao-senior.md`.
 
-- **Experimento pausado** em 2026-10-14 15:21:26 UTC. Os 3 workers legados
-  estão parados (não removidos); backup completo em
-  `~/backups/content-factory/2026-10-14-experimento-pausa/`; relatório em
-  [`manual/experimento-pausa-2026-10-14.md`](manual/experimento-pausa-2026-10-14.md).
-- **Na `main`:**
-  - A1, rate limiter atômico;
-  - A2, redação;
-  - B2, `quota_used`;
-  - B1, score diagnosticável;
-  - A5, ADR-0007.
-
-  Os gates passam com 382 testes. A auditoria validou a migração
-  `0008→0009` e os jobs reais sobre uma cópia restaurada do banco: o
-  research grava sinais pela primeira vez.
-- **Antes do deploy** (achados da auditoria):
-  - A-1, o comando de tick do ADR-0007 deve usar `uv run python`;
-  - A-2(a), teto `web=1`;
-  - A-3, YouTube sem chave ou com chave inválida deve virar
-    `auth_expired`, não `rate_limited`.
-- **Deploy pendente:**
-  - `alembic upgrade` no banco real (`0008`);
-  - `compose multi-segmento --profile worker-multi up -d --build worker`;
-  - checklist A3;
-  - campanhas novas de 7 dias nos 3 segmentos.
-- **Pendente:** A4 (ruleset, aguarda confirmação), limiares do B3,
-  C1–C3, D1–D2.
+- **Na `main` (PR #14 `5c14a6d`, #15 `13a1201`, #16 `95e423c`,
+  #17 `3d9e294`, #18 `1bc5cda`):** A1 limiter atômico, A2 redação,
+  B2 `quota_used`, B1 score diagnosticável (`UpsertReport` + log de linha
+  descartada), A5 ADR-0007, correções A-1/A-2(a)/A-3 da auditoria (PR #16),
+  Dockerfile com layout `src/` + `COLLECT_PLATFORMS=""` no compose do
+  worker único (PR #17), docs build em todo PR (PR #18). Gates: 390+
+  testes com Postgres/Redis reais, pyright 0, ruff, alembic check, bandit,
+  pip-audit, mkdocs --strict, privacidade.
+- **A4 — ruleset `main protegida` ATIVA:** exige `quality` + `Build site`
+  (branch atualizada antes do merge), bloqueia force-push e deleção, sem
+  exigir review, bypass só admin. Validada na prática: o #17 ficou
+  `BLOCKED` sem o check `Build site` até o #18 tirar o `paths:` do
+  gatilho de PR.
+- **Deploy 2026-10-14 (~18:48–19:26 BRT):**
+  - backup pré-upgrade em `~/backups/content-factory/2026-10-14-pre-0009/`
+    (`pg_dump -Fc`, 18 tabelas validadas);
+  - `alembic upgrade head` no banco real: **`0009 (head)`**;
+  - worker único **`cf-worker-multi-segmento`** no ar (imagem nova):
+    3 crons (`research`/`collect`/`score`), sem `COLLECT_SEGMENT`,
+    `active_segments()` = 3;
+  - checklist **A3 completo**: 2 ticks de fumaça (1º sem tiktok, depois do
+    fix do compose) → 12 runs = 3 segmentos × 4 coletores, **1 por
+    (segmento, plataforma), sem duplicata**, `discover_ms`/`persist_ms`
+    populados, **0 `ERROR`** no log, `collect-timings` ok;
+  - os 3 `cf-worker-*` legados **removidos** (`docker rm`).
+- **Reativação:** `research stop` + `research start --weeks 1` nos 3
+  segmentos → janela até **2026-10-21 19:20 UTC**. YouTube real gravou
+  `quota_used=102` por run (**B2 validado com dado real**, antes era
+  bloqueio de chave local).
+- **Achados abertos na fumaça:**
+  - `TIKTOK_MS_TOKEN` (secrets) inválido → `tiktok failed/auth_expired`
+    nos 3 segmentos; não abre breaker (é credencial, não cota);
+    **rotacionar o token é ação humana**;
+  - web ainda degrada em alguns runs (Google 403 / Brave 429 → `found=0`);
+    A-2(a) `web=1` já vale, A-2(b) (contar `web_empty` no relatório)
+    fica para o C2;
+  - campanhas `teste-ativo-*` órfãs continuam inativas (só as 3 novas
+    contam em `active_segments()`).
+- **Limiares do B3 aprovados pelo usuário como estão** (2026-10-14).
+- **Próximo:** D0 (baseline de hoje), relatório diário, D+3 e D+7;
+  depois C1–C3, D1–D2, A-4…A-7 e a validação do ranking (B3).
 - **Restrição:** nada no `insta_kb` até o content-factory fechar 100%.
 
 _**Etapa 1 do plano de review CONCLUÍDA (2026-10-14), branch
@@ -124,13 +140,14 @@ horário de cron perdido. `cf-python` (CLI, `restart=no`) ficou parado:
 segmentos com Google Trends HTTP 400 (`UpstreamChanged`) — pendência
 conhecida da Fase H._
 
-_Experimento de 7 dias em curso (até **2026-10-19**): 3 containers na imagem
-pré-concorrência — não fazer `--build`/restart neles; a troca 3 workers → 1
-worker único (`docker-compose.multi-segmento.yml`, já na main) SÓ após o
-dia 19, com dados exportados antes. Depois do swap: sessão de design da
-Fase I (contrato `insta_kb`) — ver roadmap, ainda não iniciada. Validação
-empírica do ranking (ferramenta `cf score-sample` entregue; o veredito
-sobre os pesos é humano, com dados reais)._
+_Experimento de 7 dias — **SUPERADO (2026-10-14)**: a troca 3 workers → 1
+worker único foi aplicada antes do dia 19 (deploy da revisão sênior, ver o
+bloco de abertura desta seção); os 3 containers legados já foram removidos
+(`docker rm`) e a nova janela de 7 dias do research vai até **2026-10-21**.
+Depois da janela: sessão de design da Fase I (contrato `insta_kb`) — ver
+roadmap, ainda não iniciada. Validação empírica do ranking (ferramenta
+`cf score-sample` entregue; o veredito sobre os pesos é humano, com dados
+reais)._
 
 _Worker multi-segmento mergeado (`a4faf04`) e revisado (2026-10-13): teste
 real contra o Postgres/Redis do experimento achou 2 bugs de isolamento por
@@ -141,16 +158,7 @@ por simetria), 3 testes novos, 233 passed + 9 gates verdes. Também achado e
 limpo: 9 campanhas `teste-ativo-*` órfãs (testes de aceitação antigos nunca
 parados) estavam ativas na base real — `cf research stop` rodado em todas,
 só `velas-artesanais`/`sabonetes-artesanais`/`resina-artesanal` seguem
-ativas. **Verificação empírica 2026-10-13 (corrige premissa do review externo):** os 3 containers rodam imagens criadas em `2026-10-12 23:26`, **anteriores** aos commits multi-segmento (`c9f1e41`+, `2026-10-13 00:01`). Dentro do container, `active_segments` tem **0 ocorrências** em `/app/content_factory/infra/queue/worker.py`, que ainda lê `os.getenv("COLLECT_SEGMENT")`; o md5 diverge do arquivo no repo. Conclusão: **não há coleta duplicada hoje**. O risco é latente — qualquer `docker compose up --build` ou restart com a `main` atual passa a triplicar. P0 rebaixado de "incidente em andamento" para "trava antes do próximo rebuild". **Data de corte: 2026-10-19** (fim do experimento de 7 dias) — código, testes e compose novo ficam prontos durante a semana; a troca 3 workers → 1 worker multi-segmento só é aplicada depois do dia 19. **Risco ainda não resolvido** (não é bug de código, é operacional):
-os 3 containers do experimento (`docker-compose.experimento-7dias.yml`)
-continuam na imagem PRÉ-merge (ainda lê `COLLECT_SEGMENT`) — não fazer
-`--build`/restart neles sem já ter trocado pelo worker único, senão cada um
-passa a processar TODOS os segmentos ativos sem lock compartilhado entre si
-(Redis separado por container) e tripli­ca o trabalho. Próximo passo sugerido
-depois do swap de compose: sessão de design da Fase I (contrato `insta_kb`)
-— ver roadmap, ainda não iniciada. Validação empírica do ranking (ferramenta
-`cf score-sample` entregue; o veredito sobre os pesos é humano, com dados
-reais).
+ativas. **Verificação empírica 2026-10-13 (corrige premissa do review externo):** os 3 containers rodam imagens criadas em `2026-10-12 23:26`, **anteriores** aos commits multi-segmento (`c9f1e41`+, `2026-10-13 00:01`). Dentro do container, `active_segments` tem **0 ocorrências** em `/app/content_factory/infra/queue/worker.py`, que ainda lê `os.getenv("COLLECT_SEGMENT")`; o md5 diverge do arquivo no repo. Conclusão: **não há coleta duplicada hoje**. O risco é latente — qualquer `docker compose up --build` ou restart com a `main` atual passa a triplicar. P0 rebaixado de "incidente em andamento" para "trava antes do próximo rebuild". **Data de corte: 2026-10-19** (fim do experimento de 7 dias) — código, testes e compose novo ficam prontos durante a semana; a troca 3 workers → 1 worker multi-segmento só é aplicada depois do dia 19. ~~**Risco ainda não resolvido**~~ — **RESOLVIDO (2026-10-14)**: a troca foi aplicada, os 3 containers do experimento (`docker-compose.experimento-7dias.yml`) foram removidos e só o worker único (`cf-worker-multi-segmento`) está no ar.
 
 ## ✅ CONCLUÍDO
 
@@ -524,17 +532,22 @@ guard-rail, tabela e orquestrador; Fases B–E pendem de decisão do usuário.
    `skipped`, collector Instagram). **Pendências do usuário**:
    (a) submeter **App Review do Meta** (*Instagram Public Content Access*,
    gate #10 — até lá o fallback own-media cobre a coleta; ver
-   `docs/PLANO_TESTE_E2E.md` §Bug 4); (b) `TIKTOK_MS_TOKEN` vazio (por design)
+   `docs/PLANO_TESTE_E2E.md` §Bug 4); (b) ~~`TIKTOK_MS_TOKEN` vazio~~ —
+   o token está nos secrets mas está **inválido/expirado** (fumaça
+   2026-10-14: `tiktok failed/auth_expired` nos 3 segmentos) —
+   **rotacionar (ação humana)**
 3. Fase de IA (replication/production + renormalização de pesos) e spec de
    segurança TOCTOU — próximos planos, não desta entrega
-4. **Worker multi-segmento — pós-experimento de 7 dias** (branch
-   `feat/worker-multi-segmento` já entrega o código; falta a operação):
-   (a) trocar `.devcontainer/docker-compose.experimento-7dias.yml` (3
-   workers, 3 índices Redis) por 1 único `worker` (profile `worker`
-   existente) — a env `COLLECT_SEGMENT` já é inerte e sai junto;
-   (b) teste de aceitação: `cf segment load` + `cf research start
-   --weeks 1` pra um 4º segmento SEM reiniciar container e confirmar no
-   próximo tick de `collect_job`/`score_job`/`research_job`
+4. ~~Worker multi-segmento — troca 3→1~~ **FEITO (2026-10-14)**: worker
+   único no ar (A3 completo), legados removidos. Resta o teste de
+   aceitação: `cf segment load` + `cf research start --weeks 1` pra um 4º
+   segmento SEM reiniciar container e confirmar no próximo tick de
+   `collect_job`/`score_job`/`research_job`
+5. **Backlog pós-reativação (2026-10-14):** ciclo D em curso (D0 hoje,
+   D+3, D+7 com relatórios manuais); depois C1–C3 (relatório diário
+   automatizado, coleta só de insights), D1–D2 (alertas/limiares
+   operacionais), B3 (validação do ranking com `cf score-sample`), A-2(b)
+   (`web_empty` no relatório), A-4…A-7 (backlog da auditoria da REVISÃO)
 
 ## Pendências / cuidados
 
