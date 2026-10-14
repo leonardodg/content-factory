@@ -4,7 +4,9 @@ from typing import ClassVar
 
 # classe real: o re-export `ddgs.DDGS` é proxy lazy — parcialmente Unknown p/ pyright
 from ddgs.ddgs import DDGS
+from ddgs.exceptions import DDGSException, RatelimitException, TimeoutException
 
+from content_factory.domain.errors import NetworkError, RateLimited, UpstreamChanged
 from content_factory.domain.models import CandidateVideo, SegmentConfig
 
 
@@ -19,8 +21,19 @@ class WebCollector:
     async def discover(self, segment: SegmentConfig, limit: int) -> list[CandidateVideo]:
         q = " OR ".join(segment.keywords[:3])
         # DDGS é síncrono (rede) — roda em thread; o lambda lê o global DDGS a
-        # cada chamada, que é o que monkeypatch.setattr(web_mod, "DDGS", ...) troca
-        results = await asyncio.to_thread(lambda: DDGS().text(q, max_results=limit))
+        # cada chamada, que é o que monkeypatch.setattr(web_mod, "DDGS", ...) troca.
+        # Erros do ddgs viram o contrato de CollectorError (subclasses antes
+        # da base); "No results found" é busca vazia, não erro.
+        try:
+            results = await asyncio.to_thread(lambda: DDGS().text(q, max_results=limit))
+        except RatelimitException as exc:
+            raise RateLimited(self.platform, str(exc)) from exc
+        except TimeoutException as exc:
+            raise NetworkError(self.platform, str(exc)) from exc
+        except DDGSException as exc:
+            if "no results found" in str(exc).lower():
+                return []
+            raise UpstreamChanged(self.platform, str(exc)) from exc
         return [
             CandidateVideo(
                 platform=self.platform,

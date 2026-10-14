@@ -1,7 +1,9 @@
 import hashlib
 
 import pytest
+from ddgs.exceptions import DDGSException, RatelimitException, TimeoutException
 
+from content_factory.domain.errors import NetworkError, RateLimited, UpstreamChanged
 from content_factory.domain.models import SegmentConfig
 from content_factory.infra.collectors import web as web_mod
 from content_factory.infra.collectors.web import WebCollector
@@ -60,6 +62,59 @@ async def test_discover_platform_video_id_is_sha1_do_url(
     assert out[0].url == StubDDGSLongUrl.LONG_URL  # URL completa preservada
     assert out[0].platform_video_id == hashlib.sha1(StubDDGSLongUrl.LONG_URL.encode()).hexdigest()
     assert len(out[0].platform_video_id) <= 64
+
+
+class BoomDDGS:
+    """DDGS que levanta na chamada de rede (construção ok, como o real)."""
+
+    def __init__(self, exc: Exception) -> None:
+        self._exc = exc
+
+    def text(self, query: str, max_results: int = 10) -> list[dict[str, str]]:
+        _ = query, max_results
+        raise self._exc
+
+
+@pytest.mark.asyncio
+async def test_discover_no_results_found_returns_empty(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Busca vazia não é erro: produção 2026-10-13 abortou o segmento inteiro."""
+    monkeypatch.setattr(web_mod, "DDGS", lambda: BoomDDGS(DDGSException("No results found")))
+    assert await WebCollector().discover(SEG, limit=5) == []
+
+
+@pytest.mark.asyncio
+async def test_discover_ratelimit_maps_to_rate_limited(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(web_mod, "DDGS", lambda: BoomDDGS(RatelimitException("202 Ratelimit")))
+    with pytest.raises(RateLimited) as exc_info:
+        await WebCollector().discover(SEG, limit=5)
+    assert exc_info.value.code == "rate_limited"
+    assert exc_info.value.platform == "web"
+
+
+@pytest.mark.asyncio
+async def test_discover_timeout_maps_to_network_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(web_mod, "DDGS", lambda: BoomDDGS(TimeoutException("timeout")))
+    with pytest.raises(NetworkError) as exc_info:
+        await WebCollector().discover(SEG, limit=5)
+    assert exc_info.value.code == "network"
+    assert exc_info.value.platform == "web"
+
+
+@pytest.mark.asyncio
+async def test_discover_other_ddgs_error_maps_to_upstream_changed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(web_mod, "DDGS", lambda: BoomDDGS(DDGSException("kaput")))
+    with pytest.raises(UpstreamChanged) as exc_info:
+        await WebCollector().discover(SEG, limit=5)
+    assert exc_info.value.code == "upstream_changed"
+    assert exc_info.value.platform == "web"
 
 
 def test_register_defaults_registers_web() -> None:
