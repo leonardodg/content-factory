@@ -1,6 +1,29 @@
 site_name: content-factory
-site_description: Motor de inteligência de conteúdo parametrizado por segmento
-theme: { name: material }
+site_description: Motor de inteligência de conteúdo parametrizado por segmento — descobre, re-mede e ranqueia vídeos curtos por nicho.
+# Required for correct canonical URLs and sitemap.xml on GitHub Pages, which
+# serves the project site from a /<repo>/ sub-path rather than the domain root.
+site_url: https://leonardodg.github.io/content-factory/
+repo_url: https://github.com/leonardodg/content-factory
+repo_name: leonardodg/content-factory
+docs_dir: docs
+theme:
+  name: material
+  language: pt-BR
+  features:
+    - navigation.sections
+    - search.suggest
+    - content.code.copy
+  palette:
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      toggle:
+        icon: material/brightness-4
+        name: Mudar para o modo claro
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      toggle:
+        icon: material/brightness-7
+        name: Mudar para o modo escuro
 plugins: [search, mermaid2]
 markdown_extensions:
   - admonition

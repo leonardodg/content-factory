@@ -1,10 +1,104 @@
-name: docs
-on: [push, pull_request]
+name: Docs
+
+# Publishes the MkDocs site to GitHub Pages. Only the built static output
+# (site/ -- HTML, CSS, JS and assets) is uploaded; no markdown source, no
+# Python, no config files reach the published site.
+#
+# Same pipeline as insta_kb / minimax-video-factory, plus one deliberate
+# difference: pull requests run the strict BUILD too (a broken link fails the
+# PR), but only a push to main DEPLOYS.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "docs/**"
+      - "mkdocs.yml"
+      - "pyproject.toml"
+      - ".github/workflows/docs.yml"
+  pull_request:
+    paths:
+      - "docs/**"
+      - "mkdocs.yml"
+      - "pyproject.toml"
+      - ".github/workflows/docs.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# Never cancel a deploy in flight: a half-published site is worse than a
+# slightly stale one.
+concurrency:
+  group: pages-${{ github.event_name == 'pull_request' && github.ref || 'deploy' }}
+  cancel-in-progress: false
+
 jobs:
   build:
+    name: Build site
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v5
-      - run: uv sync --only-group docs
-      - run: uv run --only-group docs mkdocs build --strict
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      # --only-group docs installs just the MkDocs packages (material +
+      # mermaid2) without the project or its runtime dependencies
+      # (Playwright, TikTokApi, psycopg...).
+      - name: Install docs dependencies
+        run: uv sync --only-group docs
+
+      # --strict turns a broken internal link into a failed build. A dead link
+      # should stop the deploy, not ship. `--only-group docs` here too: a bare
+      # `uv run` would re-sync the DEFAULT environment and install the whole
+      # project, undoing the isolation above.
+      - name: Build (strict)
+        run: uv run --only-group docs mkdocs build --strict
+
+      - name: Assert the artifact carries no source files
+        run: |
+          set -euo pipefail
+          leaked=$(find site -type f \
+            \( -name '*.md' -o -name '*.py' -o -name '*.yml' \
+               -o -name '*.yaml' -o -name '*.toml' -o -name '*.sh' \
+               -o -name '*.env' -o -name '*.example' \) | head -20)
+          if [ -n "$leaked" ]; then
+            echo "::error::source files found in the Pages artifact:"
+            echo "$leaked"
+            exit 1
+          fi
+          echo "✅ site/ is static output only ($(find site -type f | wc -l) files)"
+
+      # Same privacy gate the CI runs on the repo (spec §10): nothing that
+      # looks like a secret or personal data may reach a public site.
+      - name: Privacy gate
+        run: uv run --only-group docs python scripts/check_privacy.py
+
+      - name: Configure Pages
+        if: github.event_name != 'pull_request'
+        uses: actions/configure-pages@v5
+
+      - name: Upload artifact
+        if: github.event_name != 'pull_request'
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+
+  deploy:
+    name: Deploy to Pages
+    if: github.event_name != 'pull_request'
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy
+        id: deployment
+        uses: actions/deploy-pages@v4
