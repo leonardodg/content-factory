@@ -122,6 +122,90 @@ async def test_quota_exceeded_reason_stays_rate_limited() -> None:
         await c.discover(SEG, limit=5)
 
 
+# Shape REAL da API (2026-10-14, chave falsa): 400 com errors[].reason
+# genérico "badRequest" e o motivo verdadeiro só em details[].reason
+_REAL_KEY_INVALID = {
+    "error": {
+        "code": 400,
+        "message": "API key not valid. Please pass a valid API key.",
+        "errors": [{"message": "API key not valid.", "domain": "global", "reason": "badRequest"}],
+        "status": "INVALID_ARGUMENT",
+        "details": [
+            {"@type": "type.googleapis.com/google.rpc.ErrorInfo", "reason": "API_KEY_INVALID"},
+            {"@type": "type.googleapis.com/google.rpc.LocalizedMessage"},
+        ],
+    }
+}
+
+
+@pytest.mark.asyncio
+async def test_real_api_key_invalid_payload_raises_auth_expired() -> None:
+    """Revisão N-1: o payload real não traz `keyInvalid` — o motivo está em details.
+
+    Sem ler `details[].reason` a chave revogada virava `upstream_changed`
+    (HTTP 400) e abria o breaker em 3 falhas.
+    """
+    from content_factory.domain.errors import AuthExpired
+
+    def _invalid(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(400, json=_REAL_KEY_INVALID)
+
+    c = YoutubeCollector(api_key="bad", transport=httpx.MockTransport(_invalid))
+    with pytest.raises(AuthExpired, match="API_KEY_INVALID"):
+        await c.discover(SEG, limit=5)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("errors_reason", "details_reason"),
+    [
+        ("accessNotConfigured", None),
+        ("forbidden", "SERVICE_DISABLED"),
+        ("forbidden", "API_KEY_SERVICE_BLOCKED"),
+        ("ipRefererBlocked", None),
+        ("forbidden", "API_KEY_HTTP_REFERRER_BLOCKED"),
+        ("forbidden", "API_KEY_IP_ADDRESS_BLOCKED"),
+    ],
+)
+async def test_key_configuration_403_raises_auth_expired(
+    errors_reason: str, details_reason: str | None
+) -> None:
+    """Revisão N-2: 403 de configuração da chave é ação humana, não cota."""
+    from content_factory.domain.errors import AuthExpired
+
+    error: dict[str, object] = {"errors": [{"reason": errors_reason}]}
+    if details_reason:
+        error["details"] = [{"reason": details_reason}]
+
+    def _blocked(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(403, json={"error": error})
+
+    c = YoutubeCollector(api_key="k", transport=httpx.MockTransport(_blocked))
+    with pytest.raises(AuthExpired):
+        await c.discover(SEG, limit=5)
+
+
+@pytest.mark.asyncio
+async def test_unknown_403_and_400_keep_classification() -> None:
+    """403 sem reason legível continua cota; 400 desconhecido continua upstream."""
+    from content_factory.domain.errors import RateLimited, UpstreamChanged
+
+    def _bare_403(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(403, text="<html>forbidden</html>")
+
+    def _bad_400(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(400, json={"error": {"errors": [{"reason": "invalidParameter"}]}})
+
+    with pytest.raises(RateLimited):
+        await YoutubeCollector(api_key="k", transport=httpx.MockTransport(_bare_403)).discover(
+            SEG, limit=5
+        )
+    with pytest.raises(UpstreamChanged):
+        await YoutubeCollector(api_key="k", transport=httpx.MockTransport(_bad_400)).discover(
+            SEG, limit=5
+        )
+
+
 def test_register_defaults_registers_youtube() -> None:
     from content_factory.config import Settings
     from content_factory.infra.collectors import register_defaults, registry

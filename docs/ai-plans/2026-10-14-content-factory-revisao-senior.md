@@ -318,6 +318,25 @@ esperar 19/10, salvar tudo, corrigir e reativar os 3 segmentos já no worker
      inválido → `auth_expired` nos 3 segmentos (rotacionar, ação humana);
      web ainda degrada em alguns runs (A-2(b) no C2).
 
+5. **Revisão profunda pós-reativação (2026-10-14, noite)** — achados
+   N-1…N-6 em `REVISAO_2026-10-14.md` § "Revisão profunda pós-reativação".
+   TDD, 1 commit por task, 1 PR:
+   - **N-1 (P2):** classificar erro do YouTube pelos `reason` reais da API
+     (`error.errors[].reason` **e** `error.details[].reason`); payload real
+     de chave inválida é `400 badRequest` + `API_KEY_INVALID` → hoje cai
+     em `upstream_changed` e abre o breaker. Teste com o shape real.
+   - **N-2 (P3):** 403 de configuração da chave (`accessNotConfigured`,
+     `SERVICE_DISABLED`, `API_KEY_SERVICE_BLOCKED`, bloqueio por IP/referer)
+     → `auth_expired`; só cota (`quotaExceeded`, `rateLimitExceeded`…) e
+     403 sem reason legível → `rate_limited`. Corpo decodificado só no
+     caminho de erro (sucesso volta a decodificar 1 vez).
+   - **N-3 (P3):** comando de tick manual do ADR-0007 com `_job_id`
+     fixo — enfileirar 2 vezes não executa 2 vezes.
+   - Docs: N-4 (`segments/` fora da imagem), N-5/N-6 (HANDOFF/plano),
+     ressalva do Instagram no B3, `manual/experimento-reativado.md`.
+   - Deploy: rebuild do worker **entre o score das 21:30 e o research das
+     07:00 BRT**, sem perder tick.
+
 # Plano de análise dos relatórios
 
 O objetivo é transformar o teste reativado em **evidência**: saber se o
@@ -362,7 +381,7 @@ de olhar os dados.
 5. **Ranking presta?** Os critérios do B3, com os limiares abaixo, fixados
    **antes** de D+7.
 
-## Limiares (propostos; o usuário aprova antes de D+7)
+## Limiares (aprovados pelo usuário em 2026-10-14)
 
 | Critério | Limiar proposto |
 | --- | --- |

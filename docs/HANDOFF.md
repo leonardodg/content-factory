@@ -49,13 +49,21 @@ pós-implementação e achados A-1…A-7); plano:
   - campanhas `teste-ativo-*` órfãs continuam inativas (só as 3 novas
     contam em `active_segments()`).
 - **Limiares do B3 aprovados pelo usuário como estão** (2026-10-14).
-- **D0 (2026-10-14): ✅ OK com ressalvas** — fumaça conforme o §Plano de
-  análise do plano: 1 run por (segmento, plataforma), sem duplicata,
-  `discover_ms`/`persist_ms`/`quota_used=102` preenchidos, 0 `ERROR`
-  inesperado. Ressalvas: TikTok `auth_expired` (rotacionar token) e web
-  degradado intermitente (A-2(b) no C2).
-- **Próximo:** relatórios de D+3 e D+7 (com baseline D0 já registrado),
-  depois C1–C3, D1–D2, A-4…A-7 e a validação do ranking (B3).
+- **D0 (2026-10-14): ✅ ok** — fumaça conforme o §Plano de análise do
+  plano: 1 run por (segmento, plataforma), sem duplicata,
+  `discover_ms`/`persist_ms`/`quota_used=102` preenchidos, 0 `ERROR`.
+  **Linha de base parcial:** sem TikTok (`auth_expired`, rotacionar token);
+  web intermitente (A-2(b) no C2).
+- **Revisão profunda pós-reativação (noite de 2026-10-14):** achados
+  N-1…N-6 em `REVISAO_2026-10-14.md`. N-1/N-2 (classificação de erro do
+  YouTube pelos reasons reais da API) e N-3 (tick manual com `_job_id`)
+  corrigidos; deploy do worker entre o score das 21:30 e o research das
+  07:00 BRT. **Ressalva do B3:** Instagram usa mídia própria (gate #10),
+  então fica fora do limiar "runs ok ≥ 90%".
+- **Próximo:** **relatório diário** (1 linha por dia após o collect das
+  20:00 BRT em [`manual/experimento-reativado.md`](manual/experimento-reativado.md)),
+  D+3 (17/10) e D+7 (21/10, validação B3); depois C1–C3, D1–D2,
+  ADR-0008, A-2(b), A-4…A-7.
 - **Restrição:** nada no `insta_kb` até o content-factory fechar 100%.
 
 _**Etapa 1 do plano de review CONCLUÍDA (2026-10-14), branch
@@ -553,8 +561,8 @@ guard-rail, tabela e orquestrador; Fases B–E pendem de decisão do usuário.
    seguida, de volta a 3 segmentos ativos. Nota: `cf segment load` não
    funciona de dentro do worker (imagem não copia `segments/`) — rodar no
    host ou em `cf-python`, como no guide-start.
-5. **Backlog pós-reativação (2026-10-14):** ciclo D em curso (D0 hoje,
-   D+3, D+7 com relatórios manuais); depois C1–C3 (relatório diário
+5. **Backlog pós-reativação (2026-10-14):** ciclo D em curso (D0 ✅,
+   relatório diário, D+3, D+7 com relatórios manuais); depois C1–C3 (relatório diário
    automatizado, coleta só de insights), D1–D2 (alertas/limiares
    operacionais), B3 (validação do ranking com `cf score-sample`), A-2(b)
    (`web_empty` no relatório), A-4…A-7 (backlog da auditoria da REVISÃO)

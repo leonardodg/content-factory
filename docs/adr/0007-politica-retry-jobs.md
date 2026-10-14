@@ -75,7 +75,10 @@ from arq.connections import RedisSettings
 
 async def main():
     pool = await create_pool(RedisSettings.from_dsn('redis://redis:6379/0'))
-    print(await pool.enqueue_job('collect_job'))
+    # _job_id fixo: um 2º enqueue com o mesmo id devolve None em vez de
+    # executar de novo (revisão N-3)
+    job = await pool.enqueue_job('collect_job', _job_id='manual:collect_job')
+    print(job or 'já enfileirado/executado na última hora — nada feito')
     await pool.aclose()
 
 asyncio.run(main())
@@ -85,6 +88,13 @@ asyncio.run(main())
 > `uv run` porque o worker instala as dependências no venv do uv: o
 > `python` puro do container é o do sistema e não tem `arq`
 > (auditoria 2026-10-14 A-1).
+>
+> `_job_id` fixo (revisão N-3): sem ele, enfileirar duas vezes executa
+> duas vezes. Em 2026-10-14 isso gerou 32 runs em vez de 16 e estourou a
+> janela do TikTok (1 `rate_limited` contado no breaker). O arq guarda o
+> resultado por 1 h (`keep_result`), então o mesmo id fica bloqueado nesse
+> intervalo; para outro tick antes disso, troque o sufixo do id. O lock
+> por segmento continua impedindo execução concorrente com o cron.
 
 ## Alternativas consideradas
 
