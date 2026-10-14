@@ -1,4 +1,5 @@
 import asyncio
+import logging
 from collections.abc import AsyncGenerator, Callable
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
@@ -982,6 +983,43 @@ async def test_run_collect_job_failed_segment_rolls_back_only_its_session(
     assert app_deps.sessions[1].events == ["commit"]
     assert committed == ["commit"]
     assert rolled_back == ["rollback"]
+
+
+async def test_failed_segment_logs_error_with_traceback_and_error_type(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Etapa 0 Task 5: segmento que levanta gera 1 ERROR com traceback; envelope tem error_type."""
+
+    async def fake_collect(slug: str, platforms: list[str], limit: int, deps: object) -> object:
+        if slug == "velas":
+            raise RuntimeError("boom")
+
+        class _Out:
+            ok = True
+            partial = False
+            counts: ClassVar[dict[str, object]] = {"found": 1}
+
+        return _Out()
+
+    monkeypatch.setattr(w, "_collect_impl", fake_collect)
+    monkeypatch.setattr(w, "_load_settings", lambda: _collect_cfg([], 10))
+    campaigns = _FakeCampaignsMultiSegment(slugs=["velas", "sabonetes"])
+    committed: list[str] = []
+    rolled_back: list[str] = []
+    app_deps = _FakeAppDeps(committed, rolled_back)
+    with caplog.at_level(logging.ERROR):
+        out = await w.run_collect_job(
+            {"collect_deps": object(), "campaigns_deps": campaigns, "app_deps": app_deps}
+        )
+    assert out["segments"]["velas"] == {
+        "ok": False,
+        "error": "boom",
+        "error_type": "RuntimeError",
+    }
+    errors = [r for r in caplog.records if r.levelno == logging.ERROR and "velas" in r.getMessage()]
+    assert len(errors) == 1
+    assert errors[0].exc_info is not None
+    assert "collect" in errors[0].getMessage()
 
 
 async def test_create_segment_deps_builds_per_segment_bundle(

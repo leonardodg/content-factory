@@ -99,9 +99,12 @@ O que procurar:
   normalmente e a sessão é commitada — auditada em `collect_runs` com
   `status`/`error_code` (queries em [Análise](analise.md));
 - **exceção não tratada no job** (bug): capturada POR SEGMENTO dentro da task
-  do TaskGroup e registrada no envelope (`segments: {slug: {ok: false, error}}`)
-  — a UoW do segmento reverte sozinha (`session_scope`), as irmãs commitam
-  normal; o que sobra é o traceback no log do worker;
+  do TaskGroup e registrada no envelope
+  (`segments: {slug: {ok: false, error, error_type}}`) — a UoW do segmento
+  reverte sozinha (`session_scope`), as irmãs commitam normal. O arq marca
+  o job como concluído (`●`) mesmo com `ok: false`: o sinal de falha é o
+  registro `ERROR` com traceback no log (`segmento <slug> falhou em
+  <collect|score|research>`) + o envelope — não o status do job;
 - `RuntimeError` no startup (guard multi-segmento): `COLLECT_SEGMENT` está
   definido no ambiente — a imagem nova não roda sob o compose antigo de 3
   workers. Remova a env (troca pelo compose de worker único, só após

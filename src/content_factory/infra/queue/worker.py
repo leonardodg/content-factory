@@ -10,6 +10,7 @@ existem para o teste trocar por fakes sem tocar no arq/banco (fronteira = mock).
 """
 
 import asyncio
+import logging
 import os
 from collections.abc import AsyncGenerator, Awaitable, Callable
 from contextlib import AsyncExitStack, asynccontextmanager
@@ -35,7 +36,10 @@ from content_factory.app.score import ScoreDeps, score
 from content_factory.config import Settings, get_settings
 from content_factory.domain.fanout_guard import FanoutGuard
 from content_factory.domain.models import DepthConfig, ResearchCampaign, Segment
+from content_factory.infra.redact import redact
 from content_factory.infra.redis_ops import RedisOps
+
+logger = logging.getLogger(__name__)
 
 
 def parse_cron_hours(raw: str) -> set[int]:
@@ -95,6 +99,7 @@ async def _gather_segments(
     active: list[Segment],
     max_segments: int,
     run_one: Callable[[Segment], Awaitable[dict[str, Any]]],
+    job_name: str,
 ) -> dict[str, Any]:
     """1 TaskGroup por job + semáforo: cada segmento com sua UoW/sessão.
 
@@ -106,6 +111,11 @@ async def _gather_segments(
     (shutdown do arq) propaga — aí o job inteiro aborta, como esperado.
     AsyncSession nunca é compartilhada entre tasks: cada `run_one` abre seu
     próprio bundle (sua própria sessão) via `create_segment_deps`.
+    Segmento que falha gera 1 registro ERROR com traceback (`exc_info`) e
+    o envelope leva `error_type` — o arq marca o job como concluído mesmo
+    com `ok: false`, então o sinal de falha é o log + o envelope, não o
+    status do job. A mensagem do envelope passa por `redact()` (o erro vai
+    para o log do arq).
     """
     semaphore = asyncio.Semaphore(max(1, max_segments))
     results: dict[str, Any] = {}
@@ -115,7 +125,12 @@ async def _gather_segments(
             try:
                 results[segment.slug] = await run_one(segment)
             except Exception as exc:
-                results[segment.slug] = {"ok": False, "error": str(exc)}
+                logger.exception("segmento %s falhou em %s", segment.slug, job_name)
+                results[segment.slug] = {
+                    "ok": False,
+                    "error": redact(str(exc)),
+                    "error_type": type(exc).__name__,
+                }
 
     async with asyncio.TaskGroup() as task_group:
         for segment in active:
@@ -154,7 +169,7 @@ async def run_collect_job(ctx: dict[str, Any]) -> dict[str, Any]:
             await bundle.uow.commit()
         return {"ok": out.ok, "partial": out.partial, **out.counts}
 
-    results = await _gather_segments(active, _max_segments_from_env(), _one)
+    results = await _gather_segments(active, _max_segments_from_env(), _one, "collect")
     return {
         "ok": all(r["ok"] for r in results.values()) if results else True,
         "segments": results,
@@ -181,7 +196,7 @@ async def run_score_job(ctx: dict[str, Any]) -> dict[str, Any]:
             await bundle.uow.commit()
         return {"ok": out.ok, "scored": out.scored}
 
-    results = await _gather_segments(active, _max_segments_from_env(), _one)
+    results = await _gather_segments(active, _max_segments_from_env(), _one, "score")
     return {
         "ok": all(r["ok"] for r in results.values()) if results else True,
         "segments": results,
@@ -213,7 +228,7 @@ async def run_research_job(ctx: dict[str, Any]) -> dict[str, Any]:
             await bundle.uow.commit()
         return {"ok": out.ok, "partial": out.partial, **out.counts}
 
-    results = await _gather_segments(active, _max_segments_from_env(), _one)
+    results = await _gather_segments(active, _max_segments_from_env(), _one, "research")
     return {
         "ok": all(r["ok"] for r in results.values()) if results else True,
         "segments": results,
