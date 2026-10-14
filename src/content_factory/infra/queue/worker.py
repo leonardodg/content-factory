@@ -9,7 +9,6 @@ Hooks (`_collect_impl`, `_score_impl`, `_research_impl`, `_load_settings`)
 existem para o teste trocar por fakes sem tocar no arq/banco (fronteira = mock).
 """
 
-import asyncio
 import logging
 import os
 from collections.abc import AsyncGenerator, Awaitable, Callable
@@ -26,7 +25,7 @@ from arq.worker import Function, func
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 from content_factory.app.collect import CollectDeps, collect
-from content_factory.app.concurrency import PlatformSlots
+from content_factory.app.concurrency import PlatformSlots, bounded_gather
 from content_factory.app.ports import (
     ResearchCampaignRepository,
     SegmentDepsBundle,
@@ -149,7 +148,7 @@ async def _gather_segments(
     run_one: Callable[[Segment], Awaitable[dict[str, Any]]],
     job_name: str,
 ) -> dict[str, Any]:
-    """1 TaskGroup por job + semáforo: cada segmento com sua UoW/sessão.
+    """`bounded_gather` por job: cada segmento com sua UoW/sessão; devolve o envelope.
 
     A exceção é capturada DENTRO de cada task e nunca escapa (o mesmo
     princípio da Task 7 para plataformas, repetido para segmentos): o
@@ -165,25 +164,20 @@ async def _gather_segments(
     status do job. A mensagem do envelope passa por `redact()` (o erro vai
     para o log do arq).
     """
-    semaphore = asyncio.Semaphore(max(1, max_segments))
-    results: dict[str, Any] = {}
 
-    async def _one(segment: Segment) -> None:
-        async with semaphore:
-            try:
-                results[segment.slug] = await run_one(segment)
-            except Exception as exc:
-                logger.exception("segmento %s falhou em %s", segment.slug, job_name)
-                results[segment.slug] = {
-                    "ok": False,
-                    "error": redact(str(exc)),
-                    "error_type": type(exc).__name__,
-                }
+    async def _one(segment: Segment) -> dict[str, Any]:
+        try:
+            return await run_one(segment)
+        except Exception as exc:
+            logger.exception("segmento %s falhou em %s", segment.slug, job_name)
+            return {"ok": False, "error": redact(str(exc)), "error_type": type(exc).__name__}
 
-    async with asyncio.TaskGroup() as task_group:
-        for segment in active:
-            task_group.create_task(_one(segment))
-    return results
+    outcomes = await bounded_gather(active, max_segments, _one)
+    results = {segment.slug: outcome for segment, outcome in zip(active, outcomes, strict=True)}
+    return {
+        "ok": all(r["ok"] for r in results.values()) if results else True,
+        "segments": results,
+    }
 
 
 # hooks de teste: monkeypatch troca por fakes sem tocar no arq/banco
@@ -217,11 +211,7 @@ async def run_collect_job(ctx: dict[str, Any]) -> dict[str, Any]:
             await bundle.uow.commit()
         return {"ok": out.ok, "partial": out.partial, **out.counts}
 
-    results = await _gather_segments(active, _max_segments_from_env(), _one, "collect")
-    return {
-        "ok": all(r["ok"] for r in results.values()) if results else True,
-        "segments": results,
-    }
+    return await _gather_segments(active, _max_segments_from_env(), _one, "collect")
 
 
 async def run_score_job(ctx: dict[str, Any]) -> dict[str, Any]:
@@ -244,11 +234,7 @@ async def run_score_job(ctx: dict[str, Any]) -> dict[str, Any]:
             await bundle.uow.commit()
         return {"ok": out.ok, "scored": out.scored}
 
-    results = await _gather_segments(active, _max_segments_from_env(), _one, "score")
-    return {
-        "ok": all(r["ok"] for r in results.values()) if results else True,
-        "segments": results,
-    }
+    return await _gather_segments(active, _max_segments_from_env(), _one, "score")
 
 
 async def run_research_job(ctx: dict[str, Any]) -> dict[str, Any]:
@@ -276,11 +262,7 @@ async def run_research_job(ctx: dict[str, Any]) -> dict[str, Any]:
             await bundle.uow.commit()
         return {"ok": out.ok, "partial": out.partial, **out.counts}
 
-    results = await _gather_segments(active, _max_segments_from_env(), _one, "research")
-    return {
-        "ok": all(r["ok"] for r in results.values()) if results else True,
-        "segments": results,
-    }
+    return await _gather_segments(active, _max_segments_from_env(), _one, "research")
 
 
 @dataclass

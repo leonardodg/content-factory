@@ -1,10 +1,9 @@
-import asyncio
 import logging
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 
-from content_factory.app.concurrency import PlatformSlots
+from content_factory.app.concurrency import PlatformSlots, bounded_gather
 from content_factory.app.ports import (
     Collector,
     CollectRunRepository,
@@ -90,74 +89,34 @@ async def _discover_one(
     gate_hits é lido como delta before/after porque o collector é singleton
     no registry (self.gate_hits acumula entre runs).
     """
+    platform = collector.platform
     gate_hits_before = getattr(collector, "gate_hits", 0)
+    found: list[CandidateVideo] | None = None
+    error: CollectorError | None = None
+    discover_start: datetime | None = None
     # Teto por plataforma (Etapa 0 Task 7): a vaga cobre acquire + discover.
     # started_at é lido DENTRO da vaga (mas antes do acquire) para a duração
     # medir trabalho, não espera na fila — comparável ao baseline (Task 6).
-    async with deps.platform_slots.slot(collector.platform):
+    async with deps.platform_slots.slot(platform):
         started_at = deps.clock()
         try:
-            await deps.limiter.acquire(collector.platform)
-        except CollectorError as exc:
-            gate_hits_after = getattr(collector, "gate_hits", 0)
-            return DiscoverResult(
-                platform=collector.platform,
-                found=None,
-                error=exc,
-                gate_hits_delta=gate_hits_after - gate_hits_before,
-                discover_ms=None,
-                started_at=started_at,
-            )
-        except Exception as exc:
-            gate_hits_after = getattr(collector, "gate_hits", 0)
-            # run só guarda error_code: a causa vai para o log (Task 8.1)
-            logger.exception("discover fora do contrato: %s/%s", segment.slug, collector.platform)
-            error = CollectorError("internal_error", collector.platform, str(exc))
-            error.__cause__ = exc
-            return DiscoverResult(
-                platform=collector.platform,
-                found=None,
-                error=error,
-                gate_hits_delta=gate_hits_after - gate_hits_before,
-                discover_ms=None,
-                started_at=started_at,
-            )
-        discover_start = deps.clock()
-        try:
+            await deps.limiter.acquire(platform)
+            discover_start = deps.clock()
             found = await collector.discover(segment, limit)
         except CollectorError as exc:
-            discover_ms = _ms_between(discover_start, deps.clock())
-            gate_hits_after = getattr(collector, "gate_hits", 0)
-            return DiscoverResult(
-                platform=collector.platform,
-                found=None,
-                error=exc,
-                gate_hits_delta=gate_hits_after - gate_hits_before,
-                discover_ms=discover_ms,
-                started_at=started_at,
-            )
+            error = exc
         except Exception as exc:
-            discover_ms = _ms_between(discover_start, deps.clock())
-            gate_hits_after = getattr(collector, "gate_hits", 0)
             # run só guarda error_code: a causa vai para o log (Task 8.1)
-            logger.exception("discover fora do contrato: %s/%s", segment.slug, collector.platform)
-            error = CollectorError("internal_error", collector.platform, str(exc))
+            logger.exception("discover fora do contrato: %s/%s", segment.slug, platform)
+            error = CollectorError("internal_error", platform, str(exc))
             error.__cause__ = exc
-            return DiscoverResult(
-                platform=collector.platform,
-                found=None,
-                error=error,
-                gate_hits_delta=gate_hits_after - gate_hits_before,
-                discover_ms=discover_ms,
-                started_at=started_at,
-            )
-        discover_ms = _ms_between(discover_start, deps.clock())
-        gate_hits_after = getattr(collector, "gate_hits", 0)
+        # discover_ms só existe se o acquire passou (falha no limiter = None)
+        discover_ms = None if discover_start is None else _ms_between(discover_start, deps.clock())
         return DiscoverResult(
-            platform=collector.platform,
-            found=found,
-            error=None,
-            gate_hits_delta=gate_hits_after - gate_hits_before,
+            platform=platform,
+            found=None if error is not None else found,
+            error=error,
+            gate_hits_delta=getattr(collector, "gate_hits", 0) - gate_hits_before,
             discover_ms=discover_ms,
             started_at=started_at,
         )
@@ -181,25 +140,17 @@ async def collect(
         }
         runs: list[CollectRun] = []
         errors = 0
-        # Fase de rede (Task 7 + Etapa 0 Task 4): TaskGroup + semáforo
-        # limitado. Cada task captura TUDO na PRÓPRIA fronteira (dentro de
-        # _discover_one, que devolve DiscoverResult) — nenhuma exceção
-        # esperada escapa, para não cancelar as irmãs; só cancelamento
-        # externo (BaseException) aborta o grupo. Resultados indexados por
-        # posição: a persistência segue a ordem de deps.collectors, não a
-        # de término.
+        # Fase de rede (Task 7 + Etapa 0 Task 4 + Etapa 2 Task 12):
+        # bounded_gather = TaskGroup + semáforo, resultado na ordem de
+        # deps.collectors (não na de término). _discover_one captura TUDO na
+        # própria fronteira — nenhuma exceção esperada escapa para cancelar
+        # as irmãs; só cancelamento externo aborta o grupo.
         wanted = [c for c in deps.collectors if c.platform in platforms]
-        slots: dict[int, DiscoverResult] = {}
-        semaphore = asyncio.Semaphore(max(1, deps.max_concurrent_discoveries))
-
-        async def _run(index: int, collector: Collector) -> None:
-            async with semaphore:
-                slots[index] = await _discover_one(collector, segment, limit, deps)
-
-        async with asyncio.TaskGroup() as task_group:
-            for index, collector in enumerate(wanted):
-                task_group.create_task(_run(index, collector))
-        discoveries: list[DiscoverResult] = [slots[index] for index in range(len(wanted))]
+        discoveries = await bounded_gather(
+            wanted,
+            deps.max_concurrent_discoveries,
+            lambda collector: _discover_one(collector, segment, limit, deps),
+        )
         # Fase de persistência (sempre sequencial: mesma sessão Postgres).
         for result in discoveries:
             run = CollectRun(

@@ -335,6 +335,17 @@ novos só onde o refactor cria uma unidade nova.
 
 ## Task 12 — `bounded_gather` único
 
+> ✅ Feita. `app/concurrency.bounded_gather` é usado em `collect()`,
+> `run_research_cycle()` e `_gather_segments`, que agora devolve o envelope
+> inteiro: o cálculo de `ok` repetido nos 3 jobs saiu. **A6:** `_discover_one`
+> tem um único ponto de construção do `DiscoverResult`. **A4 reavaliado, sem
+> mudança:** inverter a ordem (vaga da plataforma antes do semáforo do
+> segmento) deixaria o TikTok (`tiktok=1`, gargalo do processo) **ocioso**
+> esperando o segmento. Na ordem atual, quem espera é trabalho não-gargalo,
+> que termina antes do fim do job. Exemplo: 3 segmentos × [tiktok 60 s,
+> youtube 5 s, instagram 5 s], teto 2 por segmento, dá 180 s nas duas ordens;
+> o tempo total é o TikTok serializado.
+
 O padrão TaskGroup + semáforo + slots por índice aparece em `collect()`,
 `run_research_cycle()` e `_gather_segments`.
 

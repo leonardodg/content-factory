@@ -1,10 +1,9 @@
-import asyncio
 import logging
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 
-from content_factory.app.concurrency import PlatformSlots
+from content_factory.app.concurrency import PlatformSlots, bounded_gather
 from content_factory.app.ports import (
     CollectRunRepository,
     KeywordExpander,
@@ -171,34 +170,26 @@ async def run_research_cycle(
         counts["signals_saved"] = await deps.signals.upsert_many(segment.id, all_signals)
 
         keywords_for_social = [s.keyword for s in all_signals]
-        # Fase de rede (Task 8): TaskGroup + semáforo limitado, mesmo padrão
-        # da Task 7 em collect(). Cada task captura Exception na PRÓPRIA
-        # fronteira (dentro de _discover_social_one, que devolve
-        # SocialDiscoverResult) — nenhum erro de rede escapa, para não
-        # cancelar as irmãs. O FanoutGuard NÃO é consultado aqui dentro:
-        # admit/truncate já aconteceram acima (seeds, web, trends), ANTES
-        # de agendar as tasks — o guard muta `_seen`/`_visited_count` e não
-        # é task-safe; consultá-lo sob concorrência corromperia o dedupe.
-        # Resultados indexados por posição: a persistência segue a ordem de
-        # deps.socials, não a de término.
+        # Fase de rede (Task 8 + Etapa 2 Task 12): bounded_gather, mesmo
+        # padrão de collect(). Cada task captura Exception na PRÓPRIA
+        # fronteira (_discover_social_one devolve SocialDiscoverResult) —
+        # nenhum erro de rede cancela as irmãs. O FanoutGuard NÃO é
+        # consultado aqui dentro: admit/truncate já aconteceram acima (seeds,
+        # web, trends), ANTES de agendar as tasks — o guard muta
+        # `_seen`/`_visited_count` e não é task-safe. Resultado na ordem de
+        # deps.socials, não na de término.
         wanted: list[tuple[str, SocialDiscoverer]] = [
             (platform, discoverer)
             for platform, discoverer in deps.socials.items()
             if platform in segment.platforms
         ]
-        slots: dict[int, SocialDiscoverResult] = {}
-        semaphore = asyncio.Semaphore(max(1, deps.max_concurrent_discoveries))
-
-        async def _run(index: int, platform: str, discoverer: SocialDiscoverer) -> None:
-            async with semaphore:
-                slots[index] = await _discover_social_one(
-                    segment_slug, platform, discoverer, keywords_for_social, deps
-                )
-
-        async with asyncio.TaskGroup() as task_group:
-            for index, (platform, discoverer) in enumerate(wanted):
-                task_group.create_task(_run(index, platform, discoverer))
-        discoveries: list[SocialDiscoverResult] = [slots[index] for index in range(len(wanted))]
+        discoveries = await bounded_gather(
+            wanted,
+            deps.max_concurrent_discoveries,
+            lambda pair: _discover_social_one(
+                segment_slug, pair[0], pair[1], keywords_for_social, deps
+            ),
+        )
         # Fase de persistência (sempre sequencial: mesma sessão Postgres).
         social_found = social_inserted = social_updated = social_skipped = 0
         social_platforms_attempted = len(discoveries)
