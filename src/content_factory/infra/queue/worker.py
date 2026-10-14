@@ -280,24 +280,52 @@ async def shutdown(ctx: dict[str, Any]) -> None:
         await deps.close()
 
 
+# Timeout por job (plano 2026-10-14-content-factory-lacunas-mapa-do-ciclo):
+# o default do arq (300 s) vale para o job INTEIRO — todos os segmentos.
+# collect/research fazem rede (TikTok/Playwright serializado em tiktok=1):
+# 25 min, ABAIXO do TTL do lock por segmento (30 min, infra/lock.py) para o
+# lock nunca expirar com o job ainda vivo. score é só banco: 300 s.
+COLLECT_JOB_TIMEOUT_S = 1500
+RESEARCH_JOB_TIMEOUT_S = 1500
+SCORE_JOB_TIMEOUT_S = 300
+
+
 class WorkerSettings:
     """`uv run arq content_factory.infra.queue.worker.WorkerSettings` (compose)."""
 
     functions: ClassVar[list[Function]] = [
-        func(run_collect_job, name="collect_job"),
-        func(run_score_job, name="score_job"),
-        func(run_research_job, name="research_job"),
+        func(run_collect_job, name="collect_job", timeout=COLLECT_JOB_TIMEOUT_S),
+        func(run_score_job, name="score_job", timeout=SCORE_JOB_TIMEOUT_S),
+        func(run_research_job, name="research_job", timeout=RESEARCH_JOB_TIMEOUT_S),
     ]
+    # timeout repetido no cron(): cada cron é uma entrada própria no arq e
+    # cairia no default de 300 s. max_tries=1 é o default do cron (sem retry
+    # — o próximo horário é a nova tentativa).
     cron_jobs: ClassVar[list[CronJob]] = [
-        cron(run_research_job, name="research_job", hour={7}, minute=0, unique=True),
+        cron(
+            run_research_job,
+            name="research_job",
+            hour={7},
+            minute=0,
+            unique=True,
+            timeout=RESEARCH_JOB_TIMEOUT_S,
+        ),
         cron(
             run_collect_job,
             name="collect_job",
             hour=parse_cron_hours(os.getenv("COLLECT_CRON_HOURS", "08,20")),
             minute=0,
             unique=True,
+            timeout=COLLECT_JOB_TIMEOUT_S,
         ),
-        cron(run_score_job, name="score_job", hour={8, 21}, minute=30, unique=True),
+        cron(
+            run_score_job,
+            name="score_job",
+            hour={8, 21},
+            minute=30,
+            unique=True,
+            timeout=SCORE_JOB_TIMEOUT_S,
+        ),
     ]
     redis_settings = RedisSettings.from_dsn(os.getenv("REDIS_URL", "redis://redis:6379/0"))
     # Sessões por UoW (1 por segmento, Task 10/11): jobs podem se sobrepor —

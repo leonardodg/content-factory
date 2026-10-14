@@ -44,6 +44,10 @@ Ao montar `docs/diagram/mapa-do-ciclo.md` apareceram duas lacunas:
 ## Tasks
 
 ### Task A — Breaker por plataforma ligado
+
+> ✅ Feita (`8ca7be4`). A implementação acrescentou um ponto: registrar saúde
+> nunca levanta (`report_discover` loga e segue), porque o Redis fora do ar
+> cancelaria as irmãs.
 - RED em `tests/app/test_collect.py`:
   - **Discover com falha de plataforma** (`RateLimited`, `NetworkError`,
     `blocked`, `UpstreamChanged`) chama `record_failure`; sucesso chama
@@ -57,6 +61,8 @@ Ao montar `docs/diagram/mapa-do-ciclo.md` apareceram duas lacunas:
   deixam o 4º `acquire` com `blocked`.
 
 ### Task B — Timeout explícito por job
+
+> ✅ Feita.
 - RED: `WorkerSettings.functions`/`cron_jobs` com `timeout` 1500/1500/300,
   e `max(timeouts de collect/research) < lock.DEFAULT_TTL_S`.
 - Docs: `mapa-do-ciclo.md` (lacunas resolvidas, `max_tries=1` nos crons),

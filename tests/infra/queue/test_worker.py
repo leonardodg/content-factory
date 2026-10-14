@@ -1502,3 +1502,24 @@ async def test_score_job_batch_failure_reaches_envelope_and_rolls_back(
     }
     assert committed == []
     assert rolled_back == ["rollback"]
+
+
+def test_job_timeouts_are_explicit_and_below_lock_ttl() -> None:
+    """Plano lacunas-mapa-do-ciclo Task B: o default do arq (300 s) vale para o
+    job INTEIRO (3 segmentos) — com TikTok/Playwright serializado não cabe.
+    collect/research = 25 min, abaixo do TTL do lock (30 min): o lock nunca
+    expira com o job vivo. Vale na func() E no cron() (entradas separadas)."""
+    from datetime import timedelta
+
+    from content_factory.infra.lock import DEFAULT_TTL_S
+
+    def _seconds(value: object) -> float:
+        assert value is not None, "timeout não definido (cairia no default 300 s do arq)"
+        return value.total_seconds() if isinstance(value, timedelta) else float(value)  # type: ignore[arg-type]
+
+    expected = {"collect_job": 1500, "research_job": 1500, "score_job": 300}
+    funcs = {f.name: _seconds(f.timeout_s) for f in w.WorkerSettings.functions}
+    crons = {c.name: _seconds(c.timeout_s) for c in w.WorkerSettings.cron_jobs}
+    assert funcs == expected
+    assert crons == expected
+    assert max(expected.values()) < DEFAULT_TTL_S

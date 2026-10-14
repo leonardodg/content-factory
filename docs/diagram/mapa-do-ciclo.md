@@ -42,7 +42,7 @@ mindmap
     Limites
       janelas Redis
       tiktok 1 por vez
-      timeout 300s
+      timeout por job
     Segurancas
       lock por segmento
       breakers
@@ -84,7 +84,7 @@ que acabou de entrar.
 
 ```mermaid
 flowchart LR
-    subgraph CRON["arq cron · max_jobs=3 · job_timeout=300s"]
+    subgraph CRON["arq cron · max_jobs=3 · timeout 25/25/5 min"]
         R["research_job 07:00"]
         C["collect_job 08:00/20:00"]
         S["score_job 08:30/21:30"]
@@ -239,8 +239,8 @@ sequenceDiagram
 | **Espera do limiter** | `RedisRateLimiter.acquire` | janela cheia: espera com backoff exponencial (1, 2, 4… s, ±20%) até 5 tentativas; espera > 60 s vira `RateLimited` imediato (cota diária não segura o worker) |
 | **Backoff do TikTok** | `_call_with_backoff` | resposta vazia: até 5 tentativas com `2^n + 0–2 s`, depois `blocked` |
 | **Breaker Suggest/Trends** | `CooldownBreaker` (em memória) | 5 falhas seguidas → `circuit_open` por 72 h (3 ciclos diários); chamadas durante o cooldown não o consomem |
-| **Breaker por plataforma no Redis** | `RedisRateLimiter` | existe (3 falhas → 15 min), mas **nenhum caminho chama `record_failure` hoje** — ver Lacunas |
-| **Retry do arq** | `max_tries=5` | só vale para `Retry` explícito (nenhum job levanta) ou job cancelado, por exemplo no shutdown do worker; falha de segmento não re-executa o job |
+| **Breaker por plataforma no Redis** | `PlatformHealth` = `RedisRateLimiter` | 3 falhas seguidas **do discover** (`blocked`/`rate_limited`/`network`/`upstream_changed`), somando segmentos → `acquire` levanta `blocked` por 15 min; sucesso zera. Não contam `auth_expired`, `invalid_payload`, `internal_error` nem erro do próprio `acquire` |
+| **Retry do arq** | crons com `max_tries=1` (default do `cron()`) | sem re-execução; a nova tentativa é o próximo horário |
 | **Próximo tick** | cron | erro de hoje é retentado naturalmente no próximo horário |
 
 ## 7. Limites e seguranças
@@ -251,7 +251,7 @@ sequenceDiagram
 | Limite | discovers simultâneos por segmento | `COLLECT_MAX_CONCURRENCY=2` (collect; o research usa 2 fixo) |
 | Limite | por plataforma no processo | `PLATFORM_MAX_CONCURRENCY`, sempre com `tiktok=1` |
 | Limite | jobs simultâneos | `max_jobs=3` (1 por tipo) |
-| Limite | duração do job | `job_timeout=300 s` (default do arq) para **todos** os segmentos do job |
+| Limite | duração do job (todos os segmentos) | collect e research **25 min**, score **5 min**, explícitos na `func()` e no `cron()`; abaixo do TTL do lock (30 min) |
 | Limite | janelas no Redis (globais, somam segmentos) | YouTube 100/dia · TikTok 6/min · Instagram 20/min · demais 10/min |
 | Segurança | lock por segmento | `collect:SLUG`/`research:SLUG`, TTL 30 min, token de posse com release por Lua (CAS) e 1 instância por UoW |
 | Segurança | isolamento | 1 sessão por segmento; erro reverte só a própria UoW |
@@ -263,13 +263,9 @@ sequenceDiagram
 
 ## 8. Lacunas conhecidas
 
-- **Breaker por plataforma no Redis inativo.** `RedisRateLimiter.record_failure`
-  e `record_success` não são chamados por `collect`/`research`, então a chave
-  de bloqueio nunca é gravada.
-- **`job_timeout=300 s` com TikTok ativo.** Hoje as coletas levam segundos
-  (o TikTok falha na hora, sem token). Com token e `tiktok=1` serializando
-  sessões Playwright entre 3 segmentos, o job inteiro pode passar de 5 min e
-  ser cancelado.
+Resolvidas em 2026-10-14 (plano `2026-10-14-content-factory-lacunas-mapa-do-ciclo`):
+breaker por plataforma ligado e timeout explícito por job. Abertas:
+
 - **Trends HTTP 400 diário.** Com o PR #10, o research segue sem o Trends;
   falta investigar a causa (`pytrends`/endpoint).
 - **Instagram sem App Review (gate #10).** Hashtag de terceiros bloqueada;

@@ -168,6 +168,20 @@ do processo — trocar exige restart do worker):
 | `WORKER_MAX_SEGMENTS` | `3` | teto de segmentos simultâneos por job (Task 11); lido a cada tick, trocar não exige restart; valor inválido ou < 1 cai em `3`/`1` |
 | `PLATFORM_MAX_CONCURRENCY` | `tiktok=1` | teto de discovers simultâneos **por plataforma no processo**, entre segmentos (`plataforma=limite,…`); a env é SOMADA ao default, nunca remove o teto do TikTok; entrada inválida ou < 1 é ignorada; vale do startup (exige restart) |
 
+Fixos no código (não são env):
+
+- **Timeout por job** (`infra/queue/worker.py`): collect e research 25 min,
+  score 5 min, para o job inteiro (todos os segmentos). É menor que o TTL de
+  30 min do lock por segmento. Job cancelado por timeout aparece no log do
+  arq. Os crons usam `max_tries=1`, então não há re-execução: a próxima
+  tentativa é o próximo horário.
+- **Breaker por plataforma** (Redis, `cf:cb:<plataforma>:*`): 3 falhas
+  seguidas do discover, somando segmentos, com códigos `blocked`,
+  `rate_limited`, `network` ou `upstream_changed`, fazem o `acquire` da
+  plataforma levantar `blocked` por 15 min (run `blocked`). Sucesso zera.
+  `auth_expired`, `invalid_payload` e `internal_error` não contam. Para
+  destravar na mão: `redis-cli DEL cf:cb:<plataforma>:blocked`.
+
 Onde mudar: bloco `environment:` do serviço `worker` em
 `.devcontainer/docker-compose.yml` (ou `.devcontainer/env/app.env`, que os
 dois serviços leem via `env_file`) — depois, recrie o container:
