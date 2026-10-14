@@ -28,11 +28,10 @@ from content_factory.app.collect import CollectDeps, collect
 from content_factory.app.concurrency import PlatformSlots, bounded_gather
 from content_factory.app.ports import (
     ResearchCampaignRepository,
-    SegmentDepsBundle,
-    SegmentDepsFactory,
 )
 from content_factory.app.research_pipeline import ResearchDeps, run_research_cycle
 from content_factory.app.score import ScoreDeps, score
+from content_factory.app.segment_deps import SegmentDepsBundle, SegmentDepsFactory
 from content_factory.config import Settings, get_settings
 from content_factory.domain.fanout_guard import FanoutGuard
 from content_factory.domain.models import DepthConfig, ResearchCampaign, Segment

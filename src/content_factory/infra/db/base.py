@@ -7,8 +7,6 @@ Um engine por processo, uma factory reutilizável, uma sessão por segmento.
 
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
-from types import TracebackType
-from typing import Self
 
 from sqlalchemy.ext.asyncio import (
     AsyncEngine,
@@ -62,25 +60,12 @@ class SessionUnitOfWork(UnitOfWork):
     """UoW concreta sobre 1 AsyncSession (dona do commit explícito).
 
     Satisfaz `app.ports.UnitOfWork` por herança explícita (mesmo estilo dos
-    `*RepositoryImpl`) — o pyright valida a conformidade. O `__aexit__`
-    reverte em exceção para uso direto; dentro de `session_scope` o rollback
-    já aconteceu (segundo rollback é no-op seguro).
+    `*RepositoryImpl`) — o pyright valida a conformidade. Sem context
+    manager (Etapa 2 Task 13): o rollback em exceção é de `session_scope`.
     """
 
     def __init__(self, session: AsyncSession) -> None:
         self._session = session
-
-    async def __aenter__(self) -> Self:
-        return self
-
-    async def __aexit__(
-        self,
-        exc_type: type[BaseException] | None,
-        exc: BaseException | None,
-        tb: TracebackType | None,
-    ) -> None:
-        if exc_type is not None:
-            await self._session.rollback()
 
     async def commit(self) -> None:
         await self._session.commit()

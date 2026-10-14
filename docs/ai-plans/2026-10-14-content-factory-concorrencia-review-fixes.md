@@ -356,6 +356,9 @@ O padrão TaskGroup + semáforo + slots por índice aparece em `collect()`,
 
 ## Task 13 — Camadas: bundle fora das portas, UoW enxuta (DIP/ISP)
 
+> ✅ Feita. `app/segment_deps.py` com bundle + fábrica; `ports.py` sem
+> `TYPE_CHECKING` dos use-cases; `tests/app/test_layers.py` trava a regra por AST.
+
 - Move `SegmentDepsBundle` e `SegmentDepsFactory` de `app/ports.py` para
   `app/segment_deps.py` — `ports.py` deixa de importar os use-cases (hoje via
   `TYPE_CHECKING`, dependência invertida).
