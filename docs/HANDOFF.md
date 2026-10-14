@@ -5,6 +5,28 @@
 
 ## 🔄 EM ANDAMENTO
 
+_**Revisão sênior 2026-10-14 — plano pronto, execução não iniciada.**
+Registro: [`REVISAO_2026-10-14.md`](REVISAO_2026-10-14.md); plano:
+`ai-plans/2026-10-14-content-factory-revisao-senior.md`.
+
+- **Decisão:** **corrigir, não refatorar.** Os refactors são locais: Lua no
+  rate limiter, `UpsertReport` no score e contador genérico por chamada.
+- **Antes de 19/10:**
+  - A1, rate limiter atômico. Uma chave sem TTL hoje bloqueia a plataforma
+    **para sempre**;
+  - A2, redação. A API key do YouTube e as senhas em URL de
+    Postgres/Redis **vazam**, reproduzido;
+  - A4, ruleset na `main`, que precisa da sua confirmação;
+  - A5, ADR de retry;
+  - B1, score diagnosticável;
+  - B2, `quota_used`, hoje sempre 0.
+- **Em 19/10:** A3, troca 3→1 pelo checklist.
+- **Depois:**
+  - B3, validação do ranking, com limiares a decidir;
+  - C1–C3, contratos e observabilidade;
+  - D1–D2, supply chain e ADR de SSRF.
+- **Restrição:** nada no `insta_kb` até o content-factory fechar 100%.
+
 _**Etapa 1 do plano de review CONCLUÍDA (2026-10-14), branch
 `fix/concorrencia-etapa1`.** A Etapa 0 e a Etapa 2 já estão na `main`
 (PR #9, `c401cf1`).
