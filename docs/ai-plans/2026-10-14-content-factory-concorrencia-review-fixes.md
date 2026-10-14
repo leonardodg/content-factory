@@ -299,6 +299,13 @@ before/after de `self.gate_hits` soma hits de outros segmentos.
 
 ## Task 10 — Breaker de `web_suggest`/`trends` por tempo, não por chamada
 
+> ✅ Feita. `infra/collectors/breaker.CooldownBreaker`, compartilhado pelos 2
+> providers; default 72 h (3 ciclos diários do research, o que "3 ciclos" valia
+> com 1 worker por segmento); em memória (worker único), decisão no docstring.
+> **Achado colateral:** erro do Suggest/Trends aborta o research do segmento
+> (sem try em `expand`/`interest_over_time`), o que contradizia o `operacao.md`. A doc
+> foi corrigida e o caso registrado como pendência.
+
 O cooldown "em ciclos" decrementa a cada chamada: com 3 segmentos por tick ele
 dura 1/3 do previsto, e falhas de segmentos diferentes se somam.
 

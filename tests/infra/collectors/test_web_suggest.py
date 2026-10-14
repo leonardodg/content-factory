@@ -91,7 +91,7 @@ async def test_expand_rate_limit_maps_to_rate_limited() -> None:
 @pytest.mark.asyncio
 async def test_circuit_breaker_opens_after_consecutive_failures() -> None:
     t = _FakeTransport(fail=httpx.ConnectError("x"))
-    p = _provider(t, breaker_threshold=3, breaker_cooldown_cycles=2)
+    p = _provider(t, breaker_threshold=3, breaker_cooldown_s=60)
 
     for _ in range(3):
         with pytest.raises(NetworkError):
