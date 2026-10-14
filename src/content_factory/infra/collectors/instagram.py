@@ -5,7 +5,7 @@ from typing import Any, ClassVar, cast
 
 import httpx
 
-from content_factory.app.gate_hits import record_gate_hit
+from content_factory.app.call_counters import record_gate_hit
 from content_factory.domain.errors import AuthExpired, NetworkError, UpstreamChanged
 from content_factory.domain.models import CandidateVideo, SegmentConfig
 from content_factory.infra.redact import redact

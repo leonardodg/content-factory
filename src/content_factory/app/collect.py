@@ -3,8 +3,8 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 
+from content_factory.app.call_counters import counting
 from content_factory.app.concurrency import PlatformSlots, bounded_gather
-from content_factory.app.gate_hits import counting
 from content_factory.app.platform_health import NoPlatformHealth, report_discover
 from content_factory.app.ports import (
     Collector,
@@ -72,6 +72,7 @@ class DiscoverResult:
     found: list[CandidateVideo] | None
     error: CollectorError | None
     gate_hits: int  # desta chamada (Etapa 1 Task 9)
+    quota_used: int  # unidades de cota de API desta chamada (revisão B2)
     discover_ms: int | None
     started_at: datetime
 
@@ -106,7 +107,7 @@ async def _discover_one(
     # persist_ms: finished_at sai após a rede de TODAS as irmãs (review).
     async with deps.platform_slots.slot(platform):
         started_at = deps.clock()
-        with counting() as gate_hits:
+        with counting() as counters:
             try:
                 await deps.limiter.acquire(platform)
                 discover_start = deps.clock()
@@ -128,7 +129,8 @@ async def _discover_one(
             platform=platform,
             found=found,  # só atribuído no sucesso: erro ⇒ None
             error=error,
-            gate_hits=gate_hits.total,
+            gate_hits=counters.gate_hits,
+            quota_used=counters.quota_used,
             discover_ms=discover_ms,
             started_at=started_at,
         )
@@ -169,6 +171,7 @@ async def collect(
                 collector=result.platform, segment_id=segment.id, started_at=result.started_at
             )
             run.discover_ms = result.discover_ms
+            run.quota_used = result.quota_used
             # Sem try/finally (Etapa 1, /code-review): erro fora do contrato
             # (infra — a sessão fica inutilizável) PROPAGA original; gravar a
             # run num `finally` levantaria PendingRollbackError e mascararia

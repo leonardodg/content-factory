@@ -3,8 +3,8 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 
+from content_factory.app.call_counters import counting
 from content_factory.app.concurrency import PlatformSlots, bounded_gather
-from content_factory.app.gate_hits import counting
 from content_factory.app.platform_health import NoPlatformHealth, report_discover
 from content_factory.app.ports import (
     CollectRunRepository,
@@ -85,6 +85,7 @@ class SocialDiscoverResult:
     candidates: list[CandidateVideo] | None
     error: Exception | None
     gate_hits: int  # desta chamada (Etapa 1 Task 9)
+    quota_used: int  # unidades de cota de API desta chamada (revisão B2)
     started_at: datetime
 
 
@@ -107,7 +108,7 @@ async def _discover_social_one(
     # Teto por plataforma (Etapa 0 Task 7): a vaga cobre acquire + discover.
     async with deps.platform_slots.slot(platform):
         started_at = deps.clock()
-        with counting() as gate_hits:
+        with counting() as counters:
             acquired = False
             try:
                 await deps.limiter.acquire(platform)
@@ -126,7 +127,8 @@ async def _discover_social_one(
             platform=platform,
             candidates=candidates,
             error=error,
-            gate_hits=gate_hits.total,
+            gate_hits=counters.gate_hits,
+            quota_used=counters.quota_used,
             started_at=started_at,
         )
 
@@ -269,6 +271,7 @@ async def run_research_cycle(
                 collector=f"research:{platform}",
                 segment_id=segment.id,
                 started_at=result.started_at,
+                quota_used=result.quota_used,
             )
             # Sem try/finally (Etapa 1, /code-review): erro fora do contrato
             # (infra — a sessão fica inutilizável) PROPAGA original; gravar a
