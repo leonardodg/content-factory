@@ -19,7 +19,14 @@ ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
 RUN uv pip install --system playwright && playwright install --with-deps chromium \
     && chmod -R a+rX /ms-playwright
 # worker NÃO tem bind-mount: o código precisa estar na imagem (target worker);
-# README.md porque o hatchling valida o build do projeto a partir dele
-COPY --chown=appuser:appuser src ./src README.md ./
+# README.md porque o hatchling valida o build do projeto a partir dele.
+# Dois COPYs separados: com múltiplas fontes o Docker copia o CONTEÚDO de
+# src/ para o destino (layout flat /app/content_factory), e o editable
+# install do pyproject (packages = ["src/content_factory"]) ficava apontando
+# para /app/src inexistente — `cf` e `python -c` fora de /app quebravam
+# (só funcionava porque o arq injeta o cwd no sys.path; achado pós-deploy
+# do worker único, 2026-10-14).
+COPY --chown=appuser:appuser src /app/src
+COPY --chown=appuser:appuser README.md /app/README.md
 USER appuser
 RUN uv sync --frozen --all-groups  # instala o projeto; sync pós-start é no-op
