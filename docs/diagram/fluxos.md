@@ -1,5 +1,8 @@
 # Fluxos da pipeline — content-factory
 
+> Visão consolidada (mapa mental, relógio do worker, coletores, dados
+> salvos, limites e reciclos): [Mapa do ciclo](mapa-do-ciclo.md).
+
 Diagramas do **comportamento em runtime** após a concorrência do pipeline
 (plano `../ai-plans/2026-10-13-content-factory-concorrencia-pipeline.md`).
 O estado do banco está no [diagrama ER](README.md); o passo a passo do
