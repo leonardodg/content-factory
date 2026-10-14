@@ -5,60 +5,47 @@
 
 ## 🔄 EM ANDAMENTO
 
-_**Etapa 2 (refactor SOLID/DRY) CONCLUÍDA (2026-10-14) na branch
-`refactor/concorrencia-etapa2`, empilhada sobre `fix/concorrencia-review`:
-fazer o merge da Etapa 0 primeiro.** Commits por Task:
-- T12 `49ce64b`: `bounded_gather` único.
-- T13 `4a2f02a`: bundle em `app/segment_deps.py`; UoW só com
-  commit/rollback; teste de camadas por AST.
-- T14+T15 `f60b15d`: `SharedDeps` sem sessão de startup nem templates; `ctx`
-  só com `app_deps`/`campaigns_deps`; engine via `create_engine_and_factory`.
-- T16: `infra/queue/composition.py` sem env, worker com ~335 linhas, A5/A7.
+_**Concorrência pós-PR #8: review + correções na `main` (2026-10-14).**
+Plano: `docs/ai-plans/2026-10-14-content-factory-concorrencia-review-fixes.md`.
+Tudo foi num PR único (branch `refactor/concorrencia-etapa2`):
+- **Etapa 0** (T1–T8 + 8.1/8.2), pré-requisito da troca 3→1:
+  - lock com posse por UoW, testado contra Redis real (o 🔴 do review);
+  - erros do DDGS traduzidos para o contrato;
+  - exceção fora do contrato no coletor vira run `failed`/`internal_error`
+    com traceback no log, sem cancelar as irmãs;
+  - log por segmento com `error_type`;
+  - teto por plataforma `tiktok=1` no processo;
+  - integração da UoW concorrente;
+  - log redigido com nível e timestamp.
+- **Etapa 2** (T12–T16), refactor:
+  - `bounded_gather`;
+  - bundle fora de `ports.py` e UoW só com commit/rollback;
+  - `SharedDeps` sem sessão de startup nem templates;
+  - engine via `create_engine_and_factory`;
+  - `infra/queue/composition.py`.
+- **`/code-review` final:** 9 dos 10 achados procediam; 8 foram corrigidos
+  (`cc0e1f5`):
+  - CLI com log redigido;
+  - ratelimit do ddgs reembrulhado;
+  - dispose do engine;
+  - filtro de log que não levanta;
+  - env somada ao `tiktok=1`;
+  - métrica de duração;
+  - docstring;
+  - DRY.
 
-**A4 reavaliado, sem mudança.** Inverter a ordem deixaria o gargalo
-`tiktok=1` ocioso (ver plano). Gates: 314 passed com infra descartável.
-A Etapa 1 (T9–T11) continua pendente._
-
-_**Etapa 0 + review da implementação CONCLUÍDOS (2026-10-14), branch
-`fix/concorrencia-review` pronta para PR/merge antes de 2026-10-19.** As
-Tasks 1–8 (`978d984`..`8035758`) foram revisadas e auditadas. O review achou
-2 problemas 🟠, já corrigidos:
-- **A1 → Task 8.1 (`9db64ea`):** exceção fora do contrato virava
-  `internal_error` mudo; agora gera `ERROR … fora do contrato: <slug>/<plataforma>`
-  com traceback.
-- **A2+A3 → Task 8.2:** o log do worker vazava segredo e saía sem
-  nível/timestamp; agora há `RedactingFilter` + handler próprio em
-  `content_factory`, conferido com a config real do arq.
-
-Gates com infra descartável: **306 passed, 0 skip**; `alembic check`,
-ruff/pyright 0, bandit, pip-audit sem vulns, `mkdocs --strict` e
-privacidade passam. Os 🟡 A4–A7 vão para a Etapa 2: bloqueio na fila entre
-o semáforo do segmento e a vaga da plataforma, parser do env sem teste, DRY
-em `_discover_one` e sobras no teste de integração. Detalhes em § "Review
-da implementação da Etapa 0" do plano._
-
-_**Review pós-merge do PR #8 (2026-10-14) — Etapa 0 implementada na branch
-`fix/concorrencia-review` (Tasks 1–8: lock testado contra Redis real, posse
-por UoW, web traduz erros do DDGS, exceção inesperada vira run failed, log
-com traceback por segmento, `started_at` cobre rede, teto por plataforma,
-integração da UoW concorrente). Merge antes de 2026-10-19, depois das Tasks
-8.1/8.2; Etapas 1–2 ficam para depois.** Plano:
-`docs/ai-plans/2026-10-14-content-factory-concorrencia-review-fixes.md`
-(16 tasks, branch sugerida `fix/concorrencia-review`). Gates do PR #8
-reconfirmados (285 passed com Postgres descartável, ruff/pyright 0, `alembic
-check` limpo). Verificação em infra real descartável: UoW concorrente ✅,
-`upsert_many` 1200 linhas → 3 INSERTs ✅, Lua CAS entre instâncias ✅ —
-mas **🔴 `RedisLock` na MESMA instância (topologia do worker único) não
-protege**: release tardio apaga o lock do novo dono (reproduzido em Redis
-real; a suíte não pegou porque `FakeRedis.eval` reimplementa o Lua e o
-teste usa 2 instâncias). Também: 🟠 `DDGSException` do web cancela as
-plataformas irmãs e derruba o segmento (visto em produção: velas
-2026-10-13 11:00 UTC); 🟠 exceção por segmento sem log/traceback (arq conta
-sucesso); 🟠 `started_at/finished_at` só cobrem persistência (quebra a
-comparação com o baseline); 🟡 sem teto por plataforma (até 3 Playwright do
-TikTok simultâneos). **Etapa 0 do plano (Tasks 1–8) é pré-requisito da troca
-3 → 1 após 2026-10-19.** Etapas 1–2 (gate_hits por chamada, breaker por
-tempo, erro de lote do score, refactor SOLID) podem vir depois._
+  O 9º (research após erro de banco) é pré-existente e foi para a Etapa 1.
+  O 10º não procedia.
+- **Comparação com o baseline:** usar `discover_ms + persist_ms`, não
+  `finished_at - started_at`. Com plataformas concorrentes, `finished_at`
+  inclui a espera pelas irmãs (ver `docs/manual/baseline-concorrencia.md`).
+- **A4 mantido de propósito.** A ordem semáforo do segmento → vaga da
+  plataforma fica; inverter deixaria ocioso o gargalo `tiktok=1`.
+- **Gates:** 322 passed com Postgres/Redis descartáveis (`cf-test-pg` /
+  `cf-test-redis`, 0 skip). ruff, pyright, `alembic check`, bandit,
+  pip-audit, `mkdocs --strict` e privacidade passam.
+- **Os 3 workers do experimento NÃO foram tocados:** seguem na imagem
+  pré-merge até 2026-10-19._
 
 _Restart do S.O. em 2026-10-13 ~21:49 UTC: os 3 `cf-worker-*`, Postgres e
 Redis voltaram sozinhos (`unless-stopped`) na MESMA imagem pré-merge
@@ -134,9 +121,9 @@ medição com rollback confirmado).
   `agentes`, `index`, `experimento-7-dias`, `anti-ban`, arquitetura)
 - [ ] **Pendente pós-2026-10-19**: swap 3 workers → 1 (procedimento em
   `docs/manual/experimento-7-dias.md` § Pós-2026-10-19; exportar dados
-  antes de parar os containers) — **bloqueado pela Etapa 0 do plano
-  `2026-10-14-content-factory-concorrencia-review-fixes.md`** (review
-  2026-10-14, ver EM ANDAMENTO)
+  antes de parar os containers). A Etapa 0 do plano
+  `2026-10-14-content-factory-concorrencia-review-fixes.md`, que bloqueava
+  o swap, já está na `main` (2026-10-14). O swap agora depende só da data.
 
 ### Worker multi-segmento dinâmico (2026-10-12)
 
@@ -457,19 +444,17 @@ guard-rail, tabela e orquestrador; Fases B–E pendem de decisão do usuário.
 
 ## ⛔ O que falta (próximos passos aprovados)
 
-0. **Correções do review do PR #8** — executar a Etapa 0 (Tasks 1–8) de
-   `docs/ai-plans/2026-10-14-content-factory-concorrencia-review-fixes.md`
-   **antes** de 2026-10-19: [x] testes de lock em Redis real (T1) + lock
-   por UoW (T2) + web traduz erros do DDGS (T3) + exceção inesperada no
-   discover vira run `failed` (T4) + log com traceback por segmento (T5);
-   [x] `started_at/finished_at` de volta a rede+persistência (T6) + teto por
-   plataforma `tiktok=1` (T7) + teste de integração da UoW concorrente (T8).
-   **Etapa 0 completa — 297 passed, todos os gates verdes.**
-   [x] Tasks 8.1 (causa do `internal_error` no log) + 8.2 (log do worker
-   com `RedactingFilter` + nível/timestamp) — achados 🟠 A1/A2 do review da
-   implementação. **Falta: PR + merge antes de 2026-10-19** (306 passed).
-   Integração sempre em Postgres/Redis descartáveis (`TEST_REDIS_URL`
-   novo), nunca nos do experimento.
+0. **Concorrência: Etapa 1 do plano de review** (pode vir após
+   2026-10-19):
+   - T9: `gate_hits` por chamada (ContextVar);
+   - T10: breaker de `web_suggest`/`trends` por tempo;
+   - T11: falha de lote do score propaga;
+   - pendente do `/code-review`: a persistência do research precisa de
+     savepoint por plataforma, porque um erro de banco no upsert hoje deixa
+     a sessão em `PendingRollbackError` e derruba o segmento.
+
+   Etapas 0 e 2 já estão na `main`. Integração sempre em Postgres/Redis
+   descartáveis, nunca nos do experimento.
 1. **Issues pós-merge** (backlog da REVISÃO §6 — #1 mascaramento/finally já
    corrigido pelo savepoint; PR #3 merged `7d5d295`): lock token (#2 alta),
    INCR+EXPIRE (#3), detalhe de erro do score (#4) — **deferrals do collector
