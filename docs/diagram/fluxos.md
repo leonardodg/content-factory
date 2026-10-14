@@ -49,11 +49,11 @@ flowchart TD
     R1 -- não --> SH["1 cliente só"]
     R2 --> ENG["engine único + session factory"]
     SH --> ENG
-    ENG --> TPL["templates collect/score/research<br/>+ placeholders de segmento"]
-    TPL --> CTX["ctx: app_deps + deps + campaigns"]
+    ENG --> TPL["SharedDeps: coletores, providers,<br/>limiter, lock_client, platform_slots<br/>(sem sessão de startup)"]
+    TPL --> CTX["ctx: app_deps + campaigns_deps"]
     CTX --> UP["worker pronto · 3 crons"]
     UP --> DOWN["arq on_shutdown"]
-    DOWN --> CL["fecha sessões + clientes Redis<br/>+ engine.dispose()"]
+    DOWN --> CL["fecha clientes Redis<br/>+ engine.dispose()"]
 ```
 
 `on_job_end` não existe mais: cada UoW reverte sozinha em exceção
@@ -64,15 +64,15 @@ flowchart TD
 
 ```mermaid
 flowchart TD
-    A["tick: active_segments()"] --> B["TaskGroup por segmento"]
-    B --> U["abrir UoW<br/>bundle = collect+score+research<br/>da sessão do segmento"]
+    A["tick: active_segments()"] --> B["bounded_gather por segmento<br/>(WORKER_MAX_SEGMENTS)"]
+    B --> U["abrir UoW<br/>bundle = collect+score+research<br/>montado de SharedDeps + sessão do segmento<br/>(RedisLock próprio)"]
     U --> L{"lock collect:SLUG<br/>token de posse · TTL 30 min"}
     L -- ocupado --> J1["{ok: false, ja_em_execucao}"]
-    L -- livre --> N["fase de rede · TaskGroup + semáforo 2"]
+    L -- livre --> N["fase de rede · bounded_gather 2<br/>+ vaga por plataforma (tiktok=1)"]
     N --> D1["limiter.acquire + discover<br/>youtube"]
     N --> D2["limiter.acquire + discover<br/>instagram"]
     N --> D3["limiter.acquire + discover<br/>web / tiktok"]
-    D1 --> RES["DiscoverResult por plataforma<br/>erro CollectorError capturado na task"]
+    D1 --> RES["DiscoverResult por plataforma<br/>qualquer Exception capturada na task<br/>(fora do contrato: internal_error + log)"]
     D2 --> RES
     D3 --> RES
     RES --> P["fase de persistência SEQUENCIAL<br/>ordem de collectors<br/>upsert + runs.record"]
@@ -93,7 +93,7 @@ sequencial.
 
 ```mermaid
 flowchart TD
-    A["tick: active_segments()"] --> B["TaskGroup por segmento"]
+    A["tick: active_segments()"] --> B["bounded_gather por segmento<br/>(WORKER_MAX_SEGMENTS)"]
     B --> U["abrir UoW"]
     U --> L["latest_for_segment()<br/>1 query · snapshots + anterior"]
     L --> V["fase pura · sem I/O<br/>relevance_of + viral_score<br/>~20 µs/vídeo"]

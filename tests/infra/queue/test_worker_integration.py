@@ -110,9 +110,7 @@ async def test_concurrent_segment_uows_isolate_commits(
             return _Out()
 
         monkeypatch.setattr(w, "_collect_impl", fake_collect)
-        out = await w.run_collect_job(
-            {"collect_deps": object(), "campaigns_deps": deps.campaigns, "app_deps": deps}
-        )
+        out = await w.run_collect_job({"campaigns_deps": deps.campaigns, "app_deps": deps})
         assert state["peak"] == 3
         assert out["segments"][slugs[1]] == {
             "ok": False,

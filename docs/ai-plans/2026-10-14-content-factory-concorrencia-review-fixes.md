@@ -367,6 +367,12 @@ O padrão TaskGroup + semáforo + slots por índice aparece em `collect()`,
 
 ## Task 14 — Composição sem sessão de startup nem templates expostos
 
+> ✅ Feita junto com a Task 15 (mesmo trecho de `create_app_deps`). `SharedDeps`
+> frozen; `ctx` só com `app_deps` + `campaigns_deps`. `campaigns_deps` fica:
+> é o repo de sessão fresca, não template. Testes: 0 sessões no startup,
+> `set(ctx)` exato; o bloco de monkeypatch repetido em 6 testes virou
+> `_patch_composition`, e os helpers de template mortos saíram.
+
 Hoje `create_app_deps` abre uma sessão que nunca é usada, monta deps
 "template" presos a ela (com `ScoreDeps.segment`/`guard` placeholder) e ainda os
 publica em `ctx["collect_deps"|"score_deps"|"research_deps"]` — quem usar um
@@ -381,6 +387,9 @@ deles reintroduz o `IllegalStateChangeError` com `max_jobs=3`.
   factory conta aberturas = 0 até o primeiro job).
 
 ## Task 15 — Engine via `create_engine_and_factory`, sem seam por `kw["bind"]`
+
+> ✅ Feita. `engine: AsyncEngine` (não opcional). `get_session_factory` fica
+> só para a CLI.
 
 - `create_app_deps` usa `create_engine_and_factory` (que hoje existe e o worker
   não usa); some o `isinstance` com `# pyright: ignore` e o `engine: ... | None`.

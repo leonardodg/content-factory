@@ -1,8 +1,8 @@
 """Engine compartilhado + sessão por unidade de trabalho (Task 10).
 
 Um engine por processo, uma factory reutilizável, uma sessão por segmento.
-`get_session_factory` continua existindo como wrapper fino porque
-`tests/infra/queue/test_worker.py` o usa como seam de teste (monkeypatch).
+O worker usa `create_engine_and_factory` (fecha o engine no shutdown);
+`get_session_factory` é o wrapper fino da CLI (e seu seam de teste).
 """
 
 from collections.abc import AsyncGenerator
@@ -33,7 +33,7 @@ def create_engine_and_factory(
 
 
 def get_session_factory(settings: Settings) -> async_sessionmaker[AsyncSession]:
-    """Wrapper fino sobre `create_engine_and_factory` (seam de teste do worker)."""
+    """Wrapper fino sobre `create_engine_and_factory` para a CLI (seam de teste)."""
     _, factory = create_engine_and_factory(settings)
     return factory
 

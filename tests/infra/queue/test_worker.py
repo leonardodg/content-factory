@@ -83,6 +83,71 @@ class _FakeSession:
         self.events.append("rollback")
 
 
+class _FakeEngine:
+    """Engine fake: só conta `dispose` (o seam é `create_engine_and_factory`)."""
+
+    def __init__(self) -> None:
+        self.disposed = 0
+
+    async def dispose(self) -> None:
+        self.disposed += 1
+
+
+class _EmptyRegistry:
+    def snapshot(self) -> list[str]:
+        return []
+
+    def resolve(self, names: list[str]) -> list[object]:
+        return []
+
+
+def _no_register(_settings: object) -> None:
+    pass
+
+
+@asynccontextmanager
+async def _null_redis(_url: str) -> AsyncGenerator[Any]:
+    yield object()  # RedisLock/RateLimiter só armazenam o client
+
+
+def _patch_composition(
+    monkeypatch: pytest.MonkeyPatch,
+    session_factory: Callable[[], Any],
+    redis: Callable[[str], Any] = _null_redis,
+) -> _FakeEngine:
+    """Troca as fronteiras de `create_app_deps` (banco, Redis, registry) por fakes.
+
+    Etapa 2 Task 15: o seam do banco é `create_engine_and_factory`, que
+    devolve `(engine, factory)` — o engine fake registra o `dispose`.
+    """
+    import content_factory.infra.collectors as collectors_mod
+    import content_factory.infra.db.base as db_base
+    import content_factory.infra.redis_ops as redis_ops
+
+    engine = _FakeEngine()
+
+    def _engine_and_factory(_settings: object) -> tuple[_FakeEngine, Callable[[], Any]]:
+        return engine, session_factory
+
+    monkeypatch.setattr(db_base, "create_engine_and_factory", _engine_and_factory)
+    monkeypatch.setattr(redis_ops, "redis_client", redis)
+    monkeypatch.setattr(collectors_mod, "register_defaults", _no_register)
+    monkeypatch.setattr(collectors_mod, "registry", _EmptyRegistry())
+    return engine
+
+
+def _recording_sessions() -> tuple[list[_FakeSession], Callable[[], Any]]:
+    created: list[_FakeSession] = []
+
+    @asynccontextmanager
+    async def _session() -> AsyncGenerator[_FakeSession]:
+        session = _FakeSession()
+        created.append(session)
+        yield session
+
+    return created, _session
+
+
 class _FakeUoW:
     """UoW fake: commit/rollback delegam à sessão do segmento + hooks de contagem."""
 
@@ -164,25 +229,6 @@ def _collect_cfg(platforms: list[str], limit: int) -> dict[str, Any]:
     return {"platforms": platforms, "limit": limit}
 
 
-class _NoopScores:
-    async def upsert(
-        self, video_id: int, segment_id: int, result: object, computed_at: object
-    ) -> None:
-        pass
-
-
-def _score_deps_placeholder() -> ScoreDeps:
-    """ScoreDeps de startup: segment/keywords são placeholders (Task 5) —
-    run_score_job sempre substitui antes de chamar _score_impl."""
-    repos = FakeRepos()
-    return ScoreDeps(
-        videos=repos.videos,  # type: ignore[arg-type]
-        scores=_NoopScores(),  # type: ignore[arg-type]
-        segment=Segment(id=0, slug="_placeholder", name="_", platforms=[], keywords=[]),
-        keywords=[],
-    )
-
-
 async def test_run_collect_job_processes_all_active_segments(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -206,9 +252,7 @@ async def test_run_collect_job_processes_all_active_segments(
     rolled_back: list[str] = []
     app_deps = _FakeAppDeps(committed, rolled_back)
 
-    out = await w.run_collect_job(
-        {"collect_deps": object(), "campaigns_deps": campaigns, "app_deps": app_deps}
-    )
+    out = await w.run_collect_job({"campaigns_deps": campaigns, "app_deps": app_deps})
     assert calls == ["velas", "sabonetes"]
     assert out["ok"] is True
     assert set(out["segments"]) == {"velas", "sabonetes"}
@@ -222,9 +266,7 @@ async def test_run_collect_job_noop_when_no_active_segment(
     """0 segmentos ativos → noop ok=True, sem chamar collect."""
     monkeypatch.setattr(w, "_load_settings", lambda: _collect_cfg([], 10))
     campaigns = _FakeCampaignsMultiSegment(slugs=[])
-    out = await w.run_collect_job(
-        {"collect_deps": object(), "campaigns_deps": campaigns, "app_deps": _NoopAppDeps()}
-    )
+    out = await w.run_collect_job({"campaigns_deps": campaigns, "app_deps": _NoopAppDeps()})
     assert out == {"ok": True, "segments": {}}
 
 
@@ -251,7 +293,6 @@ async def test_run_collect_job_platforms_fall_back_to_segment(
     rolled_back: list[str] = []
     await w.run_collect_job(
         {
-            "collect_deps": object(),
             "campaigns_deps": campaigns,
             "app_deps": _FakeAppDeps(committed, rolled_back),
         }
@@ -289,9 +330,7 @@ async def test_run_collect_job_isolates_segment_exception(
     rolled_back: list[str] = []
     app_deps = _FakeAppDeps(committed, rolled_back)
 
-    out = await w.run_collect_job(
-        {"collect_deps": object(), "campaigns_deps": campaigns, "app_deps": app_deps}
-    )
+    out = await w.run_collect_job({"campaigns_deps": campaigns, "app_deps": app_deps})
     assert calls == ["velas", "sabonetes"]  # ambos tentados, 1 não trava o outro
     assert out["ok"] is False
     assert out["segments"]["velas"]["ok"] is False
@@ -322,12 +361,7 @@ async def test_run_score_job_processes_all_active_segments(
     rolled_back: list[str] = []
     app_deps = _FakeAppDeps(committed, rolled_back)
 
-    # base do startup: só videos/scores importam — segment/keywords são
-    # placeholder que o job substitui por segmento
-    base = _score_deps_placeholder()
-    out = await w.run_score_job(
-        {"score_deps": base, "campaigns_deps": campaigns, "app_deps": app_deps}
-    )
+    out = await w.run_score_job({"campaigns_deps": campaigns, "app_deps": app_deps})
     assert calls == ["velas", "sabonetes"]
     assert out == {
         "ok": True,
@@ -361,7 +395,6 @@ async def test_run_score_job_isolates_segment_exception(
 
     out = await w.run_score_job(
         {
-            "score_deps": _score_deps_placeholder(),
             "campaigns_deps": campaigns,
             "app_deps": app_deps,
         }
@@ -388,7 +421,6 @@ async def test_run_score_job_noop_when_no_active_segment(
     campaigns = _FakeCampaignsMultiSegment(slugs=[])
     out = await w.run_score_job(
         {
-            "score_deps": _score_deps_placeholder(),
             "campaigns_deps": campaigns,
             "app_deps": _NoopAppDeps(),
         }
@@ -468,117 +500,31 @@ async def test_shutdown_closes_app_deps_when_present() -> None:
     assert closed == ["close"]
 
 
-async def test_create_app_deps_startup_resolves_no_segment(
+async def test_create_app_deps_opens_no_session_and_resolves_no_segment(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Task 5: startup NÃO resolve mais 1 segmento fixo do banco.
+    """Etapa 2 Task 14: startup não abre sessão nem resolve segmento.
 
-    O único sinal de "quais segmentos processar" passou a ser
-    `active_segments()` dentro de cada job — o startup monta
-    ScoreDeps/ResearchDeps com placeholders que os jobs sempre
-    substituem antes de usar. `get_by_slug` boom = guarda de regressão.
+    Só `SharedDeps` (task-safe) nasce no startup; os deps por segmento nascem
+    em `create_segment_deps`. `get_by_slug` boom = guarda de regressão.
     """
-    from contextlib import asynccontextmanager
-
-    import content_factory.infra.collectors as collectors_mod
-    import content_factory.infra.db.base as db_base
     import content_factory.infra.db.repositories as repos_mod
-    import content_factory.infra.redis_ops as redis_ops
     from content_factory.config import Settings
 
     async def _boom(self: object, slug: str) -> Segment:
         raise AssertionError("startup nao deve resolver segmento")
 
     monkeypatch.setattr(repos_mod.SegmentRepositoryImpl, "get_by_slug", _boom)
-
-    class _Session:
-        async def commit(self) -> None:
-            pass
-
-        async def rollback(self) -> None:
-            pass
-
-    @asynccontextmanager
-    async def _session() -> AsyncGenerator[Any]:
-        yield _Session()
-
-    @asynccontextmanager
-    async def _redis(_url: str) -> AsyncGenerator[Any]:
-        yield object()  # RedisLock/RateLimiter só armazenam o client
-
-    def _factory(_settings: Settings) -> Any:
-        return _session
-
-    def _register(_settings: Settings) -> None:
-        pass
-
-    class _Registry:
-        def snapshot(self) -> list[str]:
-            return []
-
-        def resolve(self, names: list[str]) -> list[object]:
-            return []
-
-    monkeypatch.setattr(db_base, "get_session_factory", _factory)
-    monkeypatch.setattr(redis_ops, "redis_client", _redis)
-    monkeypatch.setattr(collectors_mod, "register_defaults", _register)
-    monkeypatch.setattr(collectors_mod, "registry", _Registry())
+    created, session_factory = _recording_sessions()
+    _patch_composition(monkeypatch, session_factory)
 
     deps = await w.create_app_deps(Settings())
-    # placeholders nunca lidos fora do loop dos jobs (Tasks 2-4)
-    assert deps.score.segment.slug == "_placeholder"
-    assert deps.score.segment.id == 0
-    assert deps.score.keywords == []
-    assert deps.research.guard is not None
-    assert not deps.research.guard.admit("x", depth=99)  # DepthConfig default
-    assert deps.collect.collectors == []
+    assert created == []  # nenhuma sessão de startup
+    assert not hasattr(deps, "collect") and not hasattr(deps, "score")
+    assert not hasattr(deps, "research")
+    assert deps.shared.collectors == []
     assert deps.campaigns is not None
     await deps.close()
-
-
-class _NoopWeb:
-    platform: str = "web_suggest"
-
-    async def expand(self, seeds: list[str], depth: int) -> list[object]:
-        return []
-
-
-class _NoopTrends:
-    async def interest_over_time(self, keywords: list[str], timeframe: str) -> list[object]:
-        return []
-
-
-class _NoopSignals:
-    async def upsert_many(self, segment_id: int, signals: object) -> int:
-        return 0
-
-    async def top_for_segment(self, segment_id: int, source: object, limit: int) -> list[object]:
-        return []
-
-
-class _NoopTrendObservations:
-    async def record_many(self, segment_id: int, points: object) -> int:
-        return 0
-
-    async def history_for_keyword(self, segment_id: int, keyword: str, limit: int) -> list[object]:
-        return []
-
-
-def _research_deps() -> ResearchDeps:
-    repos = FakeRepos()
-    return ResearchDeps(
-        web=_NoopWeb(),  # type: ignore[arg-type]
-        trends=_NoopTrends(),  # type: ignore[arg-type]
-        socials={},
-        signals=_NoopSignals(),  # type: ignore[arg-type]
-        trend_observations=_NoopTrendObservations(),  # type: ignore[arg-type]
-        segments=repos.segments,  # type: ignore[arg-type]
-        videos=repos.videos,
-        runs=repos.runs,
-        lock=FakeLock(),
-        limiter=FakeLimiter(),
-        guard=FanoutGuard(DepthConfig()),
-    )
 
 
 async def test_run_research_job_noop_when_no_active_segment(
@@ -597,9 +543,7 @@ async def test_run_research_job_noop_when_no_active_segment(
 
     monkeypatch.setattr(w, "_research_impl", fake_research)
     campaigns = _FakeCampaignsMultiSegment(slugs=[])
-    out = await w.run_research_job(
-        {"research_deps": _research_deps(), "campaigns_deps": campaigns, "app_deps": _NoopAppDeps()}
-    )
+    out = await w.run_research_job({"campaigns_deps": campaigns, "app_deps": _NoopAppDeps()})
     assert out == {"ok": True, "segments": {}}
     assert calls == []
 
@@ -660,7 +604,6 @@ async def test_run_research_job_processes_all_active_segments(
 
     out = await w.run_research_job(
         {
-            "research_deps": _research_deps(),
             "campaigns_deps": _Campaigns(),
             "app_deps": app_deps,
         }
@@ -722,9 +665,7 @@ async def test_run_research_job_isolates_segment_exception(
     rolled_back: list[str] = []
     app_deps = _FakeAppDeps(committed, rolled_back)
 
-    out = await w.run_research_job(
-        {"research_deps": _research_deps(), "campaigns_deps": _Campaigns(), "app_deps": app_deps}
-    )
+    out = await w.run_research_job({"campaigns_deps": _Campaigns(), "app_deps": app_deps})
     assert calls == ["velas", "sabonetes"]
     assert out["ok"] is False
     assert out["segments"]["velas"]["ok"] is False
@@ -746,12 +687,7 @@ def test_workersettings_registers_research_job_and_cron() -> None:
 async def test_create_app_deps_single_redis_when_urls_equal(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """URLs iguais ⇒ um único cliente Redis (comportamento pré-Task 3)."""
-    from contextlib import asynccontextmanager
-
-    import content_factory.infra.collectors as collectors_mod
-    import content_factory.infra.db.base as db_base
-    import content_factory.infra.redis_ops as redis_ops
+    """Task 3: URLs iguais (default) ⇒ um cliente só, fechado no shutdown."""
     from content_factory.config import Settings
 
     opened: list[str] = []
@@ -770,34 +706,8 @@ async def test_create_app_deps_single_redis_when_urls_equal(
         finally:
             closed.append(url)
 
-    class _Session:
-        async def commit(self) -> None:
-            pass
-
-        async def rollback(self) -> None:
-            pass
-
-    @asynccontextmanager
-    async def _session() -> AsyncGenerator[Any]:
-        yield _Session()
-
-    def _factory(_settings: Settings) -> Any:
-        return _session
-
-    def _register(_settings: Settings) -> None:
-        pass
-
-    class _Registry:
-        def snapshot(self) -> list[str]:
-            return []
-
-        def resolve(self, names: list[str]) -> list[object]:
-            return []
-
-    monkeypatch.setattr(db_base, "get_session_factory", _factory)
-    monkeypatch.setattr(redis_ops, "redis_client", _redis)
-    monkeypatch.setattr(collectors_mod, "register_defaults", _register)
-    monkeypatch.setattr(collectors_mod, "registry", _Registry())
+    _, session_factory = _recording_sessions()
+    engine = _patch_composition(monkeypatch, session_factory, _redis)
 
     settings = Settings()
     assert settings.rate_limit_redis_url == settings.redis_url  # default = redis_url
@@ -805,17 +715,13 @@ async def test_create_app_deps_single_redis_when_urls_equal(
     assert opened == [settings.redis_url]  # um cliente só
     await deps.close()
     assert closed == [settings.redis_url]
+    assert engine.disposed == 1
 
 
 async def test_create_app_deps_two_redis_when_urls_differ(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """URLs diferentes ⇒ dois clientes; ambos fechados no shutdown."""
-    from contextlib import asynccontextmanager
-
-    import content_factory.infra.collectors as collectors_mod
-    import content_factory.infra.db.base as db_base
-    import content_factory.infra.redis_ops as redis_ops
     from content_factory.config import Settings
 
     opened: list[str] = []
@@ -834,34 +740,8 @@ async def test_create_app_deps_two_redis_when_urls_differ(
         finally:
             closed.append(url)
 
-    class _Session:
-        async def commit(self) -> None:
-            pass
-
-        async def rollback(self) -> None:
-            pass
-
-    @asynccontextmanager
-    async def _session() -> AsyncGenerator[Any]:
-        yield _Session()
-
-    def _factory(_settings: Settings) -> Any:
-        return _session
-
-    def _register(_settings: Settings) -> None:
-        pass
-
-    class _Registry:
-        def snapshot(self) -> list[str]:
-            return []
-
-        def resolve(self, names: list[str]) -> list[object]:
-            return []
-
-    monkeypatch.setattr(db_base, "get_session_factory", _factory)
-    monkeypatch.setattr(redis_ops, "redis_client", _redis)
-    monkeypatch.setattr(collectors_mod, "register_defaults", _register)
-    monkeypatch.setattr(collectors_mod, "registry", _Registry())
+    _, session_factory = _recording_sessions()
+    engine = _patch_composition(monkeypatch, session_factory, _redis)
 
     settings = Settings(
         redis_url="redis://redis:6379/1", rate_limit_redis_url="redis://redis:6379/0"
@@ -870,6 +750,7 @@ async def test_create_app_deps_two_redis_when_urls_differ(
     assert opened == ["redis://redis:6379/1", "redis://redis:6379/0"]
     await deps.close()
     assert sorted(closed) == ["redis://redis:6379/0", "redis://redis:6379/1"]
+    assert engine.disposed == 1
 
 
 async def test_startup_fails_when_collect_segment_set(
@@ -885,13 +766,10 @@ async def test_startup_fails_when_collect_segment_set(
 async def test_startup_ok_without_collect_segment(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Sem COLLECT_SEGMENT o startup segue normal (injeta app_deps)."""
+    """Sem COLLECT_SEGMENT o startup segue normal; ctx sem templates (Etapa 2 Task 14)."""
     monkeypatch.delenv("COLLECT_SEGMENT", raising=False)
 
     class _Deps:
-        collect = object()
-        score = object()
-        research = object()
         campaigns = object()
 
         async def close(self) -> None:
@@ -903,7 +781,7 @@ async def test_startup_ok_without_collect_segment(
     monkeypatch.setattr(w, "create_app_deps", _fake_create)
     ctx: dict[str, object] = {}
     await w.startup(ctx)
-    assert "app_deps" in ctx
+    assert set(ctx) == {"app_deps", "campaigns_deps"}
     await w.shutdown(ctx)
 
 
@@ -944,9 +822,7 @@ async def test_run_collect_job_segments_get_distinct_sessions(
     committed: list[str] = []
     rolled_back: list[str] = []
     app_deps = _FakeAppDeps(committed, rolled_back)
-    out = await w.run_collect_job(
-        {"collect_deps": object(), "campaigns_deps": campaigns, "app_deps": app_deps}
-    )
+    out = await w.run_collect_job({"campaigns_deps": campaigns, "app_deps": app_deps})
     assert out["ok"] is True
     assert len(app_deps.sessions) == 2  # 1 UoW por segmento, ainda sequencial
     assert app_deps.sessions[0] is not app_deps.sessions[1]  # sessão NUNCA compartilhada
@@ -979,9 +855,7 @@ async def test_run_collect_job_failed_segment_rolls_back_only_its_session(
     committed: list[str] = []
     rolled_back: list[str] = []
     app_deps = _FakeAppDeps(committed, rolled_back)
-    out = await w.run_collect_job(
-        {"collect_deps": object(), "campaigns_deps": campaigns, "app_deps": app_deps}
-    )
+    out = await w.run_collect_job({"campaigns_deps": campaigns, "app_deps": app_deps})
     assert calls == ["velas", "sabonetes"]
     assert out["ok"] is False
     assert out["segments"]["velas"]["ok"] is False
@@ -1016,9 +890,7 @@ async def test_failed_segment_logs_error_with_traceback_and_error_type(
     rolled_back: list[str] = []
     app_deps = _FakeAppDeps(committed, rolled_back)
     with caplog.at_level(logging.ERROR):
-        out = await w.run_collect_job(
-            {"collect_deps": object(), "campaigns_deps": campaigns, "app_deps": app_deps}
-        )
+        out = await w.run_collect_job({"campaigns_deps": campaigns, "app_deps": app_deps})
     assert out["segments"]["velas"] == {
         "ok": False,
         "error": "boom",
@@ -1033,49 +905,15 @@ async def test_failed_segment_logs_error_with_traceback_and_error_type(
 async def test_create_segment_deps_builds_per_segment_bundle(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Task 10: bundle real por segmento — ScoreDeps/ResearchDeps re-resolvidos na UoW.
+    """Task 10 + Etapa 2 Task 14: 1 sessão por segmento, nenhuma no startup.
 
-    Repositórios nascem por unidade de trabalho (não no startup); engine e
-    clientes Redis continuam compartilhados. Seam igual ao de
-    test_create_app_deps_startup_resolves_no_segment, mas com sessões
-    gravadas para provar o isolamento.
+    Score/research do bundle são do segmento (slug, keywords, guard) e
+    nascem inteiros de `shared` + sessão — sem template de startup.
     """
-    from contextlib import asynccontextmanager
-
-    import content_factory.infra.collectors as collectors_mod
-    import content_factory.infra.db.base as db_base
-    import content_factory.infra.redis_ops as redis_ops
     from content_factory.config import Settings
 
-    created: list[_FakeSession] = []
-
-    @asynccontextmanager
-    async def _session() -> AsyncGenerator[_FakeSession]:
-        session = _FakeSession()
-        created.append(session)
-        yield session
-
-    @asynccontextmanager
-    async def _redis(_url: str) -> AsyncGenerator[Any]:
-        yield object()
-
-    def _factory(_settings: Settings) -> Any:
-        return _session
-
-    def _register(_settings: Settings) -> None:
-        pass
-
-    class _Registry:
-        def snapshot(self) -> list[str]:
-            return []
-
-        def resolve(self, names: list[str]) -> list[object]:
-            return []
-
-    monkeypatch.setattr(db_base, "get_session_factory", _factory)
-    monkeypatch.setattr(redis_ops, "redis_client", _redis)
-    monkeypatch.setattr(collectors_mod, "register_defaults", _register)
-    monkeypatch.setattr(collectors_mod, "registry", _Registry())
+    created, session_factory = _recording_sessions()
+    _patch_composition(monkeypatch, session_factory)
 
     deps = await w.create_app_deps(Settings())
     seg_a = Segment(
@@ -1091,14 +929,15 @@ async def test_create_segment_deps_builds_per_segment_bundle(
         assert bundle_a.score.segment.slug == "velas"
         assert bundle_a.score.keywords == ["k1"]
         assert bundle_a.research.guard.admit("x", depth=4) is True
+        assert bundle_a.collect.limiter is deps.shared.limiter
         await bundle_a.uow.commit()
     async with deps.create_segment_deps(seg_b) as bundle_b:
         assert bundle_b.score.segment.slug == "sabonetes"
         assert bundle_b.research.guard.admit("x", depth=4) is False
         await bundle_b.uow.commit()
-    assert len(created) == 3  # 1 sessão de startup (legado, Task 11 aposenta) + 1 UoW/segmento
-    assert created[1] is not created[2]
-    assert [s.events for s in created] == [[], ["commit"], ["commit"]]
+    assert len(created) == 2  # só as UoWs dos segmentos
+    assert created[0] is not created[1]
+    assert [s.events for s in created] == [["commit"], ["commit"]]
     await deps.close()
 
 
@@ -1111,38 +950,10 @@ async def test_segment_bundles_get_distinct_lock_instances_over_shared_client(
     `lock_client`): o token mora na instância, então o release tardio de um
     segmento nunca apaga o lock do outro.
     """
-    from contextlib import asynccontextmanager
-
-    import content_factory.infra.collectors as collectors_mod
-    import content_factory.infra.db.base as db_base
-    import content_factory.infra.redis_ops as redis_ops
     from content_factory.config import Settings
 
-    @asynccontextmanager
-    async def _session() -> AsyncGenerator[_FakeSession]:
-        yield _FakeSession()
-
-    @asynccontextmanager
-    async def _redis(_url: str) -> AsyncGenerator[Any]:
-        yield object()
-
-    def _factory(_settings: Settings) -> Any:
-        return _session
-
-    def _register(_settings: Settings) -> None:
-        pass
-
-    class _Registry:
-        def snapshot(self) -> list[str]:
-            return []
-
-        def resolve(self, names: list[str]) -> list[object]:
-            return []
-
-    monkeypatch.setattr(db_base, "get_session_factory", _factory)
-    monkeypatch.setattr(redis_ops, "redis_client", _redis)
-    monkeypatch.setattr(collectors_mod, "register_defaults", _register)
-    monkeypatch.setattr(collectors_mod, "registry", _Registry())
+    _, session_factory = _recording_sessions()
+    _patch_composition(monkeypatch, session_factory)
 
     deps = await w.create_app_deps(Settings())
     seg_a = Segment(id=1, slug="velas", name="Velas", platforms=["youtube"], keywords=["k"])
@@ -1153,9 +964,10 @@ async def test_segment_bundles_get_distinct_lock_instances_over_shared_client(
     ):
         assert bundle_a.collect.lock is not bundle_b.collect.lock
         assert bundle_a.research.lock is not bundle_b.research.lock
+        assert bundle_a.collect.lock is not bundle_a.research.lock
         client_a = cast(Any, bundle_a.collect.lock)._client
         client_b = cast(Any, bundle_b.collect.lock)._client
-        assert client_a is client_b is deps.lock_client
+        assert client_a is client_b is deps.shared.lock_client
     await deps.close()
 
 
@@ -1168,41 +980,12 @@ async def test_worker_segments_share_platform_slots_capping_tiktok(
     enquanto youtube sem teto sobrepõe (pico >= 2). Os 3 bundles herdam a
     MESMA instância criada no startup.
     """
-    from contextlib import asynccontextmanager
-
-    import content_factory.infra.collectors as collectors_mod
-    import content_factory.infra.db.base as db_base
-    import content_factory.infra.redis_ops as redis_ops
     from content_factory.config import Settings
 
     monkeypatch.setenv("WORKER_MAX_SEGMENTS", "3")
     monkeypatch.setenv("PLATFORM_MAX_CONCURRENCY", "tiktok=1")
-
-    @asynccontextmanager
-    async def _session() -> AsyncGenerator[_FakeSession]:
-        yield _FakeSession()
-
-    @asynccontextmanager
-    async def _redis(_url: str) -> AsyncGenerator[Any]:
-        yield object()
-
-    def _factory(_settings: Settings) -> Any:
-        return _session
-
-    def _register(_settings: Settings) -> None:
-        pass
-
-    class _Registry:
-        def snapshot(self) -> list[str]:
-            return []
-
-        def resolve(self, names: list[str]) -> list[object]:
-            return []
-
-    monkeypatch.setattr(db_base, "get_session_factory", _factory)
-    monkeypatch.setattr(redis_ops, "redis_client", _redis)
-    monkeypatch.setattr(collectors_mod, "register_defaults", _register)
-    monkeypatch.setattr(collectors_mod, "registry", _Registry())
+    _, session_factory = _recording_sessions()
+    _patch_composition(monkeypatch, session_factory)
 
     tiktok_tracker = ConcurrencyTracker()
     youtube_tracker = ConcurrencyTracker()
@@ -1236,9 +1019,7 @@ async def test_worker_segments_share_platform_slots_capping_tiktok(
     campaigns = _FakeCampaignsMultiSegment(slugs=["a", "b", "c"])
     app_deps = await w.create_app_deps(Settings())
     try:
-        out = await w.run_collect_job(
-            {"collect_deps": object(), "campaigns_deps": campaigns, "app_deps": app_deps}
-        )
+        out = await w.run_collect_job({"campaigns_deps": campaigns, "app_deps": app_deps})
     finally:
         await app_deps.close()
     assert out["ok"] is True
@@ -1246,40 +1027,24 @@ async def test_worker_segments_share_platform_slots_capping_tiktok(
     assert youtube_tracker.peak >= 2
     assert len(seen_slots) == 3
     assert seen_slots[0] is seen_slots[1] is seen_slots[2]
-    assert seen_slots[0] is app_deps.collect.platform_slots
+    assert seen_slots[0] is app_deps.shared.platform_slots
 
 
 async def test_create_app_deps_close_disposes_engine(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Task 10: shutdown fecha o engine (dispose), além da sessão/Redis."""
-    from contextlib import asynccontextmanager
-
+    """Task 10/15: engine REAL de `create_engine_and_factory`, fechado no shutdown."""
     from sqlalchemy.ext.asyncio import AsyncEngine
 
     import content_factory.infra.collectors as collectors_mod
     import content_factory.infra.redis_ops as redis_ops
     from content_factory.config import Settings
 
-    @asynccontextmanager
-    async def _redis(_url: str) -> AsyncGenerator[Any]:
-        yield object()
+    monkeypatch.setattr(redis_ops, "redis_client", _null_redis)
+    monkeypatch.setattr(collectors_mod, "register_defaults", _no_register)
+    monkeypatch.setattr(collectors_mod, "registry", _EmptyRegistry())
 
-    def _register(_settings: Settings) -> None:
-        pass
-
-    class _Registry:
-        def snapshot(self) -> list[str]:
-            return []
-
-        def resolve(self, names: list[str]) -> list[object]:
-            return []
-
-    monkeypatch.setattr(redis_ops, "redis_client", _redis)
-    monkeypatch.setattr(collectors_mod, "register_defaults", _register)
-    monkeypatch.setattr(collectors_mod, "registry", _Registry())
-
-    # get_session_factory REAL (não monkeypatchado): engine lazy, sem conexões.
+    # create_engine_and_factory REAL (não monkeypatchado): engine lazy, sem conexões.
     disposed: list[str] = []
 
     async def _recording_dispose(self: AsyncEngine) -> None:
@@ -1287,7 +1052,7 @@ async def test_create_app_deps_close_disposes_engine(
 
     monkeypatch.setattr(AsyncEngine, "dispose", _recording_dispose)
     deps = await w.create_app_deps(Settings())
-    assert deps.engine is not None
+    assert isinstance(deps.engine, AsyncEngine)
     assert deps.engine is deps.session_factory.kw["bind"]  # 1 engine compartilhado
     await deps.close()
     assert disposed == ["dispose"]
@@ -1340,9 +1105,7 @@ async def test_run_collect_job_runs_segments_concurrently_with_limit(
     committed: list[str] = []
     rolled_back: list[str] = []
     app_deps = _FakeAppDeps(committed, rolled_back)
-    out = await w.run_collect_job(
-        {"collect_deps": object(), "campaigns_deps": campaigns, "app_deps": app_deps}
-    )
+    out = await w.run_collect_job({"campaigns_deps": campaigns, "app_deps": app_deps})
     assert state["peak"] == 2  # semáforo segurou o 3o enquanto 2 rodavam
     assert set(out["segments"]) == {"velas", "sabonetes", "resina"}
     assert out["ok"] is True
@@ -1381,9 +1144,7 @@ async def test_run_collect_job_concurrent_failure_keeps_other_commits(
     committed: list[str] = []
     rolled_back: list[str] = []
     app_deps = _FakeAppDeps(committed, rolled_back)
-    out = await w.run_collect_job(
-        {"collect_deps": object(), "campaigns_deps": campaigns, "app_deps": app_deps}
-    )
+    out = await w.run_collect_job({"campaigns_deps": campaigns, "app_deps": app_deps})
     assert set(out["segments"]) == {"velas", "sabonetes", "resina"}
     assert out["ok"] is False
     assert out["segments"]["velas"]["ok"] is False
@@ -1491,9 +1252,7 @@ async def test_run_collect_job_global_limiter_shared_across_segments(
         limiter, _KeyedFakeLock(), FakeCollector("youtube", n=2), committed, rolled_back
     )
     campaigns = _FakeCampaignsMultiSegment(slugs=["velas", "sabonetes", "resina"])
-    out = await w.run_collect_job(
-        {"collect_deps": object(), "campaigns_deps": campaigns, "app_deps": app_deps}
-    )
+    out = await w.run_collect_job({"campaigns_deps": campaigns, "app_deps": app_deps})
     assert set(out["segments"]) == {"velas", "sabonetes", "resina"}
     assert out["ok"] is False
     oks = sorted(s for s in out["segments"] if out["segments"][s]["ok"])
@@ -1534,7 +1293,6 @@ async def test_run_score_job_runs_segments_concurrently(
     app_deps = _FakeAppDeps(committed, rolled_back)
     out = await w.run_score_job(
         {
-            "score_deps": _score_deps_placeholder(),
             "campaigns_deps": campaigns,
             "app_deps": app_deps,
         }
@@ -1573,9 +1331,7 @@ async def test_run_research_job_runs_segments_concurrently(
     committed: list[str] = []
     rolled_back: list[str] = []
     app_deps = _FakeAppDeps(committed, rolled_back)
-    out = await w.run_research_job(
-        {"research_deps": _research_deps(), "campaigns_deps": campaigns, "app_deps": app_deps}
-    )
+    out = await w.run_research_job({"campaigns_deps": campaigns, "app_deps": app_deps})
     assert state["peak"] == 3
     assert set(out["segments"]) == {"velas", "sabonetes", "resina"}
     assert out["ok"] is True
