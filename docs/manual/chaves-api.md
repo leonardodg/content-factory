@@ -160,6 +160,12 @@ Sem esta feature aprovada, `ig_hashtag_search`/`top_media` devolvem o erro
 abaixo foi iniciado em 2026-10-14; o estado de cada passo fica no
 [HANDOFF](../HANDOFF.md).
 
+> **Resultado (2026-10-15):** com o app próprio **publicado**, a busca por
+> hashtag funciona para o operador (que tem função no app) **sem App
+> Review**. A verificação da empresa e os passos 5, 6 e 9 só são necessários
+> se outras contas forem usar o app. O token do app novo é gerado pelo
+> passo 7 e estendido para 60 dias pelo passo 9 da §2.
+
 **Por que um app próprio.** O pedido sai em nome da empresa dona do app:
 não use app de terceiros (mesmo com você como administrador), porque a
 declaração de uso, a política de privacidade e uma eventual auditoria

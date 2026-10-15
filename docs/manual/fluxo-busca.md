@@ -129,9 +129,15 @@ rotação em [credentials](../dev/credentials.md).
 
 ### Instagram
 
-- **Fonte:** Graph API v21.0 — busca hashtag por nome
-  (`/{ig_user_id}/hashtags`) e pega `/{hashtag_id}/top_media` (caption,
-  likes, comments, permalink, thumbnail).
+- **Fonte:** Graph API v21.0 — `ig_hashtag_search` com a 1ª keyword
+  normalizada como hashtag (sem `#`, sem espaços: `vela artesanal` →
+  `velaartesanal`) e `/{hashtag_id}/recent_media` (últimas 24 h, até 25
+  posts: legenda, curtidas, comentários, link, tipo). Só `VIDEO` (Reels e
+  vídeo de feed) vira candidato; carrossel e imagem são descartados.
+  `top_media` não é usado: na sondagem de 2026-10-15 não trazia nenhum
+  Reel. Mídia de hashtag **não tem autor** (`username`) nem miniatura.
+- **Limite:** 30 hashtags únicas por conta a cada 7 dias (o `collect` usa 1
+  por segmento). O `research` do Instagram continua na mídia própria.
 - **Credencial:** `INSTAGRAM_ACCESS_TOKEN` + `IG_USER_ID`.
 - **Erros:** `400`/`401` → `auth_expired` (token errado/expirado); `HTTP ≥
   400` demais, não-JSON ou JSON inesperado → `upstream_changed`; rede →
