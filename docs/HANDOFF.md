@@ -65,9 +65,12 @@ pós-implementação e achados A-1…A-7); plano:
   ambíguo + `web_empty` no diário) e E-4.4 (README) corrigidos; registro
   em `REVISAO_2026-10-14.md`. **App Meta próprio** (`content-factory`,
   portfólio LDG Technology LTDA) criado e configurado (URLs legais,
-  permissões "Pronto para teste"); pendente: verificação da empresa
-  (usuário, 15/10), Provedor de Tecnologia, token novo, vídeo e envio —
-  procedimento em `manual/chaves-api.md` §2.1.
+  permissões "Pronto para teste") e **publicado**: a busca por hashtag
+  funciona para o operador **sem App Review**. Token do app novo (60 dias,
+  até 2026-12-14) em `INSTAGRAM_ACCESS_TOKEN_NEW`, ainda **fora** do worker.
+  Coletor corrigido para Reels reais (`recent_media`, campos válidos,
+  hashtag normalizada, só vídeo — plano `ai-plans/2026-10-15-instagram-reels.md`);
+  ativação = trocar `INSTAGRAM_ACCESS_TOKEN` + rebuild + fumaça.
 - **Próximo:** **relatório diário** (1 linha por dia após o collect das
   20:00 BRT em [`manual/experimento-reativado.md`](manual/experimento-reativado.md)),
   D+3 (17/10) e D+7 (21/10, validação B3); depois C1–C3, D1–D2,
