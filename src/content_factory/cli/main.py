@@ -4,7 +4,7 @@ from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Any
+from typing import Any, NoReturn
 
 import typer
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -16,6 +16,7 @@ from content_factory.app.ports import (
     ResearchCampaignRepository,
     SegmentRepository,
 )
+from content_factory.app.results import collect_result, score_result
 from content_factory.app.score import ScoreDeps, ScoreOutcome, score
 from content_factory.cli.output import dumps, envelope_err, envelope_ok, exit_code_for
 from content_factory.domain.errors import CollectorError, DomainError, SegmentNotFound
@@ -24,6 +25,17 @@ from content_factory.infra.logs import configure_logging
 from content_factory.infra.redact import redact
 
 app = typer.Typer(no_args_is_help=True)
+
+
+def _emit(command: str, result: dict[str, Any]) -> NoReturn:
+    """C3: envelope = `command` + o resultado do caso de uso (o mesmo do worker).
+
+    Exit: 0 ok, 2 ok parcial, 1 falha (`error.code` obrigatório).
+    """
+    print(dumps({"ok": result["ok"], "command": command, **result}))
+    raise typer.Exit(exit_code_for(ok=bool(result["ok"]), partial=bool(result.get("partial"))))
+
+
 segment_app = typer.Typer()
 app.add_typer(segment_app, name="segment")
 research_app = typer.Typer(no_args_is_help=True)
@@ -151,20 +163,7 @@ def collect_cmd(
         print(dumps(envelope_err("collect", "internal_error", redact(str(exc)))))
         raise typer.Exit(exit_code_for(ok=False)) from exc
 
-    if outcome.partial:
-        print(dumps(envelope_ok("collect", partial=True, **outcome.counts)))
-        raise typer.Exit(exit_code_for(ok=True, partial=True))
-    if outcome.ok:
-        print(dumps(envelope_ok("collect", **outcome.counts)))
-        raise typer.Exit(exit_code_for(ok=True))
-    if "ja_em_execucao" in outcome.counts:
-        code = "ja_em_execucao"
-        message = f"coleta já em execução para o segmento {segment}"
-    else:
-        code = next((r.error_code for r in outcome.runs if r.error_code), "internal_error")
-        message = f"coleta falhou em {int(outcome.counts.get('failed', 0))} plataforma(s)"
-    print(dumps(envelope_err("collect", code, message)))
-    raise typer.Exit(exit_code_for(ok=False))
+    _emit("collect", collect_result(outcome))
 
 
 async def _aingest(url: str, segment: str | None) -> CandidateVideo:
@@ -257,25 +256,8 @@ def score_cmd(
         print(dumps(envelope_err("score", "internal_error", redact(str(exc)))))
         raise typer.Exit(exit_code_for(ok=False)) from exc
 
-    # R5: envelope do score é SÓ contagem/categoria (o porquê da linha está
-    # no log do repo, já redigido pelo handler) — `scored` fica como nome
-    # legado de `persisted` para os contratos/documentação antigos.
-    counts: dict[str, Any] = {
-        "scored": outcome.scored,
-        "processed": outcome.processed,
-        "persisted": outcome.persisted,
-        "failed": outcome.failed,
-        "failures": outcome.failures,
-    }
-    if outcome.partial:
-        print(dumps(envelope_ok("score", partial=True, **counts)))
-        raise typer.Exit(exit_code_for(ok=True, partial=True))
-    if outcome.ok:
-        print(dumps(envelope_ok("score", **counts)))
-        raise typer.Exit(exit_code_for(ok=True))
-    msg = f"falha ao gravar scores de {segment}"
-    print(dumps(envelope_err("score", "internal_error", redact(msg), **counts)))
-    raise typer.Exit(exit_code_for(ok=False))
+    # R5/C3: só contagem/categoria — mesmo resultado do score_job do worker
+    _emit("score", score_result(outcome))
 
 
 @app.command("ping")

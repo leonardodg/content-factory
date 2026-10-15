@@ -65,6 +65,7 @@ nav:
       - Visão geral: architecture/README.md
       - Estado e fases: architecture/estado-e-proximas-fases.md
       - Contrato dos singletons: architecture/contrato-singletons.md
+      - Contrato dos envelopes: architecture/contrato-envelopes.md
   - Data model: data-model/README.md
   - Diagramas: diagram/README.md
   - Mapa do ciclo: diagram/mapa-do-ciclo.md

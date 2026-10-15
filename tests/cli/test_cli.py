@@ -9,7 +9,7 @@ from typing import Any
 import pytest
 from typer.testing import CliRunner
 
-from content_factory.app.collect import CollectDeps
+from content_factory.app.collect import CollectDeps, CollectOutcome
 from content_factory.app.ports import (
     Collector,
     CollectRunRepository,
@@ -123,7 +123,7 @@ def test_collect_success_exit_0(monkeypatch: pytest.MonkeyPatch) -> None:
     )
     assert result.exit_code == 0
     assert '"ok": true' in result.stdout
-    assert '"partial"' not in result.stdout
+    assert '"partial": false' in result.stdout  # C3: chave sempre presente
 
 
 def test_collect_lock_held_exit_1(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -265,7 +265,7 @@ def test_score_success_exit_0_envelope(monkeypatch: pytest.MonkeyPatch) -> None:
     assert '"persisted": 3' in result.stdout
     assert '"failed": 0' in result.stdout
     assert '"failures": {}' in result.stdout
-    assert '"partial"' not in result.stdout
+    assert '"partial": false' in result.stdout  # C3: chave sempre presente
 
 
 def test_score_partial_exit_2_envelope(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -574,3 +574,131 @@ def test_ops_report_rejects_non_positive_window(monkeypatch: pytest.MonkeyPatch)
     result = runner.invoke(app, ["ops-report", "--segment", "candles", "--hours", "0"])
     assert result.exit_code == 1
     assert '"code": "usage_error"' in result.stdout
+
+
+@pytest.mark.parametrize(
+    "outcome",
+    [
+        ScoreOutcome(ok=True, partial=False, scored=3, processed=3),
+        ScoreOutcome(
+            ok=False, partial=True, scored=2, processed=3, failed=1, failures={"data_error": 1}
+        ),
+        ScoreOutcome(ok=False, partial=False, scored=0, processed=3, failed=3),
+    ],
+)
+def test_score_envelope_parity_cli_and_worker(
+    monkeypatch: pytest.MonkeyPatch, outcome: ScoreOutcome
+) -> None:
+    """C3: mesmo ScoreOutcome → CLI (sem `command`) == segmento do score_job."""
+    import asyncio
+    import json
+
+    from content_factory.infra.queue import worker as w
+
+    async def _fake_ascore(_segment: str) -> ScoreOutcome:
+        return outcome
+
+    monkeypatch.setattr("content_factory.cli.main._ascore", _fake_ascore)
+    result = runner.invoke(app, ["score", "--segment", "velas"])
+    cli = json.loads(result.stdout)
+    assert cli.pop("command") == "score"
+    expected_exit = 0 if cli["ok"] and not cli["partial"] else (2 if cli["ok"] else 1)
+    assert result.exit_code == expected_exit
+
+    async def _fake_score(_deps: object) -> ScoreOutcome:
+        return outcome
+
+    class _Bundle:
+        score = None
+
+        class uow:
+            @staticmethod
+            async def commit() -> None: ...
+
+    class _AppDeps:
+        def create_segment_deps(self, _segment: Segment) -> AbstractAsyncContextManager[_Bundle]:
+            @asynccontextmanager
+            async def _cm() -> AsyncGenerator[_Bundle]:
+                yield _Bundle()
+
+            return _cm()
+
+    class _Campaigns:
+        async def active_segments(self) -> list[Segment]:
+            return [Segment(id=1, slug="velas", name="Velas", platforms=[], keywords=["v"])]
+
+    monkeypatch.setattr(w, "_score_impl", _fake_score)
+    job = asyncio.run(w.run_score_job({"campaigns_deps": _Campaigns(), "app_deps": _AppDeps()}))
+    assert job["segments"]["velas"] == cli
+
+
+def _collect_outcomes() -> list[CollectOutcome]:
+    counts: dict[str, int | bool] = {
+        "found": 3,
+        "inserted": 1,
+        "updated": 1,
+        "failed": 0,
+        "skipped": 0,
+    }
+    now = datetime.now(UTC)
+    failed_run = CollectRun(
+        collector="tiktok", status="failed", error_code="auth_expired", started_at=now
+    )
+    return [
+        CollectOutcome(ok=True, partial=False, counts=counts),
+        CollectOutcome(ok=False, partial=True, counts={**counts, "failed": 1}),
+        CollectOutcome(
+            ok=False,
+            partial=False,
+            counts={**counts, "inserted": 0, "updated": 0, "failed": 1},
+            runs=[failed_run],
+        ),
+        CollectOutcome(ok=False, partial=False, counts={"ja_em_execucao": True}),
+    ]
+
+
+@pytest.mark.parametrize("outcome", _collect_outcomes())
+def test_collect_envelope_parity_cli_and_worker(
+    monkeypatch: pytest.MonkeyPatch, outcome: CollectOutcome
+) -> None:
+    """C3: mesmo CollectOutcome → CLI (sem `command`) == segmento do collect_job."""
+    import asyncio
+    import json
+
+    from content_factory.infra.queue import worker as w
+
+    async def _fake_acollect(_slug: str, _platforms: list[str], _limit: int) -> CollectOutcome:
+        return outcome
+
+    monkeypatch.setattr("content_factory.cli.main._acollect", _fake_acollect)
+    result = runner.invoke(app, ["collect", "--segment", "velas"])
+    cli = json.loads(result.stdout)
+    assert cli.pop("command") == "collect"
+
+    async def _fake_collect(*_args: object) -> CollectOutcome:
+        return outcome
+
+    class _Bundle:
+        collect = None
+
+        class uow:
+            @staticmethod
+            async def commit() -> None: ...
+
+    class _AppDeps:
+        def create_segment_deps(self, _segment: Segment) -> AbstractAsyncContextManager[_Bundle]:
+            @asynccontextmanager
+            async def _cm() -> AsyncGenerator[_Bundle]:
+                yield _Bundle()
+
+            return _cm()
+
+    class _Campaigns:
+        async def active_segments(self) -> list[Segment]:
+            return [Segment(id=1, slug="velas", name="Velas", platforms=["web"], keywords=["v"])]
+
+    monkeypatch.setattr(w, "_collect_impl", _fake_collect)
+    cfg: dict[str, Any] = {"platforms": [], "limit": 10}
+    monkeypatch.setattr(w, "_load_settings", lambda: cfg)
+    job = asyncio.run(w.run_collect_job({"campaigns_deps": _Campaigns(), "app_deps": _AppDeps()}))
+    assert job["segments"]["velas"] == cli
