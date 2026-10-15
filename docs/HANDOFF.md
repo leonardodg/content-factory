@@ -627,7 +627,7 @@ plano `docs/ai-plans/2026-10-12-fix-instagram-collector-fase0.md`.
   documentado, era **token sem a permissão `instagram_basic`** (403 code 10,
   gerado pelo fluxo errado — "API com login do Instagram" em vez de "API com
   login do Facebook"). Investigado ao vivo no Meta for Developers (app
-  `Automation-IvanaLereaBR`, id `4160317280965017`): feature "Instagram
+  Meta anterior, de terceiro): feature "Instagram
   Public Content Access" nunca foi submetida para App Review ("Adicionar à
   análise do app", não "aguardando aprovação"); "Ações necessárias" do app
   vazio — sem bloqueio ativo da Meta. Token novo gerado (User Access Token,

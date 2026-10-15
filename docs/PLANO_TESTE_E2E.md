@@ -170,8 +170,8 @@ Credenciais novas fornecidas pelo usuário; YouTube já verde (run 111,
 - **Correção** (commit `fc320bf`, TDD — 3 testes novos): endpoint novo;
   code 10 deixou de virar `AuthExpired` e agora aciona fallback automático
   para `GET /{user_id}/media` (mídia da própria conta vinculada), filtrada por
-  keyword casefold do segmento (a conta `ivana.lerea.br` publica conteúdo
-  misto: velas, sabonetes, macramê). Busca vazia de hashtag **não** aciona o
+  keyword casefold do segmento (a conta vinculada — de terceiro — publica
+  conteúdo misto: velas, sabonetes, macramê). Busca vazia de hashtag **não** aciona o
   fallback. Plano: `docs/ai-plans/2026-10-10-fix-instagram-collector.md`.
 - **Token**: o `INSTAGRAM_ACCESS_TOKEN` antigo (`IGAA…`, 187 chars) era de
   outro produto (Instagram API with Instagram Login) e o Graph respondia
@@ -197,9 +197,9 @@ $ psql -c "SELECT id, platform_video_id, raw->>'username' AS username,
            WHERE platform='instagram' ORDER BY id;"
  id  | platform_video_id |   username    | likes
 -----+-------------------+---------------+-------
- 277 | 18121941086477291 | ivana.lerea.br |    77
- 278 | 18192084073402293 | ivana.lerea.br |    30
- 279 | 18033025805848017 | ivana.lerea.br |    79
+ 277 | <id-do-post>      | <conta>        |    77
+ 278 | <id-do-post>      | <conta>        |    30
+ 279 | <id-do-post>      | <conta>        |    79
 
 # score_job → {'ok': True, 'scored': 15}; scores dos IG:
  viral_score 16.5, relevance 12.5 (keywords), engagement 0
@@ -239,7 +239,7 @@ caminho de hashtags é usado automaticamente — nenhuma mudança de código.
   no mesmo app Meta, e só o segundo é compatível com
   `infra/collectors/instagram.py` (`graph.facebook.com/v21.0`,
   `ig_hashtag_search`). Confirmado ao vivo no app
-  **Automation-IvanaLereaBR** (developers.facebook.com): a feature
+  **app Meta anterior, de terceiro** (developers.facebook.com): a feature
   "Instagram Public Content Access" nunca tinha sido submetida para App
   Review (botão "Adicionar à análise do app", não "aguardando aprovação");
   "Ações necessárias" do app vazio — não era bloqueio da Meta.
