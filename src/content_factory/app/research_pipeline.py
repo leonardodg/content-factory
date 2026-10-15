@@ -134,6 +134,11 @@ async def _discover_social_one(
 
 
 TRENDS_SOURCE = "trends"  # chave do limiter e sufixo da run `research:trends`
+# Período VÁLIDO do Google Trends ("week" não existe → HTTP 400 em toda run,
+# 2026-10-13→15). 12 meses devolve pontos semanais, que é a granularidade que
+# o provider grava (`period_granularity="week"`).
+TRENDS_TIMEFRAME = "today 12-m"
+TRENDS_MAX_KEYWORDS = 5  # limite do Google Trends por consulta
 
 
 async def _run_source[T](
@@ -211,11 +216,18 @@ async def run_research_cycle(
         web_signals = deps.guard.truncate(web_raw, "web")
         counts["web_found"] = len(web_signals)
 
-        trend_keywords = [s.keyword for s in web_signals if deps.guard.admit(s.keyword, 1)]
+        # Google Trends: até 5 termos por consulta, normalizados entre si —
+        # vão os 5 de maior peso do Suggest (antes: todos, ~145, e 400)
+        trend_keywords: list[str] = []
+        for sig in sorted(web_signals, key=lambda s: s.weight, reverse=True):
+            if len(trend_keywords) >= TRENDS_MAX_KEYWORDS:
+                break
+            if deps.guard.admit(sig.keyword, 1):
+                trend_keywords.append(sig.keyword)
 
         async def _trends() -> list[TrendPoint]:
             await deps.limiter.acquire(TRENDS_SOURCE)
-            return await deps.trends.interest_over_time(trend_keywords, "week")
+            return await deps.trends.interest_over_time(trend_keywords, TRENDS_TIMEFRAME)
 
         trend_points, trends_failed = await _run_source(TRENDS_SOURCE, segment, deps, _trends)
         trend_signals = deps.guard.truncate(

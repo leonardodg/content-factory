@@ -1126,3 +1126,46 @@ async def test_research_social_run_records_quota_used() -> None:
     deps = _research_deps_with({"youtube": _QuotaSocial()}, repos)
     await run_research_cycle("candles", DepthConfig(), deps)
     assert _runs_by_collector(repos)["research:youtube"].quota_used == 101
+
+
+class _ManyWeb:
+    platform: ClassVar[str] = "web_suggest"
+
+    async def expand(self, seeds: list[str], depth: int) -> list[KeywordSignal]:
+        _ = seeds
+        weights = [0.1, 0.9, 0.5, 0.3, 0.8, 0.2, 0.7, 0.6]
+        return [
+            KeywordSignal(keyword=f"kw{i}", source=self.platform, weight=w, depth=depth + 1)
+            for i, w in enumerate(weights)
+        ]
+
+
+class _RecordingTrends:
+    def __init__(self) -> None:
+        self.calls: list[tuple[list[str], str]] = []
+
+    async def interest_over_time(self, keywords: list[str], timeframe: str) -> list[TrendPoint]:
+        self.calls.append((list(keywords), timeframe))
+        return []
+
+
+@pytest.mark.asyncio
+async def test_trends_gets_valid_timeframe_and_top5_keywords_by_weight() -> None:
+    """Trends 400 em 100% das runs (2026-10-13→15): o pipeline passava
+    `timeframe="week"` (inválido no Google Trends) e TODAS as keywords do
+    Suggest (~145), mas a consulta aceita no máximo 5 e normaliza os valores
+    dentro de cada consulta. Agora: período válido e as 5 de maior peso.
+    """
+    from dataclasses import replace
+
+    from content_factory.app.research_pipeline import TRENDS_MAX_KEYWORDS, TRENDS_TIMEFRAME
+
+    deps, _, _ = _make_deps()
+    trends = _RecordingTrends()
+    deps = replace(deps, web=_ManyWeb(), trends=trends)
+    await run_research_cycle("candles", DepthConfig(), deps)
+    assert len(trends.calls) == 1
+    keywords, timeframe = trends.calls[0]
+    assert timeframe == TRENDS_TIMEFRAME == "today 12-m"
+    assert TRENDS_MAX_KEYWORDS == 5
+    assert keywords == ["kw1", "kw4", "kw6", "kw7", "kw2"]  # 0.9, 0.8, 0.7, 0.6, 0.5
