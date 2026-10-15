@@ -667,8 +667,8 @@ git commit -m "docs: fecha Fase 0 (fix Instagram) com evidencia de playtest e ga
 
 ## Fora de escopo (achado da investigação ao vivo no Meta for Developers)
 
-Confirmado nesta sessão, navegando no app real **Automation-IvanaLereaBR**
-(id `4160317280965017`, Business `IvanaLerea`): a feature **"Instagram
+Confirmado nesta sessão, navegando no app Meta anterior, **de terceiro**
+(app e Business de outra pessoa): a feature **"Instagram
 Public Content Access"** (necessária para `ig_hashtag_search`/`top_media` de
 contas de terceiros) aparece com status **"Adicionar à análise do app"** —
 ou seja, **nunca foi submetida** para App Review (não é "aguardando
@@ -676,10 +676,10 @@ aprovação", é "ainda não solicitada"). A página "Ações necessárias" do a
 está vazia — não há bloqueio ativo da Meta, a conta está em dia.
 
 Isso **não é implementável em código** — é ação do usuário:
-developers.facebook.com → app **Automation-IvanaLereaBR** → Casos de uso →
+developers.facebook.com → app Meta → Casos de uso →
 API do Instagram → Permissões e recursos → feature **"Instagram Public
 Content Access"** → botão **"Adicionar à análise do app"**. Provavelmente
-vai pedir verificação de negócio da Business `IvanaLerea` e um screencast
+vai pedir verificação de negócio da Business dona do app e um screencast
 demonstrando `ig_hashtag_search`/`top_media` em uso (as Tasks 1 e 6 deste
 plano, rodadas com a câmera ligada, servem de screencast). Quando aprovado,
 o caminho de hashtag volta a ser usado automaticamente — nenhuma mudança de
