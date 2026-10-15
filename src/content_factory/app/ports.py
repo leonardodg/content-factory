@@ -162,8 +162,14 @@ class CollectRunRepository(Protocol):
 class OpsReportReader(Protocol):
     """Leituras agregadas do `cf ops-report` (C2) — só Postgres."""
 
-    async def metric_coverage(self, segment_id: int) -> dict[str, MetricCoverage]:
-        """Por plataforma: vídeos do segmento, com views no último snapshot e com ≥ 2."""
+    async def metric_coverage(
+        self, segment_id: int, since: datetime | None = None
+    ) -> dict[str, MetricCoverage]:
+        """Por plataforma: vídeos, com views no último snapshot e com ≥ 2 snapshots.
+
+        Sem `since`: todo o histórico do segmento. Com `since`: só vídeos com
+        snapshot capturado depois de `since` (cobertura da janela).
+        """
         ...
 
     async def scored_since(self, segment_id: int, since: datetime) -> int:

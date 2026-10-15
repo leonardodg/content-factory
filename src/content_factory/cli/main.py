@@ -452,6 +452,7 @@ async def _aops_report(segment_slug: str, hours: int) -> dict[str, Any]:
             await reader.scored_since(seg.id, since),
             since=since,
             until=until,
+            coverage_window=await reader.metric_coverage(seg.id, since=since),
         )
 
 

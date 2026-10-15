@@ -5,7 +5,7 @@ from typing import Any, cast
 from uuid import uuid4
 
 import pytest
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from content_factory.app.ports import ScoreUpsertRow
@@ -1228,4 +1228,37 @@ async def test_ops_reader_metric_coverage_and_scored_since() -> None:
         await s.commit()
         assert await reader.scored_since(seg.id, datetime.now(UTC) - timedelta(hours=1)) == 1
         assert await reader.scored_since(seg.id, datetime.now(UTC) + timedelta(hours=1)) == 0
+    await engine.dispose()
+
+
+@requires_infra
+async def test_ops_reader_coverage_can_be_restricted_to_window() -> None:
+    """Auditoria 3, N-1: cobertura da janela conta só vídeos com snapshot na janela."""
+    engine = create_async_engine(os.environ["TEST_DATABASE_URL"])
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    async with factory() as s:
+        await s.rollback()
+        seg = await SegmentRepositoryImpl(s).upsert(
+            SegmentConfig(
+                slug=f"teste-covw-{uuid4().hex[:8]}",
+                name="CovW",
+                platforms=["youtube"],
+                keywords=["k"],
+            )
+        )
+        old = candidate(1).model_copy(update={"views": 10})
+        new = candidate(2).model_copy(update={"views": 20})
+        await VideoRepositoryImpl(s).upsert_candidates(seg.id, "test", [old, new])
+        await s.commit()
+        old_id = await video_id_of(s, old)
+        await s.execute(
+            update(VideoMetricsRow)
+            .where(VideoMetricsRow.video_id == old_id)
+            .values(captured_at=datetime.now(UTC) - timedelta(days=3))
+        )
+        await s.commit()
+        reader = OpsReportReaderImpl(s)
+        assert (await reader.metric_coverage(seg.id))["youtube"].videos == 2
+        window = await reader.metric_coverage(seg.id, since=datetime.now(UTC) - timedelta(hours=24))
+        assert window["youtube"].videos == 1 and window["youtube"].with_views == 1
     await engine.dispose()

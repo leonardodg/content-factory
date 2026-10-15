@@ -93,13 +93,16 @@ def test_coverage_and_scored_pass_through_with_ratios() -> None:
     cov = {"youtube": MetricCoverage(videos=10, with_views=8, with_two_snapshots=6)}
     out = _report([], coverage=cov, scored=42)
     assert out["coverage"] == {
-        "youtube": {
-            "videos": 10,
-            "with_views": 8,
-            "with_two_snapshots": 6,
-            "views_rate": 0.8,
-            "two_snapshots_rate": 0.6,
-        }
+        "segment_all_time": {
+            "youtube": {
+                "videos": 10,
+                "with_views": 8,
+                "with_two_snapshots": 6,
+                "views_rate": 0.8,
+                "two_snapshots_rate": 0.6,
+            }
+        },
+        "window": {},
     }
     assert out["scored"] == 42
     assert out["window"] == {"since": SINCE.isoformat(), "until": UNTIL.isoformat()}

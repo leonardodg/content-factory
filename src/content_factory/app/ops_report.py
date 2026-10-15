@@ -79,6 +79,19 @@ def _ticks(runs: Sequence[CollectRun], gap: timedelta) -> dict[str, Any]:
     }
 
 
+def _coverage(coverage: Mapping[str, MetricCoverage]) -> dict[str, Any]:
+    return {
+        platform: {
+            "videos": c.videos,
+            "with_views": c.with_views,
+            "with_two_snapshots": c.with_two_snapshots,
+            "views_rate": _ratio(c.with_views, c.videos),
+            "two_snapshots_rate": _ratio(c.with_two_snapshots, c.videos),
+        }
+        for platform, c in sorted(coverage.items())
+    }
+
+
 def build_ops_report(
     runs: Sequence[CollectRun],
     coverage: Mapping[str, MetricCoverage],
@@ -86,9 +99,15 @@ def build_ops_report(
     *,
     since: datetime,
     until: datetime,
+    coverage_window: Mapping[str, MetricCoverage] | None = None,
     tick_gap: timedelta = TICK_GAP,
 ) -> dict[str, Any]:
-    """Relatório operacional de um segmento na janela `[since, until]`."""
+    """Relatório operacional de um segmento na janela `[since, until]`.
+
+    Auditoria 3 (N-1): runs, ticks e scores são **da janela**; a cobertura
+    sai com o escopo no nome — `segment_all_time` (todo o histórico) e
+    `window` (só vídeos com snapshot capturado na janela).
+    """
     by_collector: dict[str, list[CollectRun]] = {}
     for run in runs:
         by_collector.setdefault(run.collector, []).append(run)
@@ -105,14 +124,8 @@ def build_ops_report(
         "blocked_runs": sum(1 for r in runs if r.status == "blocked"),
         "ticks": _ticks(runs, tick_gap),
         "coverage": {
-            platform: {
-                "videos": c.videos,
-                "with_views": c.with_views,
-                "with_two_snapshots": c.with_two_snapshots,
-                "views_rate": _ratio(c.with_views, c.videos),
-                "two_snapshots_rate": _ratio(c.with_two_snapshots, c.videos),
-            }
-            for platform, c in sorted(coverage.items())
+            "segment_all_time": _coverage(coverage),
+            "window": _coverage(coverage_window or {}),
         },
         "scored": scored,
     }
