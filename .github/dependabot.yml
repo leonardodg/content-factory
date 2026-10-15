@@ -1,0 +1,16 @@
+# Auditoria D1: as actions estão fixadas por SHA; o Dependabot abre PR
+# semanal quando a tag acompanhada (comentário `# vN`) avança.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: "ci"
+  - package-ecosystem: uv
+    directory: /
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: "deps"

@@ -1,5 +1,9 @@
 name: ci
 on: [push, pull_request]
+# Menor privilégio (auditoria D1): o job só lê o repositório. Actions fixadas
+# por SHA completo (tag no comentário); o Dependabot propõe as atualizações.
+permissions:
+  contents: read
 jobs:
   quality:
     runs-on: ubuntu-latest
@@ -25,8 +29,8 @@ jobs:
       REDIS_URL: redis://localhost:6379/0
       TEST_REDIS_URL: redis://localhost:6379/15
     steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v5
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86 # v5
         with: { enable-cache: true }
       - run: uv sync --all-groups
       - run: uv run ruff check . && uv run ruff format --check .
