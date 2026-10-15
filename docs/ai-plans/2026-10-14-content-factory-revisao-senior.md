@@ -393,6 +393,20 @@ de olhar os dados.
 | Concordância humana (Spearman) | ≥ 0,5 |
 | Utilidade no top-20 (anotação) | ≥ 60% |
 
+**Suficiência por fonte** (aprovada em 2026-10-15, terceira auditoria
+N-3): `data_rate` = runs `ok` com `found > 0` / runs, no `cf ops-report`.
+
+| Fonte | `data_rate` mínimo |
+| --- | --- |
+| YouTube | ≥ 90% |
+| Instagram (desde a troca para Reels por hashtag) | ≥ 80% |
+| Suggest (`research:web_suggest`) | ≥ 90% |
+| Trends (desde 15/10 07:00 BRT) | ≥ 80% |
+| web (ambíguo pelo `ddgs`) | ≥ 50% |
+
+Abaixo do mínimo, a fonte é reportada como **insuficiente**, sem virar
+falha. TikTok fica fora do B3 até a rotação do token.
+
 Fora do limiar: abrir achado no `REVISAO_*` com evidência. Não ajustar
 pesos sem passar pelo B3.
 

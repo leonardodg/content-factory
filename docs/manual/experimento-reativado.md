@@ -39,9 +39,9 @@ leitura. A partir de D+1 a fonte é `cf ops-report --segment <slug>
   uma amostra independente do nicho. No B3, comparar com uma amostra
   aleatória de 5 keywords do Suggest para ver se a seleção exclui termos de
   alto interesse.
-- **Suficiência por fonte (proposta, aguarda aprovação):** além de
+- **Suficiência por fonte (aprovada pelo usuário em 2026-10-15):** além de
   `ok_rate`, o `cf ops-report` mostra `data_rate` (runs ok com `found > 0`).
-  Limiares propostos de `data_rate` na janela do experimento: YouTube ≥ 90%,
+  Limiares de `data_rate` na janela do experimento: YouTube ≥ 90%,
   Instagram (desde a troca) ≥ 80%, Suggest ≥ 90%, Trends ≥ 80%, web ≥ 50%
   (ambíguo pelo `ddgs`). Abaixo disso, a fonte é reportada como
   **insuficiente**, sem virar falha.
