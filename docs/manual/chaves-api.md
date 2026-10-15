@@ -153,6 +153,73 @@ vazamento ou 403 persistente: [Credenciais — rotação](../dev/credentials.md#
     [Credenciais](../dev/credentials.md). Escopo mínimo (leitura de
     hashtag/mídia, sem publicação): idem.
 
+### 2.1 App Review — "Instagram Public Content Access" (busca por hashtag)
+
+Sem esta feature aprovada, `ig_hashtag_search`/`top_media` devolvem o erro
+`#10` e o coletor cai na mídia da própria conta (gate #10). O procedimento
+abaixo foi iniciado em 2026-10-14; o estado de cada passo fica no
+[HANDOFF](../HANDOFF.md).
+
+**Por que um app próprio.** O pedido sai em nome da empresa dona do app:
+não use app de terceiros (mesmo com você como administrador), porque a
+declaração de uso, a política de privacidade e uma eventual auditoria
+ficam atreladas àquela empresa.
+
+1. **Portfólio empresarial próprio** — em
+   [developers.facebook.com/apps](https://developers.facebook.com/apps/) →
+   **Criar aplicativo**, na etapa *Empresa* use **Crie um portfólio
+   empresarial** (nome = nome público da empresa, sem caracteres especiais;
+   e-mail comercial).
+2. **App novo** — etapa *Casos de uso*: **Gerenciar mensagens e conteúdo
+   no Instagram**; etapa *Empresa*: o portfólio do passo 1; confirmar em
+   **Criar aplicativo** (aceita os Termos da Plataforma).
+3. **Permissões** — Casos de uso → *API do Instagram* → **Permissões e
+   recursos** → **Adicionar** em: *Instagram Public Content Access*,
+   `instagram_basic`, `pages_show_list`, `pages_read_engagement`. Todas
+   devem ficar **"Pronto para teste"** (acesso padrão: funciona para quem
+   tem função no app, ainda em modo de desenvolvimento).
+4. **Configurações do app → Básico**:
+   - URL da Política de Privacidade:
+     `https://leonardodg.github.io/content-factory/legal/privacidade/`;
+   - URL de instruções de exclusão de dados:
+     `https://leonardodg.github.io/content-factory/legal/exclusao-de-dados/`;
+   - Termos de Serviço: pode reutilizar a URL da política;
+   - ícone 1024×1024 e categoria.
+   O painel mostra **"Não qualificado para envio"** enquanto faltar algum
+   desses campos.
+5. **Verificação da empresa** (feita por você, não por automação) —
+   [Business Suite](https://business.facebook.com/) → Configurações →
+   **Central de segurança** → *Iniciar verificação*: razão social, CNPJ,
+   endereço, telefone e documento. Leva de dias a semanas.
+6. **Verificação de acesso / Provedor de Tecnologia** — painel do app →
+   *Torne-se um Provedor de Tecnologia*. A Meta exige isso para enviar à
+   análise e acessar dados de terceiros.
+7. **Token do app novo** — repetir os passos 4–9 da §2 com o app novo
+   (Graph API Explorer → app `content-factory`) e trocar
+   `INSTAGRAM_ACCESS_TOKEN` nos dois arquivos ([§4](#4-onde-colar)).
+   Validar com `debug_token` que `app_id` é o do app novo.
+8. **Teste antes do envio** — com o token novo, rodar um `cf collect
+   --platform instagram --limit 1` e conferir no log se o gate #10 sumiu
+   (no acesso padrão a busca pode já funcionar para a sua própria conta).
+9. **Envio** — App Review → *Instagram Public Content Access* →
+   **Adicionar à análise**: responder às *Perguntas sobre tratamento de
+   dados* e anexar:
+   - **descrição de uso** (sugestão): "Ferramenta interna de pesquisa de
+     conteúdo. Lê o top media público de poucas hashtags de nicho (velas,
+     sabonetes e resina artesanal) para análise agregada de tendências. Só
+     leitura: não publica, não comenta, não envia mensagens e não contata
+     usuários. Dados guardados em banco privado e removidos ao fim de cada
+     ciclo ou a pedido.";
+   - **vídeo de tela**: o `cf collect --platform instagram` rodando, a
+     chamada de hashtag e o resultado agregado (relatório/consulta), com
+     narração do objetivo.
+   Recusa na primeira tentativa é comum: ler o motivo e reenviar.
+10. **Depois de aprovado** — o `collect` passa a usar hashtag sozinho (só cai
+    na mídia própria com o erro #10). O `research` do Instagram
+    (`discover_by_keywords`) **sempre** usa mídia própria e precisa de uma
+    mudança de código. Limite da API: **30 hashtags únicas por conta a cada
+    7 dias** — o `collect` usa 1 por segmento.
+
 ## 3. TikTok — sem API oficial, cookie `ms_token` (`TIKTOK_MS_TOKEN`)
 
 O TikTok-Api usa a API privada com risco conhecido de anti-bot
