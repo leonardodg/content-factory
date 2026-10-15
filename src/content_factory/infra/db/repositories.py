@@ -343,7 +343,8 @@ class CollectRunRepositoryImpl(CollectRunRepository):
         ]
 
 
-# views no ÚLTIMO snapshot e nº de snapshots por vídeo do segmento (C2)
+# views no ÚLTIMO snapshot e nº de snapshots por vídeo do segmento (C2);
+# com `since`, só vídeos com snapshot capturado na janela (auditoria 3, N-1)
 _COVERAGE_SQL = text(
     """
     SELECT v.platform,
@@ -360,6 +361,10 @@ _COVERAGE_SQL = text(
         SELECT count(*) AS n FROM video_metrics m WHERE m.video_id = v.id
     ) snaps ON true
     WHERE vs.segment_id = :segment_id
+      AND (CAST(:since AS timestamptz) IS NULL OR EXISTS (
+          SELECT 1 FROM video_metrics w
+          WHERE w.video_id = v.id AND w.captured_at > CAST(:since AS timestamptz)
+      ))
     GROUP BY v.platform
     """
 )
@@ -371,8 +376,11 @@ class OpsReportReaderImpl(OpsReportReader):
     def __init__(self, session: AsyncSession) -> None:
         self._s = session
 
-    async def metric_coverage(self, segment_id: int) -> dict[str, MetricCoverage]:
-        rows = (await self._s.execute(_COVERAGE_SQL, {"segment_id": segment_id})).all()
+    async def metric_coverage(
+        self, segment_id: int, since: datetime | None = None
+    ) -> dict[str, MetricCoverage]:
+        params = {"segment_id": segment_id, "since": since}
+        rows = (await self._s.execute(_COVERAGE_SQL, params)).all()
         return {
             str(platform): MetricCoverage(
                 videos=int(videos),

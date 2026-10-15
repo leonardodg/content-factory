@@ -20,6 +20,27 @@ leitura. A partir de D+1 a fonte é `cf ops-report --segment <slug>
   Instagram entra só com dados a partir da troca**, reportado à parte por
   ter janela menor.
 
+## Regras do B3 (registradas antes de olhar os resultados)
+
+- **TikTok fora do B3** enquanto `TIKTOK_MS_TOKEN` não for rotacionado:
+  `auth_expired` é falha de credencial, não evidência sobre o nicho
+  (auditoria 3, item 4). Se o token voltar, o TikTok entra só a partir da
+  data da volta, reportado à parte.
+- **Trends:** válido a partir do research de **15/10 07:00 BRT** (PR #37);
+  antes disso, 100% `upstream_changed` por defeito de código. A semana
+  corrente (`isPartial`) não entra na série (auditoria 3, N-2).
+- **Viés de seleção do Trends (decisão de MVP, registrada):** o Trends é
+  consultado só para as **5 keywords de maior peso do Suggest**, não para
+  uma amostra independente do nicho. No B3, comparar com uma amostra
+  aleatória de 5 keywords do Suggest para ver se a seleção exclui termos de
+  alto interesse.
+- **Suficiência por fonte (proposta, aguarda aprovação):** além de
+  `ok_rate`, o `cf ops-report` mostra `data_rate` (runs ok com `found > 0`).
+  Limiares propostos de `data_rate` na janela do experimento: YouTube ≥ 90%,
+  Instagram (desde a troca) ≥ 80%, Suggest ≥ 90%, Trends ≥ 80%, web ≥ 50%
+  (ambíguo pelo `ddgs`). Abaixo disso, a fonte é reportada como
+  **insuficiente**, sem virar falha.
+
 ## Linhas diárias
 
 Legenda: contagens `ok/failed/blocked` por coletor nas 12 runs do collect

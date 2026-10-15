@@ -132,3 +132,32 @@ async def test_circuit_breaker_resets_on_success() -> None:
     with pytest.raises(CollectorError) as ei:
         await p.interest_over_time(["candle making"], "today 7-d")
     assert ei.value.code == "circuit_open"
+
+
+@pytest.mark.asyncio
+async def test_partial_week_is_excluded() -> None:
+    """Auditoria 3, N-2: a semana corrente vem com `isPartial=True` (confirmado no
+    Google real, 2026-10-15) e não é comparável às semanas fechadas — sai da série."""
+    df = pd.DataFrame(
+        {"vela": [30, 40, 12], "isPartial": [False, False, True]},
+        index=pd.to_datetime(["2026-09-27", "2026-10-04", "2026-10-11"], utc=True),  # type: ignore[reportUnknownMemberType]
+    )
+    out = await _provider(_FakePytrends(df)).interest_over_time(["vela"], "today 12-m")
+    assert [p.interest for p in out] == [30.0, 40.0]
+    assert all(p.period_start.day != 11 for p in out)
+
+
+@pytest.mark.asyncio
+async def test_missing_values_are_skipped_and_empty_frame_is_empty() -> None:
+    """N-2: valor ausente (NaN) não vira ponto; DataFrame vazio (sem dados no
+    Google) devolve lista vazia, não erro."""
+    df = pd.DataFrame(
+        {"vela": [30.0, float("nan")], "isPartial": [False, False]},
+        index=pd.to_datetime(["2026-09-27", "2026-10-04"], utc=True),  # type: ignore[reportUnknownMemberType]
+    )
+    out = await _provider(_FakePytrends(df)).interest_over_time(["vela"], "today 12-m")
+    assert [p.interest for p in out] == [30.0]
+    empty = await _provider(_FakePytrends(pd.DataFrame())).interest_over_time(
+        ["vela"], "today 12-m"
+    )
+    assert empty == []

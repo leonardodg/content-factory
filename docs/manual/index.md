@@ -48,7 +48,7 @@ audita tudo em `collect_runs` (com `skipped`, `discover_ms`, `persist_ms`) →
 | `cf score --segment SLUG` | recalcula viral score + trend decay (lote) | `0` · `2` · `1` |
 | `cf status --segment SLUG` | resumo operacional | `0` · `1` |
 | `cf collect-timings --segment SLUG` | agregado de `discover_ms`/`persist_ms` por plataforma (7 dias, só leitura) | `0` · `1` |
-| `cf ops-report --segment SLUG [--hours 24]` | relatório operacional da janela (só leitura): por coletor e fonte do research, status, taxa ok, vazios, erros e quota; `web_empty` (sempre ambíguo); runs `blocked`; ticks com duração de parede separada da soma `discover_ms + persist_ms`; cobertura de métricas por plataforma; scores. Ticks a menos de 10 min entre si (ex.: 2 execuções manuais) aparecem juntos | `0` · `1` |
+| `cf ops-report --segment SLUG [--hours 24]` | relatório operacional da janela (só leitura): por coletor e fonte do research, status, taxa ok, **suficiência** (`data_runs`/`data_rate` = runs ok com `found > 0`, `found_avg_ok`), vazios, erros e quota; `web_empty` (sempre ambíguo); runs `blocked`; ticks com duração de parede separada da soma `discover_ms + persist_ms`; cobertura de métricas por plataforma em dois escopos nomeados (`coverage.segment_all_time` e `coverage.window`, só vídeos com snapshot na janela); scores da janela. Ticks a menos de 10 min entre si (ex.: 2 execuções manuais) aparecem juntos | `0` · `1` |
 | `cf research start --segment SLUG [--weeks N]` | inicia campanha de pesquisa (default 4 semanas) | `0` · `1` |
 | `cf research stop --segment SLUG` | encerra a campanha ativa | `0` · `1` |
 | `cf research status --segment SLUG` | mostra campanha ativa + `ends_at` | `0` · `1` |

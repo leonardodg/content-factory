@@ -1,6 +1,7 @@
 """Google Trends via pytrends — scraping não-oficial, ver ADR-0004."""
 
 import asyncio
+import math
 import time
 from collections.abc import Callable
 from datetime import UTC
@@ -91,12 +92,23 @@ class TrendsGoogleProvider:
         return UpstreamChanged(PLATFORM, str(exc))
 
     def _map(self, keywords: list[str], df: Any) -> list[TrendPoint]:
-        """Converte DataFrame do pytrends em lista de TrendPoint."""
+        """Converte DataFrame do pytrends em lista de TrendPoint.
+
+        Auditoria 3 (N-2): a semana corrente vem com `isPartial=True` (Google
+        real, 2026-10-15) e não é comparável às fechadas — fica de fora. Valor
+        ausente (NaN) não vira ponto; DataFrame vazio devolve `[]`.
+        """
         out: list[TrendPoint] = []
+        partial: Any = df["isPartial"] if "isPartial" in df.columns else None
         for kw in keywords:
             if kw not in df.columns:
                 continue
             for ts, value in df[kw].items():
+                if partial is not None and bool(partial[ts]):
+                    continue
+                interest = float(value)
+                if math.isnan(interest):
+                    continue
                 period = ts.to_pydatetime() if hasattr(ts, "to_pydatetime") else ts
                 if period.tzinfo is None:
                     period = period.replace(tzinfo=UTC)
@@ -105,7 +117,7 @@ class TrendsGoogleProvider:
                         keyword=kw,
                         period_start=period,
                         period_granularity="week",
-                        interest=float(value),
+                        interest=interest,
                     )
                 )
         return out

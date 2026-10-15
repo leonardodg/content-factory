@@ -506,8 +506,12 @@ def test_research_invalid_action_exit_1() -> None:
 
 
 class _FakeOpsReader:
-    async def metric_coverage(self, segment_id: int) -> dict[str, MetricCoverage]:
+    async def metric_coverage(
+        self, segment_id: int, since: datetime | None = None
+    ) -> dict[str, MetricCoverage]:
         _ = segment_id
+        if since is not None:  # janela: só 1 vídeo com snapshot recente
+            return {"youtube": MetricCoverage(videos=1, with_views=1, with_two_snapshots=0)}
         return {"youtube": MetricCoverage(videos=4, with_views=3, with_two_snapshots=2)}
 
     async def scored_since(self, segment_id: int, since: datetime) -> int:
@@ -558,7 +562,9 @@ def test_ops_report_success_envelope(monkeypatch: pytest.MonkeyPatch) -> None:
     report = out["report"]
     assert report["web_empty"] == {"runs": 1, "of": 1, "ambiguous": True}
     assert report["collectors"]["youtube"]["ok_rate"] == 1.0
-    assert report["coverage"]["youtube"]["views_rate"] == 0.75
+    cov = report["coverage"]  # escopo explícito (auditoria 3, N-1)
+    assert cov["segment_all_time"]["youtube"]["views_rate"] == 0.75
+    assert cov["window"]["youtube"]["videos"] == 1
     assert report["scored"] == 7
 
 
