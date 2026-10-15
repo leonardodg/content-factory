@@ -123,8 +123,8 @@ async def test_concurrent_segment_uows_isolate_commits(
         assert state["peak"] == 3
         assert out["segments"][slugs[1]] == {
             "ok": False,
-            "error": "boom-b",
-            "error_type": "RuntimeError",
+            "partial": False,
+            "error": {"code": "internal_error", "message": "boom-b", "type": "RuntimeError"},
         }
         assert out["segments"][slugs[0]]["ok"] is True
         assert out["segments"][slugs[2]]["ok"] is True
@@ -245,8 +245,8 @@ async def test_infra_error_in_persistence_reaches_envelope_unmasked(
         out = await w.run_collect_job({"campaigns_deps": deps.campaigns, "app_deps": deps})
         envelope = out["segments"][slug]
         assert envelope["ok"] is False
-        assert envelope["error_type"] == "DataError"
-        assert "division by zero" in envelope["error"]
+        assert envelope["error"]["type"] == "DataError"
+        assert "division by zero" in envelope["error"]["message"]
     finally:
         for sid in started:
             await deps.campaigns.stop(sid)
