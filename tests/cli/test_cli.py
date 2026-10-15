@@ -2,6 +2,7 @@ import os
 import sys
 from collections.abc import AsyncGenerator, Callable, Coroutine
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -9,11 +10,16 @@ import pytest
 from typer.testing import CliRunner
 
 from content_factory.app.collect import CollectDeps
-from content_factory.app.ports import Collector, CollectRunRepository, SegmentRepository
+from content_factory.app.ports import (
+    Collector,
+    CollectRunRepository,
+    OpsReportReader,
+    SegmentRepository,
+)
 from content_factory.app.score import ScoreOutcome
 from content_factory.cli.main import app, main
 from content_factory.domain.errors import CollectorError, SegmentNotFound
-from content_factory.domain.models import Segment, SegmentConfig
+from content_factory.domain.models import CollectRun, MetricCoverage, Segment, SegmentConfig
 from tests.conftest import requires_infra
 from tests.stubs import FakeCollector, FakeLimiter, FakeLock, FakeRepos
 
@@ -497,3 +503,74 @@ def test_research_invalid_action_exit_1() -> None:
     """Subcomando inválido é rejeitado pelo typer (exit 2 = usage error padrão)."""
     result = runner.invoke(app, ["research", "nope", "--segment", "candles"])
     assert result.exit_code == 2  # typer padrão p/ subcomando desconhecido via CliRunner
+
+
+class _FakeOpsReader:
+    async def metric_coverage(self, segment_id: int) -> dict[str, MetricCoverage]:
+        _ = segment_id
+        return {"youtube": MetricCoverage(videos=4, with_views=3, with_two_snapshots=2)}
+
+    async def scored_since(self, segment_id: int, since: datetime) -> int:
+        _ = segment_id, since
+        return 7
+
+
+def _fake_ops_deps(
+    *, missing: bool = False
+) -> Callable[
+    [], AbstractAsyncContextManager[tuple[SegmentRepository, CollectRunRepository, OpsReportReader]]
+]:
+    """Seam do `ops-report` (C2): segments, runs e leitor fake (sem DB)."""
+
+    @asynccontextmanager
+    async def factory() -> AsyncGenerator[
+        tuple[SegmentRepository, CollectRunRepository, OpsReportReader]
+    ]:
+        repos = FakeRepos()
+        now = datetime.now(UTC)
+        for collector, found in (("web", 0), ("youtube", 3)):
+            await repos.runs.record(
+                CollectRun(
+                    collector=collector,
+                    segment_id=1,
+                    status="ok",
+                    found=found,
+                    started_at=now - timedelta(minutes=5),
+                    finished_at=now - timedelta(minutes=4),
+                )
+            )
+        segments = _MissingSegments() if missing else repos.segments
+        yield segments, repos.runs, _FakeOpsReader()
+
+    return factory
+
+
+def test_ops_report_success_envelope(monkeypatch: pytest.MonkeyPatch) -> None:
+    """C2: `cf ops-report` agrega runs, web_empty ambíguo, cobertura e scores."""
+    import json
+
+    monkeypatch.setattr("content_factory.cli.main._ops_deps", _fake_ops_deps())
+    result = runner.invoke(app, ["ops-report", "--segment", "candles", "--hours", "24"])
+    assert result.exit_code == 0, result.stdout
+    out = json.loads(result.stdout)
+    assert out["ok"] is True and out["command"] == "ops-report"
+    assert out["segment"] == "candles"
+    report = out["report"]
+    assert report["web_empty"] == {"runs": 1, "of": 1, "ambiguous": True}
+    assert report["collectors"]["youtube"]["ok_rate"] == 1.0
+    assert report["coverage"]["youtube"]["views_rate"] == 0.75
+    assert report["scored"] == 7
+
+
+def test_ops_report_unknown_segment_exit_1(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("content_factory.cli.main._ops_deps", _fake_ops_deps(missing=True))
+    result = runner.invoke(app, ["ops-report", "--segment", "nao-existe"])
+    assert result.exit_code == 1
+    assert '"code": "segment_not_found"' in result.stdout
+
+
+def test_ops_report_rejects_non_positive_window(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("content_factory.cli.main._ops_deps", _fake_ops_deps())
+    result = runner.invoke(app, ["ops-report", "--segment", "candles", "--hours", "0"])
+    assert result.exit_code == 1
+    assert '"code": "usage_error"' in result.stdout

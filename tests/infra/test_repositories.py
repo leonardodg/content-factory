@@ -28,6 +28,7 @@ from content_factory.infra.db.orm import (
 from content_factory.infra.db.repositories import (
     CollectRunRepositoryImpl,
     KeywordSignalRepositoryImpl,
+    OpsReportReaderImpl,
     ResearchCampaignRepositoryImpl,
     ScoreRepositoryImpl,
     SegmentRepositoryImpl,
@@ -1141,4 +1142,90 @@ async def test_active_segments_returns_only_segments_with_active_campaign() -> N
         active_ids = {seg.id for seg in active}
         assert with_campaign.id in active_ids
         assert without_campaign.id not in active_ids
+    await engine.dispose()
+
+
+@requires_infra
+async def test_runs_since_returns_window_runs_in_order() -> None:
+    """C2: o ops-report lê as runs da janela, em ordem de início."""
+    engine = create_async_engine(os.environ["TEST_DATABASE_URL"])
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    async with factory() as s:
+        await s.rollback()
+        seg = await SegmentRepositoryImpl(s).upsert(
+            SegmentConfig(
+                slug=f"teste-ops-{uuid4().hex[:8]}", name="Ops", platforms=["web"], keywords=["k"]
+            )
+        )
+        now = datetime.now(UTC)
+        repo = CollectRunRepositoryImpl(s)
+        for collector, at in (("web", 2), ("youtube", 1), ("web", 48)):
+            await repo.record(
+                CollectRun(
+                    collector=collector,
+                    segment_id=seg.id,
+                    status="ok",
+                    error_code=None,
+                    started_at=now - timedelta(hours=at),
+                    finished_at=now - timedelta(hours=at) + timedelta(seconds=3),
+                )
+            )
+        await s.commit()
+        runs = await repo.runs_since(seg.id, now - timedelta(hours=24))
+        assert [r.collector for r in runs] == ["web", "youtube"]
+        assert all(r.segment_id == seg.id and r.finished_at is not None for r in runs)
+    await engine.dispose()
+
+
+@requires_infra
+async def test_ops_reader_metric_coverage_and_scored_since() -> None:
+    """C2: cobertura (views no último snapshot, ≥ 2 snapshots) e scores da janela."""
+    engine = create_async_engine(os.environ["TEST_DATABASE_URL"])
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    async with factory() as s:
+        await s.rollback()
+        seg = await SegmentRepositoryImpl(s).upsert(
+            SegmentConfig(
+                slug=f"teste-cov-{uuid4().hex[:8]}",
+                name="Cov",
+                platforms=["youtube", "instagram"],
+                keywords=["k"],
+            )
+        )
+        videos = VideoRepositoryImpl(s)
+        with_views = candidate(1).model_copy(update={"views": 100})
+        no_views = candidate(2).model_copy(update={"likes": 5})
+        reel = CandidateVideo(
+            platform="instagram",
+            platform_video_id=f"reel-{uuid4().hex[:12]}",
+            url="https://www.instagram.com/reel/x/",
+            creator_handle="",
+            likes=3,
+        )
+        await videos.upsert_candidates(seg.id, "test", [with_views, no_views, reel])
+        await videos.upsert_candidates(
+            seg.id, "test", [with_views.model_copy(update={"views": 150})]
+        )
+        await s.commit()
+        reader = OpsReportReaderImpl(s)
+        cov = await reader.metric_coverage(seg.id)
+        assert cov["youtube"].videos == 2
+        assert cov["youtube"].with_views == 1
+        assert cov["youtube"].with_two_snapshots == 1
+        assert cov["instagram"].videos == 1 and cov["instagram"].with_views == 0
+
+        vid = await video_id_of(s, with_views)
+        s.add(
+            VideoScoreRow(
+                video_id=vid,
+                segment_id=seg.id,
+                viral_score=1.0,
+                relevance=1.0,
+                recency=1.0,
+                trend_decay="fresh",
+            )
+        )
+        await s.commit()
+        assert await reader.scored_since(seg.id, datetime.now(UTC) - timedelta(hours=1)) == 1
+        assert await reader.scored_since(seg.id, datetime.now(UTC) + timedelta(hours=1)) == 0
     await engine.dispose()
