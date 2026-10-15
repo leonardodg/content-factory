@@ -16,12 +16,30 @@ FIELDS = (
     "id,caption,like_count,comments_count,timestamp,media_type,permalink,thumbnail_url,username"
 )
 
-_SKIP_MEDIA_TYPES = {"IMAGE"}
+# Mídia de hashtag NÃO expõe `username` nem `thumbnail_url` (#100 na API real,
+# sondagem 2026-10-15); `media_product_type` distingue REELS de FEED.
+HASHTAG_FIELDS = (
+    "id,caption,like_count,comments_count,timestamp,media_type,media_product_type,permalink"
+)
 _MAX_OWN_MEDIA_PAGES = 3
 
 
 def _is_video_like(item: dict[str, Any]) -> bool:
-    return str(item.get("media_type", "")).upper() not in _SKIP_MEDIA_TYPES
+    """Só vídeo (Reels e vídeo de feed): carrossel e imagem não são vídeo.
+
+    Antes só IMAGE saía e carrossel era gravado como vídeo (sondagem
+    2026-10-15: `top_media` de #velaartesanal = 31 carrosséis, 0 Reels).
+    """
+    return str(item.get("media_type", "")).upper() == "VIDEO"
+
+
+def hashtag_query(keyword: str) -> str:
+    """Keyword → nome de hashtag: sem `#`, sem espaços, minúsculo.
+
+    A API não aceita espaço (`vela artesanal` → #24 "resource does not
+    exist"); acentos são válidos em hashtag e ficam.
+    """
+    return "".join(keyword.casefold().removeprefix("#").split())
 
 
 class InstagramCollector:
@@ -87,7 +105,7 @@ class InstagramCollector:
         await self._client.aclose()
 
     async def discover(self, segment: SegmentConfig, limit: int) -> list[CandidateVideo]:
-        q = segment.keywords[0].replace("#", "") if segment.keywords else segment.slug
+        q = hashtag_query(segment.keywords[0] if segment.keywords else segment.slug)
         search = await self._get("ig_hashtag_search", {"user_id": self._user, "q": q})
         if search is None:
             return await self._own_media(segment, limit)
@@ -95,13 +113,16 @@ class InstagramCollector:
         if not rows:
             return []
         tag_id = str(rows[0]["id"])
-        top = await self._get(
-            f"{tag_id}/top_media",
-            {"user_id": self._user, "fields": FIELDS, "limit": str(min(limit, 25))},
+        # recent_media (Reels das últimas 24 h): top_media não traz Reels
+        # (sondagem 2026-10-15). limit ≤ 25: com legenda, 50 é recusado (#1).
+        # Pede 25 e filtra vídeo depois — cerca de metade é Reel.
+        recent = await self._get(
+            f"{tag_id}/recent_media",
+            {"user_id": self._user, "fields": HASHTAG_FIELDS, "limit": "25"},
         )
-        if top is None:
+        if recent is None:
             return await self._own_media(segment, limit)
-        items: Any = top.get("data") or []
+        items: Any = recent.get("data") or []
         videos = [cast(dict[str, Any], item) for item in items if _is_video_like(item)]
         return [self._map(item) for item in videos[:limit]]
 

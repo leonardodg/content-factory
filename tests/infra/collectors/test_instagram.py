@@ -39,6 +39,16 @@ _OWN_MEDIA = {
             "comments_count": 4,
             "permalink": "https://www.instagram.com/p/AAA/",
             "username": "atelie.velas",
+            "media_type": "VIDEO",
+        },
+        {
+            "id": "18003",
+            "caption": "Carrossel: 5 fragrâncias de vela artesanal",
+            "timestamp": "2026-10-03T10:00:00+0000",
+            "like_count": 90,
+            "comments_count": 2,
+            "permalink": "https://www.instagram.com/p/CCC/",
+            "username": "atelie.velas",
             "media_type": "CAROUSEL_ALBUM",
         },
         {
@@ -76,29 +86,82 @@ def _gate_route(request: httpx.Request) -> httpx.Response:
     return httpx.Response(404, json={})
 
 
+_HASHTAG_MEDIA = {
+    "data": [
+        {
+            "id": "R1",
+            "caption": "reel de vela",
+            "like_count": 50,
+            "comments_count": 3,
+            "timestamp": "2026-10-14T10:00:00+0000",
+            "media_type": "VIDEO",
+            "media_product_type": "REELS",
+            "permalink": "https://www.instagram.com/reel/R1/",
+        },
+        {
+            "id": "C1",
+            "caption": "carrossel",
+            "like_count": 80,
+            "comments_count": 1,
+            "timestamp": "2026-10-14T09:00:00+0000",
+            "media_type": "CAROUSEL_ALBUM",
+            "media_product_type": "FEED",
+            "permalink": "https://www.instagram.com/p/C1/",
+        },
+        {
+            "id": "I1",
+            "caption": "imagem",
+            "like_count": 10,
+            "comments_count": 0,
+            "timestamp": "2026-10-14T08:00:00+0000",
+            "media_type": "IMAGE",
+            "media_product_type": "FEED",
+            "permalink": "https://www.instagram.com/p/I1/",
+        },
+    ]
+}
+
+
 @pytest.mark.asyncio
-async def test_discover_uses_ig_hashtag_search_and_top_media() -> None:
-    """Endpoint correto: /ig_hashtag_search?user_id&q → /{tag}/top_media?user_id (docs v21.0)."""
+async def test_discover_uses_hashtag_search_and_recent_media_reels_only() -> None:
+    """Sondagem real 2026-10-15: top_media = 0 Reels; recent_media traz Reels.
+
+    - consulta normalizada (`vela artesanal` → `velaartesanal`: espaço = #24);
+    - campos de hashtag sem `username`/`thumbnail_url` (#100 na API real);
+    - só `VIDEO` passa: carrossel e imagem não são vídeo.
+    """
     calls: list[tuple[str, dict[str, str]]] = []
 
     def _route(request: httpx.Request) -> httpx.Response:
         calls.append((request.url.path, dict(request.url.params)))
         if request.url.path.endswith("/ig_hashtag_search"):
             return httpx.Response(200, json={"data": [{"id": "1784"}]})
-        if request.url.path.endswith("/top_media"):
-            return httpx.Response(200, content=(FIXDIR / "ig_hashtag_top.json").read_bytes())
+        if request.url.path.endswith("/recent_media"):
+            return httpx.Response(200, json=_HASHTAG_MEDIA)
         return httpx.Response(404, json={})
 
     c = InstagramCollector(access_token="t", ig_user_id="42", transport=httpx.MockTransport(_route))
     out = await c.discover(SEG, limit=5)
-    assert out and out[0].platform == "instagram"
+    assert [v.platform_video_id for v in out] == ["R1"]
+    assert out[0].likes == 50 and out[0].creator_handle == ""
     paths = [path for path, _ in calls]
-    assert len(paths) == 2
     assert paths[0].endswith("/ig_hashtag_search")
-    assert paths[1].endswith("/1784/top_media")
-    search_params = calls[0][1]
-    assert search_params["user_id"] == "42" and search_params["q"] == "vela artesanal"
-    assert calls[1][1]["user_id"] == "42" and "fields" in calls[1][1]
+    assert paths[1].endswith("/1784/recent_media")
+    assert calls[0][1]["user_id"] == "42" and calls[0][1]["q"] == "velaartesanal"
+    fields = calls[1][1]["fields"].split(",")
+    assert "username" not in fields and "thumbnail_url" not in fields
+    assert "media_product_type" in fields
+    assert int(calls[1][1]["limit"]) <= 25
+
+
+@pytest.mark.parametrize(
+    ("keyword", "expected"),
+    [("vela artesanal", "velaartesanal"), ("#Sabonete Artesanal", "saboneteartesanal")],
+)
+def test_hashtag_query_is_normalized(keyword: str, expected: str) -> None:
+    from content_factory.infra.collectors.instagram import hashtag_query
+
+    assert hashtag_query(keyword) == expected
 
 
 @pytest.mark.asyncio
@@ -119,6 +182,7 @@ async def test_own_media_fallback_filters_by_keyword() -> None:
         access_token="t", ig_user_id="42", transport=httpx.MockTransport(_gate_route)
     )
     out = await c.discover(SEG, limit=5)
+    # 18003 casa a keyword mas é carrossel: não é vídeo (sondagem 2026-10-15)
     assert [v.platform_video_id for v in out] == ["18001"]
 
 
@@ -153,14 +217,14 @@ async def test_generic_code10_is_not_gate() -> None:
 
 
 @pytest.mark.asyncio
-async def test_gate_on_top_media_falls_back_to_own_media() -> None:
-    """Gate #10 em top_media (plano, comportamento #3) também cai para mídia própria."""
+async def test_gate_on_recent_media_falls_back_to_own_media() -> None:
+    """Gate #10 em recent_media (plano, comportamento #3) também cai para mídia própria."""
 
     def _route(request: httpx.Request) -> httpx.Response:
         path = request.url.path
         if path.endswith("/ig_hashtag_search"):
             return httpx.Response(200, json={"data": [{"id": "1784"}]})
-        if path.endswith("/top_media"):
+        if path.endswith("/recent_media"):
             return httpx.Response(
                 400,
                 json={
@@ -299,7 +363,7 @@ async def test_discover_skips_image_media_type() -> None:
         path = request.url.path
         if path.endswith("/ig_hashtag_search"):
             return httpx.Response(200, json={"data": [{"id": "1784"}]})
-        if path.endswith("/top_media"):
+        if path.endswith("/recent_media"):
             return httpx.Response(
                 200,
                 json={
@@ -431,7 +495,7 @@ async def test_discover_by_keywords_uses_union_of_keywords_and_hashtags() -> Non
                         {
                             "id": "18001",
                             "caption": "Passo a passo de Vela Artesanal",
-                            "media_type": "CAROUSEL_ALBUM",
+                            "media_type": "VIDEO",
                             "permalink": "https://www.instagram.com/p/AAA/",
                             "username": "atelie.velas",
                         },
