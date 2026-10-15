@@ -81,3 +81,6 @@ nav:
       - Revisão 2026-10-07: REVISAO_2026-10-07.md
       - Revisão 2026-10-14: REVISAO_2026-10-14.md
   - HANDOFF: HANDOFF.md
+  - Legal:
+      - Política de privacidade: legal/privacidade.md
+      - Exclusão de dados: legal/exclusao-de-dados.md
