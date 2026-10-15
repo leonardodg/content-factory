@@ -236,3 +236,23 @@ class YoutubeCollector:
             thumbnail_url=sn.get("thumbnails", {}).get("default", {}).get("url"),
             raw=v,
         )
+
+
+class LocaleBoundYoutube:
+    """YouTube do research amarrado ao `search_locale` de um segmento.
+
+    O coletor é singleton entre segmentos; o locale vem do segmento, então a
+    composição por segmento embrulha o coletor (o protocolo `SocialDiscoverer`
+    fica intacto).
+    """
+
+    platform: ClassVar[str] = "youtube"
+
+    def __init__(self, inner: YoutubeCollector, locale: SearchLocale) -> None:
+        self._inner = inner
+        self._locale = locale
+
+    async def discover_by_keywords(
+        self, keywords: list[str], hashtags: list[str], depth: int
+    ) -> list[CandidateVideo]:
+        return await self._inner.discover_by_keywords(keywords, hashtags, depth, self._locale)

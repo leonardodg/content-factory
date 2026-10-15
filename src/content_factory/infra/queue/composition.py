@@ -167,7 +167,7 @@ class AppDeps(SegmentDepsFactory):
                 research=ResearchDeps(
                     web=shared.web,
                     trends=shared.trends,
-                    socials=shared.socials,
+                    socials=bind_segment_locale(shared.socials, segment),
                     signals=KeywordSignalRepositoryImpl(session),
                     trend_observations=TrendObservationRepositoryImpl(session),
                     segments=segments,
@@ -180,6 +180,22 @@ class AppDeps(SegmentDepsFactory):
                     health=shared.health,
                 ),
             )
+
+
+def bind_segment_locale(
+    socials: dict[str, SocialDiscoverer], segment: Segment
+) -> dict[str, SocialDiscoverer]:
+    """Amarra o `search_locale` do segmento ao YouTube do research (2026-10-15).
+
+    Sem locale no segmento, devolve o mesmo mapa (o YouTube usa o padrão
+    global de `Settings`).
+    """
+    from content_factory.infra.collectors.youtube import LocaleBoundYoutube, YoutubeCollector
+
+    youtube = socials.get("youtube")
+    if segment.search_locale is None or not isinstance(youtube, YoutubeCollector):
+        return socials
+    return {**socials, "youtube": LocaleBoundYoutube(youtube, segment.search_locale)}
 
 
 async def _close_quietly(platform: str, closer: Callable[[], Awaitable[None]]) -> None:

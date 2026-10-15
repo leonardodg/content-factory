@@ -328,3 +328,29 @@ def test_settings_default_locale_wires_into_collector(monkeypatch: pytest.Monkey
     monkeypatch.setenv("YOUTUBE_REGION_CODE", "")
     register_defaults(Settings())
     assert registry.get("youtube").default_locale is None  # type: ignore[attr-defined]
+
+
+@pytest.mark.asyncio
+async def test_bind_segment_locale_wraps_only_youtube_with_segment_locale() -> None:
+    """T3: o research recebe o YouTube amarrado ao locale do segmento.
+
+    O protocolo `SocialDiscoverer` não muda; sem locale no segmento, o mapa
+    original volta intacto (mesmos objetos).
+    """
+    from content_factory.domain.models import SearchLocale
+    from content_factory.infra.queue.composition import bind_segment_locale
+
+    captured: list[dict[str, str]] = []
+    yt = YoutubeCollector(api_key="k", transport=_capture_search(captured))
+    other = object()
+    socials = {"youtube": yt, "instagram": other}
+    assert bind_segment_locale(socials, SEG) is socials  # type: ignore[arg-type]
+
+    seg = SEG.model_copy(
+        update={"search_locale": SearchLocale(relevance_language="pt", region_code="BR")}
+    )
+    bound = bind_segment_locale(socials, seg)  # type: ignore[arg-type]
+    assert bound["instagram"] is other
+    assert bound["youtube"].platform == "youtube"
+    await bound["youtube"].discover_by_keywords(["vela"], [], 1)
+    assert captured[0]["relevanceLanguage"] == "pt" and captured[0]["regionCode"] == "BR"
