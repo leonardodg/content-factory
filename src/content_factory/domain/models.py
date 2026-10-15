@@ -4,6 +4,20 @@ from typing import Any
 from pydantic import BaseModel, Field
 
 
+class SearchLocale(BaseModel):
+    """Idioma/região da busca (YouTube: `relevanceLanguage`/`regionCode`).
+
+    Na API, idioma **favorece** e região restringe a vídeos visíveis no país —
+    não é filtro rígido de idioma. `None` = sem restrição.
+    """
+
+    relevance_language: str | None = None
+    region_code: str | None = None
+
+    def is_empty(self) -> bool:
+        return not self.relevance_language and not self.region_code
+
+
 class SegmentConfig(BaseModel):
     slug: str
     name: str
@@ -14,6 +28,7 @@ class SegmentConfig(BaseModel):
     subnichos: dict[str, list[str]] = Field(default_factory=dict)
     audience: list[str] = Field(default_factory=list)  # vai p/ segments.config JSONB
     research: DepthConfig | None = None  # guard-rail do pipeline de pesquisa
+    search_locale: SearchLocale | None = None  # idioma/região da busca (YAML)
 
 
 class Segment(SegmentConfig):

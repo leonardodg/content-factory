@@ -6,7 +6,7 @@ import httpx
 
 from content_factory.app.call_counters import record_quota
 from content_factory.domain.errors import AuthExpired, NetworkError, RateLimited, UpstreamChanged
-from content_factory.domain.models import CandidateVideo, SegmentConfig
+from content_factory.domain.models import CandidateVideo, SearchLocale, SegmentConfig
 from content_factory.infra.redact import redact
 
 API = "https://www.googleapis.com/youtube/v3"
@@ -96,9 +96,16 @@ class YoutubeCollector:
     platform: ClassVar[str] = "youtube"
     COST_SEARCH, COST_LIST = 100, 1
 
-    def __init__(self, api_key: str, transport: httpx.AsyncBaseTransport | None = None) -> None:
+    def __init__(
+        self,
+        api_key: str,
+        transport: httpx.AsyncBaseTransport | None = None,
+        default_locale: SearchLocale | None = None,
+    ) -> None:
         self._key = api_key
         self._client = httpx.AsyncClient(transport=transport, timeout=20)
+        # padrão global (Settings); o locale do segmento vence (2026-10-15)
+        self.default_locale = default_locale
 
     async def _get(self, path: str, params: dict[str, str]) -> dict[str, Any]:
         if not self._key:
@@ -141,29 +148,38 @@ class YoutubeCollector:
         await self._client.aclose()
 
     async def discover(self, segment: SegmentConfig, limit: int) -> list[CandidateVideo]:
-        return await self._search(or_query(segment.keywords[:5]), limit)
+        locale = segment.search_locale or self.default_locale
+        return await self._search(or_query(segment.keywords[:5]), limit, locale)
 
     async def discover_by_keywords(
-        self, keywords: list[str], hashtags: list[str], depth: int
+        self,
+        keywords: list[str],
+        hashtags: list[str],
+        depth: int,
+        locale: SearchLocale | None = None,
     ) -> list[CandidateVideo]:
         """Busca por keywords+hashtags dinâmicas — mesmo fluxo de discover()."""
         _ = depth  # profundidade é controle do FanoutGuard, não da API
         terms = [*keywords, *hashtags][:5]  # API não aceita query enorme
-        return await self._search(or_query(terms), limit=25)
+        return await self._search(or_query(terms), 25, locale or self.default_locale)
 
-    async def _search(self, q: str, limit: int) -> list[CandidateVideo]:
+    async def _search(
+        self, q: str, limit: int, locale: SearchLocale | None = None
+    ) -> list[CandidateVideo]:
         after = (datetime.now(UTC) - timedelta(days=7)).strftime("%Y-%m-%dT%H:%M:%SZ")
-        search = await self._get(
-            "search",
-            {
-                "part": "snippet",
-                "q": q,
-                "type": "video",
-                "order": "viewCount",
-                "publishedAfter": after,
-                "maxResults": str(min(limit, 50)),
-            },
-        )
+        params = {
+            "part": "snippet",
+            "q": q,
+            "type": "video",
+            "order": "viewCount",
+            "publishedAfter": after,
+            "maxResults": str(min(limit, 50)),
+        }
+        if locale is not None and locale.relevance_language:
+            params["relevanceLanguage"] = locale.relevance_language
+        if locale is not None and locale.region_code:
+            params["regionCode"] = locale.region_code
+        search = await self._get("search", params)
         record_quota(self.COST_SEARCH)  # por chamada → collect_runs.quota_used
         items: Any = search.get("items")
         if not isinstance(items, list):

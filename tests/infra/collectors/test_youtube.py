@@ -254,3 +254,77 @@ async def test_discover_sends_quoted_or_query() -> None:
     c = YoutubeCollector(api_key="k", transport=httpx.MockTransport(_route))
     await c.discover(SEG, limit=5)
     assert captured == ['"candle making" OR "vela de soja"']
+
+
+def _capture_search(captured: list[dict[str, str]]) -> httpx.MockTransport:
+    def _route(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/search"):
+            captured.append(dict(request.url.params))
+        return httpx.Response(200, json={"items": []})
+
+    return httpx.MockTransport(_route)
+
+
+@pytest.mark.asyncio
+async def test_segment_search_locale_is_sent_and_overrides_default() -> None:
+    """Locale do segmento (YAML) vai na busca e vence o padrão global."""
+    from content_factory.domain.models import SearchLocale
+
+    captured: list[dict[str, str]] = []
+    seg = SEG.model_copy(
+        update={"search_locale": SearchLocale(relevance_language="pt", region_code="BR")}
+    )
+    c = YoutubeCollector(
+        api_key="k",
+        transport=_capture_search(captured),
+        default_locale=SearchLocale(relevance_language="en", region_code="US"),
+    )
+    await c.discover(seg, limit=5)
+    assert captured[0]["relevanceLanguage"] == "pt" and captured[0]["regionCode"] == "BR"
+
+
+@pytest.mark.asyncio
+async def test_default_locale_applies_and_absent_locale_sends_nothing() -> None:
+    from content_factory.domain.models import SearchLocale
+
+    captured: list[dict[str, str]] = []
+    c = YoutubeCollector(
+        api_key="k",
+        transport=_capture_search(captured),
+        default_locale=SearchLocale(region_code="BR"),
+    )
+    await c.discover(SEG, limit=5)
+    assert captured[0]["regionCode"] == "BR" and "relevanceLanguage" not in captured[0]
+    bare: list[dict[str, str]] = []
+    await YoutubeCollector(api_key="k", transport=_capture_search(bare)).discover(SEG, limit=5)
+    assert "regionCode" not in bare[0] and "relevanceLanguage" not in bare[0]
+
+
+@pytest.mark.asyncio
+async def test_discover_by_keywords_accepts_locale() -> None:
+    from content_factory.domain.models import SearchLocale
+
+    captured: list[dict[str, str]] = []
+    c = YoutubeCollector(api_key="k", transport=_capture_search(captured))
+    await c.discover_by_keywords(
+        ["vela"], [], 1, locale=SearchLocale(relevance_language="pt", region_code="BR")
+    )
+    assert captured[0]["relevanceLanguage"] == "pt" and captured[0]["regionCode"] == "BR"
+
+
+def test_settings_default_locale_wires_into_collector(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Padrão global por env; vazio = sem restrição."""
+    from content_factory.config import Settings
+    from content_factory.infra.collectors import register_defaults, registry
+
+    monkeypatch.setenv("YOUTUBE_RELEVANCE_LANGUAGE", "pt")
+    monkeypatch.setenv("YOUTUBE_REGION_CODE", "BR")
+    register_defaults(Settings())
+    yt = registry.get("youtube")
+    assert isinstance(yt, YoutubeCollector)
+    assert yt.default_locale is not None
+    assert (yt.default_locale.relevance_language, yt.default_locale.region_code) == ("pt", "BR")
+    monkeypatch.setenv("YOUTUBE_RELEVANCE_LANGUAGE", "")
+    monkeypatch.setenv("YOUTUBE_REGION_CODE", "")
+    register_defaults(Settings())
+    assert registry.get("youtube").default_locale is None  # type: ignore[attr-defined]

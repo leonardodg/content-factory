@@ -18,6 +18,10 @@ class Settings(BaseSettings):
         return self
 
     youtube_api_key: str = ""
+    # padrão global da busca do YouTube; o `search_locale` do segmento vence.
+    # Vazio = sem restrição.
+    youtube_relevance_language: str = ""
+    youtube_region_code: str = ""
     instagram_access_token: str = ""
     ig_user_id: str = ""
     tiktok_ms_token: str = ""
