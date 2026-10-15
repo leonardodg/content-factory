@@ -60,6 +60,7 @@ nav:
       - 0005 Google scraping: adr/0005-trends-pytrends.md
       - 0006 Manter arq+Redis: adr/0006-manter-arq-redis.md
       - 0007 Política de retry: adr/0007-politica-retry-jobs.md
+      - 0008 SSRF TOCTOU adiado: adr/0008-ssrf-toctou-adiado.md
   - Arquitetura:
       - Visão geral: architecture/README.md
       - Estado e fases: architecture/estado-e-proximas-fases.md
