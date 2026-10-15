@@ -76,7 +76,14 @@ pós-implementação e achados A-1…A-7); plano:
   por SHA, `permissions`, Dependabot), D2 (ADR-0008), C2 (`cf ops-report`)
   e C3 (contrato único de envelopes; **parcial agora é `ok: true, partial:
   true` também no worker**; erro de segmento é `error: {code, message,
-  type}`). Dependabot abriu 8 PRs (#27–#34) — triagem pendente.
+  type}`). Os 8 PRs do Dependabot (#27–#34) foram mergeados um a um com
+  CI verde; o deploy do Pages com as actions novas passou.
+- **Trends corrigido (PR #37, 2026-10-15):** o 400 em 100% das runs vinha
+  de `timeframe="week"` (inválido) + ~145 keywords por consulta (limite 5).
+  Agora `today 12-m` e as 5 de maior peso; validado no Google real.
+- **Worker em produção (23:42 BRT de 14/10):** `main` `63544c6` — C2, C3,
+  Trends, Reels do Instagram e dependências novas. O research das 07:00 BRT
+  de 15/10 é o 1º com Trends válido; conferir no `cf ops-report`.
 - **Próximo:** **relatório diário** (1 linha por dia após o collect das
   20:00 BRT em [`manual/experimento-reativado.md`](manual/experimento-reativado.md)),
   D+3 (17/10) e D+7 (21/10, validação B3); depois C1–C3, D1–D2,
