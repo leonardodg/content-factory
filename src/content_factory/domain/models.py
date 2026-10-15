@@ -129,6 +129,14 @@ class CollectRun(BaseModel):
     persist_ms: int | None = None  # Task 4 (baseline): tempo de persistência (upsert)
 
 
+class MetricCoverage(BaseModel):
+    """Cobertura de métricas de uma plataforma no segmento (C2 `ops-report`)."""
+
+    videos: int
+    with_views: int  # último snapshot com views (base do B3)
+    with_two_snapshots: int  # ≥ 2 snapshots: dá para medir crescimento
+
+
 class ResearchCampaign(BaseModel):
     """Campanha de pesquisa "rodar diariamente por N semanas" — estado de
     fim-de-campanha persistido, porque o arq só tem cron recorrente sem fim."""
