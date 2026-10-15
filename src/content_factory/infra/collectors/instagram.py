@@ -1,4 +1,3 @@
-import json
 import logging
 from datetime import datetime
 from typing import Any, ClassVar, cast
@@ -51,8 +50,6 @@ class InstagramCollector:
         self._token = access_token
         self._user = ig_user_id
         self._client = httpx.AsyncClient(transport=transport, timeout=20)
-        self.app_usage = 0
-        self.gate_hits = 0
 
     async def _get(self, path: str, params: dict[str, str]) -> dict[str, Any] | None:
         """GET no Graph. None = gate #10 (Instagram Public Content Access) — o caller decide."""
@@ -63,9 +60,6 @@ class InstagramCollector:
         except httpx.HTTPError as exc:
             # redact: a URL de erro carrega access_token na query (spec §7)
             raise NetworkError(self.platform, redact(str(exc))) from exc
-        usage = r.headers.get("X-App-Usage", "")
-        if usage and "call_count" in usage:
-            self.app_usage = int(json.loads(usage).get("call_count", 0))
         if r.status_code in (400, 401):
             if self._is_public_content_gate(r):
                 # gate #10: App Review pendente — caller decide fallback (não é token)
@@ -145,7 +139,6 @@ class InstagramCollector:
         return await self._own_media_by_terms(keywords, limit)
 
     async def _own_media_by_terms(self, terms: list[str], limit: int) -> list[CandidateVideo]:
-        self.gate_hits += 1  # acumulado do singleton (leitura humana/legado)
         record_gate_hit()  # contagem por chamada (Etapa 1 Task 9)
         logger.warning("instagram: gate #10 (App Review pendente) — usando mídia própria")
         out: list[CandidateVideo] = []

@@ -277,7 +277,6 @@ async def test_discover_maps_fixture() -> None:
     assert out[0].views is None  # limitação documentada (ADR-0003)
     assert out[0].likes == 5400 and out[0].comments == 130
     assert out[0].url.startswith("https://www.instagram.com/p/")
-    assert c.app_usage == 10
 
 
 @pytest.mark.asyncio
@@ -461,10 +460,8 @@ async def test_gate_increments_gate_hits_counter() -> None:
     c = InstagramCollector(
         access_token="t", ig_user_id="42", transport=httpx.MockTransport(_gate_route)
     )
-    assert c.gate_hits == 0
     with counting() as hits:
         await c.discover(SEG, limit=5)
-    assert c.gate_hits == 1
     assert hits.gate_hits == 1  # Etapa 1 Task 9: também conta por chamada
 
 
@@ -523,3 +520,20 @@ async def test_aclose_closes_http_client_and_is_idempotent() -> None:
     await c.aclose()
     await c.aclose()
     assert c._client.is_closed  # pyright: ignore[reportPrivateUsage]
+
+
+async def test_discover_does_not_mutate_shared_instance_state() -> None:
+    """Auditoria E-4.2: o coletor é singleton compartilhado entre segmentos.
+
+    Estado por chamada vai em `call_counters` (ContextVar); `app_usage` e
+    `gate_hits` eram atributos mutáveis sem leitor — nem a hashtag nem o
+    fallback de mídia própria podem mudar o estado da instância.
+    """
+    for route in (_route, _gate_route):
+        c = InstagramCollector(
+            access_token="t", ig_user_id="42", transport=httpx.MockTransport(route)
+        )
+        before = dict(vars(c))
+        await c.discover(SEG, limit=5)
+        assert vars(c) == before
+        await c.aclose()
