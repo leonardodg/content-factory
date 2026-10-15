@@ -12,6 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from content_factory.app.collect import CollectDeps, CollectOutcome, collect
 from content_factory.app.ports import (
     CollectRunRepository,
+    OpsReportReader,
     ResearchCampaignRepository,
     SegmentRepository,
 )
@@ -431,6 +432,67 @@ def collect_timings_cmd(
         print(dumps(envelope_err("collect-timings", "internal_error", redact(str(exc)))))
         raise typer.Exit(exit_code_for(ok=False)) from exc
     print(dumps(envelope_ok("collect-timings", segment=segment, timings=timings)))
+    raise typer.Exit(exit_code_for(ok=True))
+
+
+@asynccontextmanager
+async def _ops_deps() -> AsyncGenerator[
+    tuple[SegmentRepository, CollectRunRepository, OpsReportReader]
+]:
+    """Deps do `ops-report` (C2): só Postgres, leitura."""
+    from content_factory.config import get_settings
+    from content_factory.infra.db.base import get_session_factory
+    from content_factory.infra.db.repositories import (
+        CollectRunRepositoryImpl,
+        OpsReportReaderImpl,
+        SegmentRepositoryImpl,
+    )
+
+    factory: async_sessionmaker[AsyncSession] = get_session_factory(get_settings())
+    async with factory() as session:
+        yield (
+            SegmentRepositoryImpl(session),
+            CollectRunRepositoryImpl(session),
+            OpsReportReaderImpl(session),
+        )
+
+
+async def _aops_report(segment_slug: str, hours: int) -> dict[str, Any]:
+    from content_factory.app.ops_report import build_ops_report
+
+    until = datetime.now(UTC)
+    since = until - timedelta(hours=hours)
+    async with _ops_deps() as (segments, runs, reader):
+        seg = await segments.get_by_slug(segment_slug)
+        return build_ops_report(
+            await runs.runs_since(seg.id, since),
+            await reader.metric_coverage(seg.id),
+            await reader.scored_since(seg.id, since),
+            since=since,
+            until=until,
+        )
+
+
+@app.command("ops-report")
+def ops_report_cmd(
+    segment: str = typer.Option(..., "--segment", help="slug do segmento"),
+    hours: int = typer.Option(24, "--hours", help="janela em horas (24 = relatório diário)"),
+) -> None:
+    """Relatório operacional (C2): runs por fonte, vazios, bloqueios, ticks e cobertura."""
+    try:
+        if hours < 1:
+            raise DomainError(f"--hours precisa ser >= 1 (recebido {hours})")
+        report = asyncio.run(_aops_report(segment, hours))
+    except SegmentNotFound as exc:
+        print(dumps(envelope_err("ops-report", "segment_not_found", redact(str(exc)))))
+        raise typer.Exit(exit_code_for(ok=False)) from exc
+    except DomainError as exc:
+        print(dumps(envelope_err("ops-report", "usage_error", redact(str(exc)))))
+        raise typer.Exit(exit_code_for(ok=False)) from exc
+    except Exception as exc:
+        print(dumps(envelope_err("ops-report", "internal_error", redact(str(exc)))))
+        raise typer.Exit(exit_code_for(ok=False)) from exc
+    print(dumps(envelope_ok("ops-report", segment=segment, hours=hours, report=report)))
     raise typer.Exit(exit_code_for(ok=True))
 
 
