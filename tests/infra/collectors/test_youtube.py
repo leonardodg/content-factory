@@ -53,7 +53,7 @@ async def test_discover_by_keywords_builds_query_and_returns_videos() -> None:
     assert len(captured) == 1
     assert "candle making" in captured[0]
     assert "DIY candle" in captured[0]
-    assert "#velas" in captured[0]
+    assert '"velas"' in captured[0]  # `#` sai, frase entre aspas
 
 
 @pytest.mark.asyncio
@@ -221,3 +221,36 @@ async def test_aclose_closes_http_client_and_is_idempotent() -> None:
     await c.aclose()
     await c.aclose()
     assert c._client.is_closed  # pyright: ignore[reportPrivateUsage]
+
+
+@pytest.mark.parametrize(
+    ("terms", "expected"),
+    [
+        (
+            ["vela artesanal", "vela artesanal aromatica"],
+            '"vela artesanal" OR "vela artesanal aromatica"',
+        ),
+        (["#velas", 'vela "soja"'], '"velas" OR "vela soja"'),
+        (["  ", "candle"], '"candle"'),
+    ],
+)
+def test_or_query_quotes_each_phrase(terms: list[str], expected: str) -> None:
+    """Busca real 2026-10-15: frases sem aspas unidas por OR → 0 resultados;
+    com aspas → 10 (mesmos 5 termos do research de velas-artesanais)."""
+    from content_factory.infra.collectors.youtube import or_query
+
+    assert or_query(terms) == expected
+
+
+@pytest.mark.asyncio
+async def test_discover_sends_quoted_or_query() -> None:
+    captured: list[str] = []
+
+    def _route(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/search"):
+            captured.append(request.url.params.get("q", ""))
+        return httpx.Response(200, json={"items": []})
+
+    c = YoutubeCollector(api_key="k", transport=httpx.MockTransport(_route))
+    await c.discover(SEG, limit=5)
+    assert captured == ['"candle making" OR "vela de soja"']
