@@ -254,3 +254,128 @@ async def test_discover_sends_quoted_or_query() -> None:
     c = YoutubeCollector(api_key="k", transport=httpx.MockTransport(_route))
     await c.discover(SEG, limit=5)
     assert captured == ['"candle making" OR "vela de soja"']
+
+
+def _capture_search(captured: list[dict[str, str]]) -> httpx.MockTransport:
+    def _route(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/search"):
+            captured.append(dict(request.url.params))
+        return httpx.Response(200, json={"items": []})
+
+    return httpx.MockTransport(_route)
+
+
+@pytest.mark.asyncio
+async def test_segment_search_is_sent_and_overrides_default() -> None:
+    """Locale do segmento (YAML) vai na busca e vence o padrão global."""
+    from content_factory.domain.models import SearchConfig
+
+    captured: list[dict[str, str]] = []
+    seg = SEG.model_copy(update={"search": SearchConfig(relevance_language="pt", region_code="BR")})
+    c = YoutubeCollector(
+        api_key="k",
+        transport=_capture_search(captured),
+        default_search=SearchConfig(relevance_language="en", region_code="US"),
+    )
+    await c.discover(seg, limit=5)
+    assert captured[0]["relevanceLanguage"] == "pt" and captured[0]["regionCode"] == "BR"
+
+
+@pytest.mark.asyncio
+async def test_default_search_applies_and_absent_locale_sends_nothing() -> None:
+    from content_factory.domain.models import SearchConfig
+
+    captured: list[dict[str, str]] = []
+    c = YoutubeCollector(
+        api_key="k",
+        transport=_capture_search(captured),
+        default_search=SearchConfig(region_code="BR"),
+    )
+    await c.discover(SEG, limit=5)
+    assert captured[0]["regionCode"] == "BR" and "relevanceLanguage" not in captured[0]
+    bare: list[dict[str, str]] = []
+    await YoutubeCollector(api_key="k", transport=_capture_search(bare)).discover(SEG, limit=5)
+    assert "regionCode" not in bare[0] and "relevanceLanguage" not in bare[0]
+
+
+@pytest.mark.asyncio
+async def test_discover_by_keywords_accepts_locale() -> None:
+    from content_factory.domain.models import SearchConfig
+
+    captured: list[dict[str, str]] = []
+    c = YoutubeCollector(api_key="k", transport=_capture_search(captured))
+    await c.discover_by_keywords(
+        ["vela"], [], 1, locale=SearchConfig(relevance_language="pt", region_code="BR")
+    )
+    assert captured[0]["relevanceLanguage"] == "pt" and captured[0]["regionCode"] == "BR"
+
+
+def test_settings_default_search_wires_into_collector(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Padrão global por env; vazio = sem restrição."""
+    from content_factory.config import Settings
+    from content_factory.infra.collectors import register_defaults, registry
+
+    monkeypatch.setenv("YOUTUBE_RELEVANCE_LANGUAGE", "pt")
+    monkeypatch.setenv("YOUTUBE_REGION_CODE", "BR")
+    register_defaults(Settings())
+    yt = registry.get("youtube")
+    assert isinstance(yt, YoutubeCollector)
+    assert yt.default_search is not None
+    assert (yt.default_search.relevance_language, yt.default_search.region_code) == ("pt", "BR")
+    monkeypatch.setenv("YOUTUBE_RELEVANCE_LANGUAGE", "")
+    monkeypatch.setenv("YOUTUBE_REGION_CODE", "")
+    register_defaults(Settings())
+    assert registry.get("youtube").default_search is None  # type: ignore[attr-defined]
+
+
+@pytest.mark.asyncio
+async def test_bind_segment_search_wraps_only_youtube_with_segment_locale() -> None:
+    """T3: o research recebe o YouTube amarrado ao locale do segmento.
+
+    O protocolo `SocialDiscoverer` não muda; sem locale no segmento, o mapa
+    original volta intacto (mesmos objetos).
+    """
+    from content_factory.domain.models import SearchConfig
+    from content_factory.infra.queue.composition import bind_segment_search
+
+    captured: list[dict[str, str]] = []
+    yt = YoutubeCollector(api_key="k", transport=_capture_search(captured))
+    other = object()
+    socials = {"youtube": yt, "instagram": other}
+    assert bind_segment_search(socials, SEG) is socials  # type: ignore[arg-type]
+
+    seg = SEG.model_copy(update={"search": SearchConfig(relevance_language="pt", region_code="BR")})
+    bound = bind_segment_search(socials, seg)  # type: ignore[arg-type]
+    assert bound["instagram"] is other
+    assert bound["youtube"].platform == "youtube"
+    await bound["youtube"].discover_by_keywords(["vela"], [], 1)
+    assert captured[0]["relevanceLanguage"] == "pt" and captured[0]["regionCode"] == "BR"
+
+
+@pytest.mark.asyncio
+async def test_search_order_is_configurable_and_defaults_to_view_count() -> None:
+    """Busca real 2026-10-15 (resina): com `order=viewCount` o YouTube ignora o
+    `relevanceLanguage` (1/10 vídeos em PT); com `relevance`, 9/10. A ordem
+    vira configurável; sem configuração continua `viewCount`."""
+    from content_factory.domain.models import SearchConfig
+
+    captured: list[dict[str, str]] = []
+    c = YoutubeCollector(api_key="k", transport=_capture_search(captured))
+    await c.discover(SEG, limit=5)
+    seg = SEG.model_copy(
+        update={
+            "search": SearchConfig(relevance_language="pt", region_code="BR", order="relevance")
+        }
+    )
+    await c.discover(seg, limit=5)
+    assert captured[0]["order"] == "viewCount"
+    assert captured[1]["order"] == "relevance"
+
+
+def test_search_order_rejects_unknown_value() -> None:
+    import pydantic
+
+    from content_factory.domain.models import SearchConfig
+
+    with pytest.raises(pydantic.ValidationError):
+        SearchConfig(order="date-desc")  # type: ignore[arg-type]

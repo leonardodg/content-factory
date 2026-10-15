@@ -101,8 +101,17 @@ rotação em [credentials](../dev/credentials.md).
   e `channels` (custo **1** unidade cada) por descoberta. Cota padrão da API:
   **10.000 unidades/dia** ≈ 100 descobertas/dia — **≈** a janela do limiter
   (100/24 h; na prática ~98, 102 U por descoberta). A busca cobre os keywords
-  do segmento (até 5, unidos
-  com `OR`), ordena por visualizações e restringe aos últimos 7 dias.
+  do segmento (até 5, cada um **entre aspas** e unidos com `OR`) e restringe
+  aos últimos 7 dias.
+- **Idioma, região e ordenação (configuráveis):** bloco `search` no YAML do
+  segmento (`relevance_language`, `region_code`, `order`), com padrão global
+  por env (`YOUTUBE_RELEVANCE_LANGUAGE`, `YOUTUBE_REGION_CODE`,
+  `YOUTUBE_SEARCH_ORDER`; vazio = sem restrição e `viewCount`). O do segmento
+  vence. **O idioma só tem efeito com `order: relevance`**: com `viewCount` o
+  YouTube ordena só por visualizações (medido em 2026-10-15: 1/10 vídeos em
+  PT × 9/10). Os 3 segmentos PT usam `pt`/`BR`/`relevance`. Mudou o YAML?
+  Rode `cf segment load segments/<slug>.yaml` (no host: a imagem do worker
+  não tem `segments/`).
 - **Credencial:** `YOUTUBE_API_KEY`.
 - **Erros:** `403` → `rate_limited` (cota esgotada ou chave/origem bloqueada);
   `HTTP ≥ 400` não mapeado, resposta não-JSON ou shape inesperado (inclusive

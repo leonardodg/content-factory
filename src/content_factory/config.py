@@ -18,6 +18,11 @@ class Settings(BaseSettings):
         return self
 
     youtube_api_key: str = ""
+    # padrão global da busca do YouTube; o `search` do segmento vence.
+    # Vazio = sem restrição.
+    youtube_relevance_language: str = ""
+    youtube_region_code: str = ""
+    youtube_search_order: str = ""  # viewCount|relevance|date|rating; vazio = viewCount
     instagram_access_token: str = ""
     ig_user_id: str = ""
     tiktok_ms_token: str = ""

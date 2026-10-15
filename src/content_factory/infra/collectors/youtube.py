@@ -6,7 +6,7 @@ import httpx
 
 from content_factory.app.call_counters import record_quota
 from content_factory.domain.errors import AuthExpired, NetworkError, RateLimited, UpstreamChanged
-from content_factory.domain.models import CandidateVideo, SegmentConfig
+from content_factory.domain.models import CandidateVideo, SearchConfig, SegmentConfig
 from content_factory.infra.redact import redact
 
 API = "https://www.googleapis.com/youtube/v3"
@@ -96,9 +96,16 @@ class YoutubeCollector:
     platform: ClassVar[str] = "youtube"
     COST_SEARCH, COST_LIST = 100, 1
 
-    def __init__(self, api_key: str, transport: httpx.AsyncBaseTransport | None = None) -> None:
+    def __init__(
+        self,
+        api_key: str,
+        transport: httpx.AsyncBaseTransport | None = None,
+        default_search: SearchConfig | None = None,
+    ) -> None:
         self._key = api_key
         self._client = httpx.AsyncClient(transport=transport, timeout=20)
+        # padrão global (Settings); o `search` do segmento vence (2026-10-15)
+        self.default_search = default_search
 
     async def _get(self, path: str, params: dict[str, str]) -> dict[str, Any]:
         if not self._key:
@@ -141,31 +148,40 @@ class YoutubeCollector:
         await self._client.aclose()
 
     async def discover(self, segment: SegmentConfig, limit: int) -> list[CandidateVideo]:
-        return await self._search(or_query(segment.keywords[:5]), limit)
+        locale = segment.search or self.default_search
+        return await self._search(or_query(segment.keywords[:5]), limit, locale)
 
     async def discover_by_keywords(
-        self, keywords: list[str], hashtags: list[str], depth: int
+        self,
+        keywords: list[str],
+        hashtags: list[str],
+        depth: int,
+        locale: SearchConfig | None = None,
     ) -> list[CandidateVideo]:
         """Busca por keywords+hashtags dinâmicas — mesmo fluxo de discover()."""
         _ = depth  # profundidade é controle do FanoutGuard, não da API
         terms = [*keywords, *hashtags][:5]  # API não aceita query enorme
-        return await self._search(or_query(terms), limit=25)
+        return await self._search(or_query(terms), 25, locale or self.default_search)
 
-    async def _search(self, q: str, limit: int) -> list[CandidateVideo]:
+    async def _search(
+        self, q: str, limit: int, search: SearchConfig | None = None
+    ) -> list[CandidateVideo]:
         after = (datetime.now(UTC) - timedelta(days=7)).strftime("%Y-%m-%dT%H:%M:%SZ")
-        search = await self._get(
-            "search",
-            {
-                "part": "snippet",
-                "q": q,
-                "type": "video",
-                "order": "viewCount",
-                "publishedAfter": after,
-                "maxResults": str(min(limit, 50)),
-            },
-        )
+        params = {
+            "part": "snippet",
+            "q": q,
+            "type": "video",
+            "order": (search.order if search is not None and search.order else "viewCount"),
+            "publishedAfter": after,
+            "maxResults": str(min(limit, 50)),
+        }
+        if search is not None and search.relevance_language:
+            params["relevanceLanguage"] = search.relevance_language
+        if search is not None and search.region_code:
+            params["regionCode"] = search.region_code
+        found = await self._get("search", params)
         record_quota(self.COST_SEARCH)  # por chamada → collect_runs.quota_used
-        items: Any = search.get("items")
+        items: Any = found.get("items")
         if not isinstance(items, list):
             raise UpstreamChanged(self.platform, "search sem items")
         entries = cast(list[Any], items)
@@ -220,3 +236,23 @@ class YoutubeCollector:
             thumbnail_url=sn.get("thumbnails", {}).get("default", {}).get("url"),
             raw=v,
         )
+
+
+class SearchBoundYoutube:
+    """YouTube do research amarrado ao `search` de um segmento.
+
+    O coletor é singleton entre segmentos; o locale vem do segmento, então a
+    composição por segmento embrulha o coletor (o protocolo `SocialDiscoverer`
+    fica intacto).
+    """
+
+    platform: ClassVar[str] = "youtube"
+
+    def __init__(self, inner: YoutubeCollector, locale: SearchConfig) -> None:
+        self._inner = inner
+        self._locale = locale
+
+    async def discover_by_keywords(
+        self, keywords: list[str], hashtags: list[str], depth: int
+    ) -> list[CandidateVideo]:
+        return await self._inner.discover_by_keywords(keywords, hashtags, depth, self._locale)

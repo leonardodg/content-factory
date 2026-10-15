@@ -34,6 +34,11 @@ leitura. A partir de D+1 a fonte é `cf ops-report --segment <slug>
   (`research:youtube` de velas e resina com `found = 0`; `collect` com 3).
   Com aspas, a mesma busca traz até o limite. No B3, o volume do YouTube
   antes e depois dessa data é reportado separadamente.
+- **YouTube restrito ao Brasil a partir de 15/10 (antes do collect das
+  08:00 BRT):** `search` por segmento (`pt`/`BR`, `order=relevance`). Nos
+  dados de 13–14/10 o topo de resina e velas tinha vídeos fora do nicho e em
+  inglês/espanhol. Esses dias ficam como **período de calibração**, fora do
+  B3.
 - **Viés de seleção do Trends (decisão de MVP, registrada):** o Trends é
   consultado só para as **5 keywords de maior peso do Suggest**, não para
   uma amostra independente do nicho. No B3, comparar com uma amostra

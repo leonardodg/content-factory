@@ -1,7 +1,24 @@
 from datetime import datetime
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field
+
+
+class SearchConfig(BaseModel):
+    """Busca do YouTube: idioma, região e ordenação (`relevanceLanguage`,
+    `regionCode`, `order`). `None` = padrão (sem restrição, `viewCount`).
+
+    Busca real 2026-10-15 (resina): com `order=viewCount` o YouTube ignora o
+    idioma (1/10 vídeos em PT); com `relevance`, 9/10. Idioma só tem efeito
+    com `order=relevance`. Não é filtro rígido de idioma.
+    """
+
+    relevance_language: str | None = None
+    region_code: str | None = None
+    order: Literal["viewCount", "relevance", "date", "rating"] | None = None
+
+    def is_empty(self) -> bool:
+        return not (self.relevance_language or self.region_code or self.order)
 
 
 class SegmentConfig(BaseModel):
@@ -14,6 +31,7 @@ class SegmentConfig(BaseModel):
     subnichos: dict[str, list[str]] = Field(default_factory=dict)
     audience: list[str] = Field(default_factory=list)  # vai p/ segments.config JSONB
     research: DepthConfig | None = None  # guard-rail do pipeline de pesquisa
+    search: SearchConfig | None = None  # idioma/região da busca (YAML)
 
 
 class Segment(SegmentConfig):

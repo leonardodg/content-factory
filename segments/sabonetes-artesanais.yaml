@@ -28,3 +28,10 @@ subnichos:
               melt and pour soap, soap making for beginners,
               homemade soap ideas]
 audience: [artesanato, saboaria, cosmética natural, empreendedorismo, DIY]
+# Busca do YouTube restrita ao Brasil (2026-10-15). O idioma só tem efeito
+# com order=relevance (com viewCount: 1/10 vídeos em PT; com relevance: 9/10).
+# Não é filtro rígido. Ver docs/ai-plans/2026-10-15-youtube-locale.md
+search:
+  relevance_language: pt
+  region_code: BR
+  order: relevance
