@@ -19,10 +19,10 @@ do idioma antes × depois).
 
 ## Tasks (TDD)
 
-- **T1** — domínio: `SearchLocale(relevance_language, region_code)` e
-  `SegmentConfig.search_locale` opcional (YAML → `segments.config` JSONB,
+- **T1** — domínio: `SearchConfig(relevance_language, region_code)` e
+  `SegmentConfig.search` opcional (YAML → `segments.config` JSONB,
   sem migração).
-- **T2** — `YoutubeCollector(default_locale=...)` passa os parâmetros na
+- **T2** — `YoutubeCollector(default_search=...)` passa os parâmetros na
   busca; `discover` usa o locale do segmento, `discover_by_keywords` aceita
   `locale`; padrão global de `Settings` (`YOUTUBE_RELEVANCE_LANGUAGE`,
   `YOUTUBE_REGION_CODE`, vazio = sem restrição).
@@ -30,3 +30,16 @@ do idioma antes × depois).
   do research (adaptador; protocolo `SocialDiscoverer` intacto).
 - **T4** — YAMLs dos 3 segmentos PT: `relevance_language: pt`,
   `region_code: BR`; `candles` sem restrição; `cf segment load` em produção.
+
+## Resultado medido na API real (2026-10-15)
+
+| Busca de `resina-artesanal` (pt/BR) | Vídeos em PT (de 10) |
+| --- | --- |
+| `order=viewCount` | 1 — o YouTube ignora o idioma; virais globais de "epoxy resin" |
+| `order=relevance` | 9 |
+
+Por isso a **ordenação também é configurável** (`SearchConfig.order`, padrão
+`viewCount`; env `YOUTUBE_SEARCH_ORDER`) e os 3 segmentos PT usam
+`relevance`. Com o YAML final: velas 7/10 títulos em PT (3 em espanhol),
+resina 7/10 com áudio declarado `pt`. O ranking por desempenho continua no
+score; a busca só escolhe **quais** vídeos entram.
