@@ -12,6 +12,7 @@ from sqlalchemy.orm import aliased
 from content_factory.app.ports import (
     CollectRunRepository,
     KeywordSignalRepository,
+    OpsReportReader,
     ResearchCampaignRepository,
     ScoreRepository,
     ScoreUpsertRow,
@@ -26,6 +27,7 @@ from content_factory.domain.models import (
     CandidateVideo,
     CollectRun,
     KeywordSignal,
+    MetricCoverage,
     ResearchCampaign,
     ScoreResult,
     Segment,
@@ -311,6 +313,80 @@ class CollectRunRepositoryImpl(CollectRunRepository):
                 "p95_persist_ms": float(p95_p) if p95_p is not None else None,
             }
         return stats
+
+    async def runs_since(self, segment_id: int, since: datetime) -> list[CollectRun]:
+        stmt = (
+            select(CollectRunRow)
+            .where(CollectRunRow.segment_id == segment_id, CollectRunRow.started_at > since)
+            .order_by(CollectRunRow.started_at, CollectRunRow.id)
+        )
+        rows = (await self._s.execute(stmt)).scalars().all()
+        return [
+            CollectRun(
+                collector=r.collector,
+                segment_id=r.segment_id,
+                status=r.status,
+                found=r.found,
+                inserted=r.inserted,
+                updated=r.updated,
+                failed=r.failed,
+                skipped=r.skipped,
+                quota_used=r.quota_used,
+                retries=r.retries,
+                error_code=r.error_code,
+                started_at=r.started_at,
+                finished_at=r.finished_at,
+                discover_ms=r.discover_ms,
+                persist_ms=r.persist_ms,
+            )
+            for r in rows
+        ]
+
+
+# views no ÚLTIMO snapshot e nº de snapshots por vídeo do segmento (C2)
+_COVERAGE_SQL = text(
+    """
+    SELECT v.platform,
+           count(*) AS videos,
+           count(*) FILTER (WHERE last.views IS NOT NULL) AS with_views,
+           count(*) FILTER (WHERE snaps.n >= 2) AS with_two_snapshots
+    FROM video_segments vs
+    JOIN videos v ON v.id = vs.video_id
+    LEFT JOIN LATERAL (
+        SELECT m.views FROM video_metrics m
+        WHERE m.video_id = v.id ORDER BY m.captured_at DESC, m.id DESC LIMIT 1
+    ) last ON true
+    LEFT JOIN LATERAL (
+        SELECT count(*) AS n FROM video_metrics m WHERE m.video_id = v.id
+    ) snaps ON true
+    WHERE vs.segment_id = :segment_id
+    GROUP BY v.platform
+    """
+)
+
+
+class OpsReportReaderImpl(OpsReportReader):
+    """Leituras do `cf ops-report` (C2): cobertura de métricas e scores."""
+
+    def __init__(self, session: AsyncSession) -> None:
+        self._s = session
+
+    async def metric_coverage(self, segment_id: int) -> dict[str, MetricCoverage]:
+        rows = (await self._s.execute(_COVERAGE_SQL, {"segment_id": segment_id})).all()
+        return {
+            str(platform): MetricCoverage(
+                videos=int(videos),
+                with_views=int(with_views),
+                with_two_snapshots=int(with_two),
+            )
+            for platform, videos, with_views, with_two in rows
+        }
+
+    async def scored_since(self, segment_id: int, since: datetime) -> int:
+        stmt = select(func.count(VideoScoreRow.id)).where(
+            VideoScoreRow.segment_id == segment_id, VideoScoreRow.computed_at > since
+        )
+        return int((await self._s.execute(stmt)).scalar_one())
 
 
 SCORE_UPSERT_BATCH_SIZE = 500

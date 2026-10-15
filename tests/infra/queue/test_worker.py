@@ -10,7 +10,7 @@ import pytest
 from content_factory.app.collect import CollectDeps, collect
 from content_factory.app.ports import Collector, UpsertReport
 from content_factory.app.research_pipeline import ResearchDeps
-from content_factory.app.score import ScoreDeps
+from content_factory.app.score import ScoreDeps, ScoreOutcome
 from content_factory.domain.errors import SegmentNotFound
 from content_factory.domain.fanout_guard import FanoutGuard
 from content_factory.domain.models import DepthConfig, ResearchCampaign, Segment
@@ -27,15 +27,11 @@ from tests.stubs import (
 )
 
 
-class _ScoreOk:
-    """Resultado fake do score com o contrato R5 (contagens + categorias)."""
+class _ScoreOk(ScoreOutcome):
+    """Resultado do score bem-sucedido (contrato R5/C3): ScoreOutcome real."""
 
-    ok: ClassVar[bool] = True
-    scored: ClassVar[int] = 3
-    processed: ClassVar[int] = 3
-    persisted: ClassVar[int] = 3
-    failed: ClassVar[int] = 0
-    failures: ClassVar[dict[str, int]] = {}
+    def __init__(self) -> None:
+        super().__init__(ok=True, partial=False, scored=3, processed=3)
 
 
 class CountingDeps:
@@ -278,7 +274,7 @@ async def test_run_collect_job_noop_when_no_active_segment(
     monkeypatch.setattr(w, "_load_settings", lambda: _collect_cfg([], 10))
     campaigns = _FakeCampaignsMultiSegment(slugs=[])
     out = await w.run_collect_job({"campaigns_deps": campaigns, "app_deps": _NoopAppDeps()})
-    assert out == {"ok": True, "segments": {}}
+    assert out == {"ok": True, "partial": False, "segments": {}}
 
 
 async def test_run_collect_job_platforms_fall_back_to_segment(
@@ -345,7 +341,7 @@ async def test_run_collect_job_isolates_segment_exception(
     assert calls == ["velas", "sabonetes"]  # ambos tentados, 1 não trava o outro
     assert out["ok"] is False
     assert out["segments"]["velas"]["ok"] is False
-    assert "boom" in out["segments"]["velas"]["error"]
+    assert "boom" in out["segments"]["velas"]["error"]["message"]
     assert out["segments"]["sabonetes"] == {"ok": True, "partial": False, "found": 1}
     assert committed == ["commit"]  # só sabonetes comitou
     assert rolled_back == ["rollback"]  # velas sofreu rollback, não trava a sessão
@@ -372,9 +368,11 @@ async def test_run_score_job_processes_all_active_segments(
     assert calls == ["velas", "sabonetes"]
     assert out == {
         "ok": True,
+        "partial": False,
         "segments": {
             "velas": {
                 "ok": True,
+                "partial": False,
                 "scored": 3,
                 "processed": 3,
                 "persisted": 3,
@@ -383,6 +381,7 @@ async def test_run_score_job_processes_all_active_segments(
             },
             "sabonetes": {
                 "ok": True,
+                "partial": False,
                 "scored": 3,
                 "processed": 3,
                 "persisted": 3,
@@ -402,22 +401,18 @@ async def test_run_score_job_envelope_carries_score_diagnostic(
     async def fake_score(deps: ScoreDeps) -> object:
         _ = deps
 
-        class _Partial:
-            ok = False
-            scored = 2
-            processed = 3
-            persisted = 2
-            failed = 1
-            failures: ClassVar[dict[str, int]] = {"data_error": 1}
-
-        return _Partial()
+        return ScoreOutcome(
+            ok=False, partial=True, scored=2, processed=3, failed=1, failures={"data_error": 1}
+        )
 
     monkeypatch.setattr(w, "_score_impl", fake_score)
     campaigns = _FakeCampaignsMultiSegment(slugs=["velas"])
     app_deps = _FakeAppDeps([], [])
     out = await w.run_score_job({"campaigns_deps": campaigns, "app_deps": app_deps})
+    # C3: gravou 2 de 3 = sucesso parcial (mesmo envelope da CLI)
     assert out["segments"]["velas"] == {
-        "ok": False,
+        "ok": True,
+        "partial": True,
         "scored": 2,
         "processed": 3,
         "persisted": 2,
@@ -454,9 +449,10 @@ async def test_run_score_job_isolates_segment_exception(
     assert calls == ["velas", "sabonetes"]
     assert out["ok"] is False
     assert out["segments"]["velas"]["ok"] is False
-    assert "boom" in out["segments"]["velas"]["error"]
+    assert "boom" in out["segments"]["velas"]["error"]["message"]
     assert out["segments"]["sabonetes"] == {
         "ok": True,
+        "partial": False,
         "scored": 3,
         "processed": 3,
         "persisted": 3,
@@ -484,7 +480,7 @@ async def test_run_score_job_noop_when_no_active_segment(
             "app_deps": _NoopAppDeps(),
         }
     )
-    assert out == {"ok": True, "segments": {}}
+    assert out == {"ok": True, "partial": False, "segments": {}}
     assert calls == []
 
 
@@ -603,7 +599,7 @@ async def test_run_research_job_noop_when_no_active_segment(
     monkeypatch.setattr(w, "_research_impl", fake_research)
     campaigns = _FakeCampaignsMultiSegment(slugs=[])
     out = await w.run_research_job({"campaigns_deps": campaigns, "app_deps": _NoopAppDeps()})
-    assert out == {"ok": True, "segments": {}}
+    assert out == {"ok": True, "partial": False, "segments": {}}
     assert calls == []
 
 
@@ -673,6 +669,7 @@ async def test_run_research_job_processes_all_active_segments(
     assert guard_allows_depth4 == [True, False]
     assert out == {
         "ok": True,
+        "partial": False,
         "segments": {
             "velas": {"ok": True, "partial": False, "web_found": 3},
             "sabonetes": {"ok": True, "partial": False, "web_found": 3},
@@ -728,7 +725,7 @@ async def test_run_research_job_isolates_segment_exception(
     assert calls == ["velas", "sabonetes"]
     assert out["ok"] is False
     assert out["segments"]["velas"]["ok"] is False
-    assert "boom" in out["segments"]["velas"]["error"]
+    assert "boom" in out["segments"]["velas"]["error"]["message"]
     assert out["segments"]["sabonetes"] == {"ok": True, "partial": False, "web_found": 3}
     assert committed == ["commit"]
     assert rolled_back == ["rollback"]
@@ -952,8 +949,8 @@ async def test_failed_segment_logs_error_with_traceback_and_error_type(
         out = await w.run_collect_job({"campaigns_deps": campaigns, "app_deps": app_deps})
     assert out["segments"]["velas"] == {
         "ok": False,
-        "error": "boom",
-        "error_type": "RuntimeError",
+        "partial": False,
+        "error": {"code": "internal_error", "message": "boom", "type": "RuntimeError"},
     }
     errors = [r for r in caplog.records if r.levelno == logging.ERROR and "velas" in r.getMessage()]
     assert len(errors) == 1
@@ -1210,7 +1207,7 @@ async def test_run_collect_job_concurrent_failure_keeps_other_commits(
     assert set(out["segments"]) == {"velas", "sabonetes", "resina"}
     assert out["ok"] is False
     assert out["segments"]["velas"]["ok"] is False
-    assert "boom" in out["segments"]["velas"]["error"]
+    assert "boom" in out["segments"]["velas"]["error"]["message"]
     assert out["segments"]["sabonetes"]["ok"] is True
     assert out["segments"]["resina"]["ok"] is True
     assert committed == ["commit", "commit"]
@@ -1554,8 +1551,8 @@ async def test_score_job_batch_failure_reaches_envelope_and_rolls_back(
     out = await w.run_score_job({"campaigns_deps": campaigns, "app_deps": _AppDeps()})
     assert out["segments"]["velas"] == {
         "ok": False,
-        "error": "conexão caiu",
-        "error_type": "RuntimeError",
+        "partial": False,
+        "error": {"code": "internal_error", "message": "conexão caiu", "type": "RuntimeError"},
     }
     assert committed == []
     assert rolled_back == ["rollback"]

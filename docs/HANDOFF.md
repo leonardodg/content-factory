@@ -72,6 +72,11 @@ pós-implementação e achados A-1…A-7); plano:
   Coletor corrigido para Reels reais (`recent_media`, campos válidos,
   hashtag normalizada, só vídeo — plano `ai-plans/2026-10-15-instagram-reels.md`);
   ativação = trocar `INSTAGRAM_ACCESS_TOKEN` + rebuild + fumaça.
+- **Segunda auditoria externa (2026-10-15):** E-4.2 limpo, D1 (actions
+  por SHA, `permissions`, Dependabot), D2 (ADR-0008), C2 (`cf ops-report`)
+  e C3 (contrato único de envelopes; **parcial agora é `ok: true, partial:
+  true` também no worker**; erro de segmento é `error: {code, message,
+  type}`). Dependabot abriu 8 PRs (#27–#34) — triagem pendente.
 - **Próximo:** **relatório diário** (1 linha por dia após o collect das
   20:00 BRT em [`manual/experimento-reativado.md`](manual/experimento-reativado.md)),
   D+3 (17/10) e D+7 (21/10, validação B3); depois C1–C3, D1–D2,

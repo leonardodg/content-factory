@@ -3,7 +3,8 @@
 Relatório diário do teste reativado, conforme o §Cadência do
 [plano de revisão sênior](../ai-plans/2026-10-14-content-factory-revisao-senior.md):
 **1 linha por dia**, levantada depois do collect das 20:00 BRT, só com
-leitura (`collect_runs`, chaves `cf:cb:*` do Redis, log do worker).
+leitura. A partir de D+1 a fonte é `cf ops-report --segment <slug>
+--hours 24` (um por segmento), mais `ERROR` no log do worker.
 
 - **Janela:** 3 segmentos (`velas-artesanais`, `sabonetes-artesanais`,
   `resina-artesanal`) até **2026-10-21 19:20 UTC**.

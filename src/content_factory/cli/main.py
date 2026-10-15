@@ -4,7 +4,7 @@ from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Any
+from typing import Any, NoReturn
 
 import typer
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -12,9 +12,11 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from content_factory.app.collect import CollectDeps, CollectOutcome, collect
 from content_factory.app.ports import (
     CollectRunRepository,
+    OpsReportReader,
     ResearchCampaignRepository,
     SegmentRepository,
 )
+from content_factory.app.results import collect_result, score_result
 from content_factory.app.score import ScoreDeps, ScoreOutcome, score
 from content_factory.cli.output import dumps, envelope_err, envelope_ok, exit_code_for
 from content_factory.domain.errors import CollectorError, DomainError, SegmentNotFound
@@ -23,6 +25,17 @@ from content_factory.infra.logs import configure_logging
 from content_factory.infra.redact import redact
 
 app = typer.Typer(no_args_is_help=True)
+
+
+def _emit(command: str, result: dict[str, Any]) -> NoReturn:
+    """C3: envelope = `command` + o resultado do caso de uso (o mesmo do worker).
+
+    Exit: 0 ok, 2 ok parcial, 1 falha (`error.code` obrigatório).
+    """
+    print(dumps({"ok": result["ok"], "command": command, **result}))
+    raise typer.Exit(exit_code_for(ok=bool(result["ok"]), partial=bool(result.get("partial"))))
+
+
 segment_app = typer.Typer()
 app.add_typer(segment_app, name="segment")
 research_app = typer.Typer(no_args_is_help=True)
@@ -150,20 +163,7 @@ def collect_cmd(
         print(dumps(envelope_err("collect", "internal_error", redact(str(exc)))))
         raise typer.Exit(exit_code_for(ok=False)) from exc
 
-    if outcome.partial:
-        print(dumps(envelope_ok("collect", partial=True, **outcome.counts)))
-        raise typer.Exit(exit_code_for(ok=True, partial=True))
-    if outcome.ok:
-        print(dumps(envelope_ok("collect", **outcome.counts)))
-        raise typer.Exit(exit_code_for(ok=True))
-    if "ja_em_execucao" in outcome.counts:
-        code = "ja_em_execucao"
-        message = f"coleta já em execução para o segmento {segment}"
-    else:
-        code = next((r.error_code for r in outcome.runs if r.error_code), "internal_error")
-        message = f"coleta falhou em {int(outcome.counts.get('failed', 0))} plataforma(s)"
-    print(dumps(envelope_err("collect", code, message)))
-    raise typer.Exit(exit_code_for(ok=False))
+    _emit("collect", collect_result(outcome))
 
 
 async def _aingest(url: str, segment: str | None) -> CandidateVideo:
@@ -256,25 +256,8 @@ def score_cmd(
         print(dumps(envelope_err("score", "internal_error", redact(str(exc)))))
         raise typer.Exit(exit_code_for(ok=False)) from exc
 
-    # R5: envelope do score é SÓ contagem/categoria (o porquê da linha está
-    # no log do repo, já redigido pelo handler) — `scored` fica como nome
-    # legado de `persisted` para os contratos/documentação antigos.
-    counts: dict[str, Any] = {
-        "scored": outcome.scored,
-        "processed": outcome.processed,
-        "persisted": outcome.persisted,
-        "failed": outcome.failed,
-        "failures": outcome.failures,
-    }
-    if outcome.partial:
-        print(dumps(envelope_ok("score", partial=True, **counts)))
-        raise typer.Exit(exit_code_for(ok=True, partial=True))
-    if outcome.ok:
-        print(dumps(envelope_ok("score", **counts)))
-        raise typer.Exit(exit_code_for(ok=True))
-    msg = f"falha ao gravar scores de {segment}"
-    print(dumps(envelope_err("score", "internal_error", redact(msg), **counts)))
-    raise typer.Exit(exit_code_for(ok=False))
+    # R5/C3: só contagem/categoria — mesmo resultado do score_job do worker
+    _emit("score", score_result(outcome))
 
 
 @app.command("ping")
@@ -431,6 +414,67 @@ def collect_timings_cmd(
         print(dumps(envelope_err("collect-timings", "internal_error", redact(str(exc)))))
         raise typer.Exit(exit_code_for(ok=False)) from exc
     print(dumps(envelope_ok("collect-timings", segment=segment, timings=timings)))
+    raise typer.Exit(exit_code_for(ok=True))
+
+
+@asynccontextmanager
+async def _ops_deps() -> AsyncGenerator[
+    tuple[SegmentRepository, CollectRunRepository, OpsReportReader]
+]:
+    """Deps do `ops-report` (C2): só Postgres, leitura."""
+    from content_factory.config import get_settings
+    from content_factory.infra.db.base import get_session_factory
+    from content_factory.infra.db.repositories import (
+        CollectRunRepositoryImpl,
+        OpsReportReaderImpl,
+        SegmentRepositoryImpl,
+    )
+
+    factory: async_sessionmaker[AsyncSession] = get_session_factory(get_settings())
+    async with factory() as session:
+        yield (
+            SegmentRepositoryImpl(session),
+            CollectRunRepositoryImpl(session),
+            OpsReportReaderImpl(session),
+        )
+
+
+async def _aops_report(segment_slug: str, hours: int) -> dict[str, Any]:
+    from content_factory.app.ops_report import build_ops_report
+
+    until = datetime.now(UTC)
+    since = until - timedelta(hours=hours)
+    async with _ops_deps() as (segments, runs, reader):
+        seg = await segments.get_by_slug(segment_slug)
+        return build_ops_report(
+            await runs.runs_since(seg.id, since),
+            await reader.metric_coverage(seg.id),
+            await reader.scored_since(seg.id, since),
+            since=since,
+            until=until,
+        )
+
+
+@app.command("ops-report")
+def ops_report_cmd(
+    segment: str = typer.Option(..., "--segment", help="slug do segmento"),
+    hours: int = typer.Option(24, "--hours", help="janela em horas (24 = relatório diário)"),
+) -> None:
+    """Relatório operacional (C2): runs por fonte, vazios, bloqueios, ticks e cobertura."""
+    try:
+        if hours < 1:
+            raise DomainError(f"--hours precisa ser >= 1 (recebido {hours})")
+        report = asyncio.run(_aops_report(segment, hours))
+    except SegmentNotFound as exc:
+        print(dumps(envelope_err("ops-report", "segment_not_found", redact(str(exc)))))
+        raise typer.Exit(exit_code_for(ok=False)) from exc
+    except DomainError as exc:
+        print(dumps(envelope_err("ops-report", "usage_error", redact(str(exc)))))
+        raise typer.Exit(exit_code_for(ok=False)) from exc
+    except Exception as exc:
+        print(dumps(envelope_err("ops-report", "internal_error", redact(str(exc)))))
+        raise typer.Exit(exit_code_for(ok=False)) from exc
+    print(dumps(envelope_ok("ops-report", segment=segment, hours=hours, report=report)))
     raise typer.Exit(exit_code_for(ok=True))
 
 

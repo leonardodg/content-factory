@@ -9,6 +9,7 @@ from content_factory.domain.models import (
     CandidateVideo,
     CollectRun,
     KeywordSignal,
+    MetricCoverage,
     ResearchCampaign,
     ScoreResult,
     Segment,
@@ -151,6 +152,22 @@ class CollectRunRepository(Protocol):
         Janela do `cf collect-timings`: `{plataforma: {n, avg/p95 de cada fase}}`.
         NULLs (runs pré-instrumentação) são ignorados nas médias.
         """
+        ...
+
+    async def runs_since(self, segment_id: int, since: datetime) -> list[CollectRun]:
+        """Runs do segmento iniciadas depois de `since`, em ordem de início (C2)."""
+        ...
+
+
+class OpsReportReader(Protocol):
+    """Leituras agregadas do `cf ops-report` (C2) — só Postgres."""
+
+    async def metric_coverage(self, segment_id: int) -> dict[str, MetricCoverage]:
+        """Por plataforma: vídeos do segmento, com views no último snapshot e com ≥ 2."""
+        ...
+
+    async def scored_since(self, segment_id: int, since: datetime) -> int:
+        """Scores calculados para o segmento depois de `since`."""
         ...
 
 
