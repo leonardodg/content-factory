@@ -61,6 +61,17 @@ def _error_reasons(response: httpx.Response) -> list[str]:
     return [*_reasons_of(err.get("errors")), *_reasons_of(err.get("details"))]
 
 
+def or_query(terms: list[str]) -> str:
+    """Termos → `"frase 1" OR "frase 2"` (frase exata entre aspas, sem `#`).
+
+    Busca real 2026-10-15 (research de velas-artesanais): as 5 frases do
+    Suggest unidas por `OR` SEM aspas voltavam 0 resultados; com aspas, 10.
+    Aspas internas e `#` saem; termo vazio é ignorado.
+    """
+    phrases = [" ".join(t.replace('"', "").removeprefix("#").split()) for t in terms]
+    return " OR ".join(f'"{p}"' for p in phrases if p)
+
+
 def _duration_seconds(iso: str) -> int | None:
     m = DURATION_RE.fullmatch(iso)
     if not m:
@@ -130,8 +141,7 @@ class YoutubeCollector:
         await self._client.aclose()
 
     async def discover(self, segment: SegmentConfig, limit: int) -> list[CandidateVideo]:
-        q = " OR ".join(segment.keywords[:5])
-        return await self._search(q, limit)
+        return await self._search(or_query(segment.keywords[:5]), limit)
 
     async def discover_by_keywords(
         self, keywords: list[str], hashtags: list[str], depth: int
@@ -139,8 +149,7 @@ class YoutubeCollector:
         """Busca por keywords+hashtags dinâmicas — mesmo fluxo de discover()."""
         _ = depth  # profundidade é controle do FanoutGuard, não da API
         terms = [*keywords, *hashtags][:5]  # API não aceita query enorme
-        q = " OR ".join(terms)
-        return await self._search(q, limit=25)
+        return await self._search(or_query(terms), limit=25)
 
     async def _search(self, q: str, limit: int) -> list[CandidateVideo]:
         after = (datetime.now(UTC) - timedelta(days=7)).strftime("%Y-%m-%dT%H:%M:%SZ")

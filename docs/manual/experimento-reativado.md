@@ -29,6 +29,11 @@ leitura. A partir de D+1 a fonte é `cf ops-report --segment <slug>
 - **Trends:** válido a partir do research de **15/10 07:00 BRT** (PR #37);
   antes disso, 100% `upstream_changed` por defeito de código. A semana
   corrente (`isPartial`) não entra na série (auditoria 3, N-2).
+- **YouTube: busca corrigida a partir de 15/10 ~00:10 BRT.** Frases unidas
+  por `OR` sem aspas faziam a busca do YouTube voltar 0 ou poucos vídeos
+  (`research:youtube` de velas e resina com `found = 0`; `collect` com 3).
+  Com aspas, a mesma busca traz até o limite. No B3, o volume do YouTube
+  antes e depois dessa data é reportado separadamente.
 - **Viés de seleção do Trends (decisão de MVP, registrada):** o Trends é
   consultado só para as **5 keywords de maior peso do Suggest**, não para
   uma amostra independente do nicho. No B3, comparar com uma amostra
