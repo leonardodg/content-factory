@@ -1,6 +1,7 @@
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from typing import Any
 
 from content_factory.app.ports import ScoreRepository, ScoreUpsertRow, VideoRepository
 from content_factory.domain.models import Segment, VideoSnapshot
@@ -57,6 +58,16 @@ class ScoreOutcome:
     def persisted(self) -> int:
         """Mesmo valor de `scored` — o nome novo da contagem de gravadas."""
         return self.scored
+
+    def as_counts(self) -> dict[str, Any]:
+        """Contagens do envelope — fonte única para CLI e worker (A-5, C3)."""
+        return {
+            "scored": self.scored,
+            "processed": self.processed,
+            "persisted": self.persisted,
+            "failed": self.failed,
+            "failures": dict(self.failures),
+        }
 
 
 def relevance_of(snap: VideoSnapshot, keywords: list[str]) -> float:
