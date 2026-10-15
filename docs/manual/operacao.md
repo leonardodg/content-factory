@@ -100,7 +100,7 @@ O que procurar:
   `status`/`error_code` (queries em [Análise](analise.md));
 - **exceção não tratada no job** (bug): capturada POR SEGMENTO dentro da task
   do TaskGroup e registrada no envelope
-  (`segments: {slug: {ok: false, error, error_type}}`) — a UoW do segmento
+  (`segments: {slug: {ok: false, partial: false, error: {code, message, type}}}`) — a UoW do segmento
   reverte sozinha (`session_scope`), as irmãs commitam normal. O arq marca
   o job como concluído (`●`) mesmo com `ok: false`: o sinal de falha é o
   registro `ERROR` com traceback no log (`segmento <slug> falhou em
@@ -116,7 +116,7 @@ O que procurar:
 - **erro de infraestrutura na persistência** (ex.: conexão caiu no upsert;
   erro de DADO de 1 candidato já é isolado por savepoint): propaga ORIGINAL
   em collect, research e score (Etapa 1). A UoW do segmento reverte, o
-  envelope traz `{ok: false, error, error_type}` e o log traz o traceback.
+  envelope traz `{ok: false, error: {code, message, type}}` e o log traz o traceback (contrato em `architecture/contrato-envelopes.md`).
   Antes, a gravação da run num `finally` (ou o `scored=0` do score) trocava
   a causa por um `PendingRollbackError`;
 - `RuntimeError` no startup (guard multi-segmento): `COLLECT_SEGMENT` está

@@ -157,6 +157,9 @@ class _FakeRuns:
             raise NotImplementedError("configure via FakeRepos(..., timing_stats={...})")
         return {k: dict(v) for k, v in self._timing_stats.items()}
 
+    async def runs_since(self, segment_id: int, since: datetime) -> list[CollectRun]:
+        return [r for r in self.recorded if r.segment_id == segment_id and r.started_at > since]
+
 
 class FakeRepos:
     """Tripla de repositórios em memória (videos/segments/runs)."""
