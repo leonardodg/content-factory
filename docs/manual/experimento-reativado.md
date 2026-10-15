@@ -8,9 +8,16 @@ leitura (`collect_runs`, chaves `cf:cb:*` do Redis, log do worker).
 - **Janela:** 3 segmentos (`velas-artesanais`, `sabonetes-artesanais`,
   `resina-artesanal`) até **2026-10-21 19:20 UTC**.
 - **Linha de base (D0):** ✅ ok, mas parcial: sem TikTok (`auth_expired`).
-- **Sinal real hoje:** YouTube, web e Suggest. O Instagram sai `ok` com a
-  mídia da própria conta (gate #10, App Review pendente) e fica fora do
-  limiar "runs ok ≥ 90%"; Trends e TikTok falham em 100% das runs.
+- **Fontes com sinal real:** YouTube, web e Suggest desde D0. Trends e
+  TikTok falham em 100% das runs.
+- **Troca de fonte do Instagram — 2026-10-14 22:50 BRT (01:50 UTC de
+  15/10):** até aí, mídia da própria conta (gate #10), fora do limiar
+  "runs ok ≥ 90%". Desde então, **Reels reais da hashtag** do segmento
+  (`recent_media`, app Meta próprio; conta de consulta provisória:
+  conta de terceiro, a trocar por conta do operador). Entre 22:47 e 22:50 BRT
+  as runs saíram `auth_expired` (`IG_USER_ID` inválido). **No B3, o
+  Instagram entra só com dados a partir da troca**, reportado à parte por
+  ter janela menor.
 
 ## Linhas diárias
 
