@@ -122,6 +122,13 @@ class YoutubeCollector:
             raise UpstreamChanged(self.platform, "JSON com shape inesperado")
         return cast(dict[str, Any], raw)
 
+    async def aclose(self) -> None:
+        """Fecha o AsyncClient no shutdown do worker (auditoria externa 4.1).
+
+        Idempotente: o httpx ignora o 2º `aclose` de um cliente já fechado.
+        """
+        await self._client.aclose()
+
     async def discover(self, segment: SegmentConfig, limit: int) -> list[CandidateVideo]:
         q = " OR ".join(segment.keywords[:5])
         return await self._search(q, limit)
