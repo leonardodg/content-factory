@@ -58,8 +58,9 @@ pós-implementação e achados A-1…A-7); plano:
   N-1…N-6 em `REVISAO_2026-10-14.md`. N-1/N-2 (classificação de erro do
   YouTube pelos reasons reais da API) e N-3 (tick manual com `_job_id`)
   corrigidos; deploy do worker entre o score das 21:30 e o research das
-  07:00 BRT. **Ressalva do B3:** Instagram usa mídia própria (gate #10),
-  então fica fora do limiar "runs ok ≥ 90%".
+  07:00 BRT. **Ressalva do B3 (atualizada):** até 14/10 22:50 BRT o
+  Instagram usava mídia própria (gate #10); desde então coleta Reels reais
+  da hashtag — no B3 entra só a partir da troca, à parte.
 - **Auditoria externa (2026-10-15):** E-4.1 (clientes HTTP fechados no
   shutdown), E-4.2 (contrato dos singletons), E-4.3 (WARNING de web vazio
   ambíguo + `web_empty` no diário) e E-4.4 (README) corrigidos; registro

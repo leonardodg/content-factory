@@ -14,6 +14,10 @@ def assert_public_http(url: str) -> None:
 
     Bloqueia IP privado/loopback/link-local (incl. metadata 169.254.169.254)/
     multicast/reserved/unspecified/CGNAT. Levanta `DomainError` — nunca rede.
+
+    Limite conhecido: o httpx resolve o DNS de novo ao conectar (TOCTOU /
+    DNS rebinding). Aceito enquanto o ingest for CLI local com URL do
+    operador — ver ADR-0008 antes de expor o ingest a automação ou rede.
     """
     parsed = urlparse(url)
     if parsed.scheme not in {"http", "https"} or not parsed.hostname:

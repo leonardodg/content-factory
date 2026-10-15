@@ -141,8 +141,8 @@ rotação em [credentials](../dev/credentials.md).
 - **Credencial:** `INSTAGRAM_ACCESS_TOKEN` + `IG_USER_ID`.
 - **Erros:** `400`/`401` → `auth_expired` (token errado/expirado); `HTTP ≥
   400` demais, não-JSON ou JSON inesperado → `upstream_changed`; rede →
-  `network`. O header `X-App-Usage` é **só informativo** (o coletor lê o
-  `call_count`, não reage a ele).
+  `network`. O header `X-App-Usage` **não é lido**: o coletor não guarda
+  estado entre chamadas (contrato dos singletons).
 - **Segredo:** a Graph API recebe o token na query string; por isso o erro de
   rede do Instagram passa por `redact` antes de virar mensagem, e a CLI
   redige as mensagens de erro de `collect`/`ingest`/`score`/`status` antes de
