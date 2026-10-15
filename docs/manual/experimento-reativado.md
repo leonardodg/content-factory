@@ -16,7 +16,10 @@ leitura (`collect_runs`, chaves `cf:cb:*` do Redis, log do worker).
 
 Legenda: contagens `ok/failed/blocked` por coletor nas 12 runs do collect
 das 20:00 BRT (3 segmentos × 4 coletores); research = runs `research:*` do
-dia; breakers = chaves `cf:cb:*:blocked` abertas.
+dia; breakers = chaves `cf:cb:*:blocked` abertas; **`web_empty`** = runs
+`web` `ok` com `found = 0`, a partir de D+1. Esse número é **ambíguo**: o
+`ddgs` não distingue busca sem resultado de engine bloqueada (403/429),
+porque devolve vazio sem exceção nos dois casos (auditoria externa 4.3).
 
 | Dia | Collect 20:00 BRT (ok/failed/blocked) | Research do dia | Breakers | `ERROR` no log | Notas |
 | --- | --- | --- | --- | --- | --- |

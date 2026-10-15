@@ -1580,3 +1580,87 @@ def test_job_timeouts_are_explicit_and_below_lock_ttl() -> None:
     assert funcs == expected
     assert crons == expected
     assert max(expected.values()) < DEFAULT_TTL_S
+
+
+class _ClosingCollector:
+    """Coletor fake com `aclose` (auditoria externa 4.1)."""
+
+    def __init__(self, platform: str, log: list[str], *, fail: bool = False) -> None:
+        self.platform = platform
+        self._log = log
+        self._fail = fail
+
+    async def discover(self, segment: object, limit: int) -> list[object]:
+        return []
+
+    async def aclose(self) -> None:
+        self._log.append(self.platform)
+        if self._fail:
+            raise RuntimeError(f"{self.platform} falhou ao fechar")
+
+
+class _FakeRegistry:
+    def __init__(self, collectors: list[_ClosingCollector]) -> None:
+        self._by_name = {c.platform: c for c in collectors}
+
+    def snapshot(self) -> dict[str, _ClosingCollector]:
+        return dict(self._by_name)
+
+    def resolve(self, names: list[str]) -> list[_ClosingCollector]:
+        return [self._by_name[n] for n in names]
+
+
+async def test_close_closes_every_collector_once_even_if_one_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Auditoria externa 4.1: clientes HTTP dos coletores fechados no shutdown.
+
+    Falha ao fechar um coletor não impede os outros nem o dispose do engine.
+    """
+    import content_factory.infra.collectors as collectors_mod
+    from content_factory.config import Settings
+
+    closed: list[str] = []
+    _, session_factory = _recording_sessions()
+    engine = _patch_composition(monkeypatch, session_factory)
+    monkeypatch.setattr(
+        collectors_mod,
+        "registry",
+        _FakeRegistry(
+            [
+                _ClosingCollector("youtube", closed),
+                _ClosingCollector("instagram", closed, fail=True),
+                _ClosingCollector("web", closed),
+            ]
+        ),
+    )
+    deps = await w.create_app_deps(Settings())
+    await deps.close()
+    await deps.close()  # 2º close é no-op
+    assert sorted(closed) == ["instagram", "web", "youtube"]
+    assert engine.disposed == 1
+
+
+async def test_startup_failure_after_registry_closes_collectors(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Auditoria externa 4.1: startup que falha depois do registry não vaza clientes."""
+    import content_factory.infra.collectors as collectors_mod
+    import content_factory.infra.ratelimit as ratelimit_mod
+    from content_factory.config import Settings
+
+    closed: list[str] = []
+    _, session_factory = _recording_sessions()
+    engine = _patch_composition(monkeypatch, session_factory)
+    monkeypatch.setattr(
+        collectors_mod, "registry", _FakeRegistry([_ClosingCollector("youtube", closed)])
+    )
+
+    def _boom(_client: object) -> None:
+        raise RuntimeError("limiter quebrado")
+
+    monkeypatch.setattr(ratelimit_mod, "RedisRateLimiter", _boom)
+    with pytest.raises(RuntimeError, match="limiter quebrado"):
+        await w.create_app_deps(Settings())
+    assert closed == ["youtube"]
+    assert engine.disposed == 1

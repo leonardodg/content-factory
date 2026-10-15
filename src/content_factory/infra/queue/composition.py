@@ -5,6 +5,7 @@ segmento, 1 UoW cada) e `compose_app_deps`. Não lê env: o worker lê as
 variáveis no startup e passa os valores.
 """
 
+import logging
 from collections.abc import AsyncGenerator, Awaitable, Callable
 from contextlib import AsyncExitStack, asynccontextmanager
 from dataclasses import dataclass
@@ -30,6 +31,8 @@ from content_factory.config import Settings
 from content_factory.domain.fanout_guard import FanoutGuard
 from content_factory.domain.models import DepthConfig, ResearchCampaign, Segment
 from content_factory.infra.redis_ops import RedisOps
+
+logger = logging.getLogger(__name__)
 
 
 def _campaign_repo(session: AsyncSession) -> ResearchCampaignRepository:
@@ -179,6 +182,14 @@ class AppDeps(SegmentDepsFactory):
             )
 
 
+async def _close_quietly(platform: str, closer: Callable[[], Awaitable[None]]) -> None:
+    """Fecha um coletor sem derrubar o shutdown dos demais (auditoria externa 4.1)."""
+    try:
+        await closer()
+    except Exception:
+        logger.warning("falha ao fechar o coletor %s no shutdown", platform, exc_info=True)
+
+
 async def compose_app_deps(
     settings: Settings,
     *,
@@ -229,16 +240,24 @@ async def compose_app_deps(
             await stack.aclose()
 
         register_defaults(settings)
+        collectors = registry.resolve(list(registry.snapshot()))
+        # auditoria externa 4.1: coletores com cliente HTTP próprio (YouTube,
+        # Instagram) fecham no shutdown — e também se o startup falhar daqui
+        # em diante. Cada um isolado; rodam antes do dispose do engine (LIFO).
+        for collector in collectors:
+            closer = getattr(collector, "aclose", None)
+            if closer is not None:
+                stack.push_async_callback(_close_quietly, collector.platform, closer)
         # socials: só collectors que implementam discover_by_keywords (Fase C+)
-        socials: dict[str, SocialDiscoverer] = {}
-        for name in registry.snapshot():
-            collector = registry.resolve([name])[0]
-            if hasattr(collector, "discover_by_keywords"):
-                socials[name] = collector  # type: ignore[assignment]
+        socials: dict[str, SocialDiscoverer] = {
+            collector.platform: collector  # type: ignore[misc]
+            for collector in collectors
+            if hasattr(collector, "discover_by_keywords")
+        }
         limiter = RedisRateLimiter(shared_client)
         return AppDeps(
             shared=SharedDeps(
-                collectors=registry.resolve(list(registry.snapshot())),
+                collectors=collectors,
                 socials=socials,
                 web=WebSuggestProvider(),
                 trends=TrendsGoogleProvider(),

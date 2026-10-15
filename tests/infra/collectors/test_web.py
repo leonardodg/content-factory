@@ -85,6 +85,24 @@ async def test_discover_no_results_found_returns_empty(
 
 
 @pytest.mark.asyncio
+async def test_empty_result_logs_ambiguity_warning(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Auditoria externa 4.3: vazio do ddgs é ambíguo e fica visível no log.
+
+    O `ddgs` devolve `None` para status != 200 sem exceção (base.py) e só então
+    levanta "No results found": vazio legítimo e engine bloqueada (403/429)
+    não se distinguem. A run segue `ok`/`found=0`, mas com WARNING.
+    """
+    import logging
+
+    monkeypatch.setattr(web_mod, "DDGS", lambda: BoomDDGS(DDGSException("No results found.")))
+    with caplog.at_level(logging.WARNING, logger=web_mod.__name__):
+        assert await WebCollector().discover(SEG, limit=5) == []
+    assert any("ambígua" in r.getMessage() for r in caplog.records)
+
+
+@pytest.mark.asyncio
 async def test_discover_ratelimit_maps_to_rate_limited(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

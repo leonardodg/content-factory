@@ -451,3 +451,11 @@ async def test_discover_by_keywords_uses_union_of_keywords_and_hashtags() -> Non
     out = await c.discover_by_keywords(keywords=["sabonete"], hashtags=["#vela"], depth=1)
     ids = {v.platform_video_id for v in out}
     assert ids == {"18001", "18002"}  # ambos batem: "vela" (hashtag sem #) + "sabonete"
+
+
+async def test_aclose_closes_http_client_and_is_idempotent() -> None:
+    """Auditoria externa 4.1: o AsyncClient do coletor é fechado no shutdown."""
+    c = InstagramCollector("t", "u", transport=httpx.MockTransport(_route))
+    await c.aclose()
+    await c.aclose()
+    assert c._client.is_closed  # pyright: ignore[reportPrivateUsage]

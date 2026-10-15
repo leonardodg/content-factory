@@ -212,3 +212,12 @@ def test_register_defaults_registers_youtube() -> None:
 
     register_defaults(Settings(youtube_api_key="k"))
     assert isinstance(registry.get("youtube"), YoutubeCollector)
+
+
+@pytest.mark.asyncio
+async def test_aclose_closes_http_client_and_is_idempotent() -> None:
+    """Auditoria externa 4.1: o AsyncClient do coletor é fechado no shutdown."""
+    c = YoutubeCollector(api_key="k", transport=httpx.MockTransport(lambda r: httpx.Response(200)))
+    await c.aclose()
+    await c.aclose()
+    assert c._client.is_closed  # pyright: ignore[reportPrivateUsage]

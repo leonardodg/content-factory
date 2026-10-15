@@ -10,7 +10,7 @@
 [![Python 3.14+](https://img.shields.io/badge/python-3.14+-3776ab.svg)](https://www.python.org/)
 [![pgvector](https://img.shields.io/badge/Postgres-pgvector-336791.svg)](https://github.com/pgvector/pgvector)
 [![arq](https://img.shields.io/badge/queue-arq%20%2B%20Redis-d82c20.svg)](https://arq-docs.helpmanual.io/)
-[![Tests](https://img.shields.io/badge/tests-360%20passing-1de9d6.svg)](tests/)
+[![CI](https://github.com/leonardodg/content-factory/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/leonardodg/content-factory/actions/workflows/ci.yml)
 [![Types](https://img.shields.io/badge/pyright-strict-2f73bf.svg)](pyproject.toml)
 
 **[Documentation](https://leonardodg.github.io/content-factory/)** ·
@@ -62,7 +62,7 @@ only a JSON envelope (`{"ok": ...}`); the data lives in Postgres.
     with an ownership token per segment.
 - 🔒 **Secrets never in the clear.** Tokens come from `/run/secrets`, and
   logs and envelopes are redacted. A privacy gate runs in CI.
-- ✅ **360 tests, pyright strict, bandit, pip-audit.** Integration tests run
+- ✅ **Tests, pyright strict, bandit, pip-audit — all gated in CI.** Integration tests run
   against disposable Postgres/Redis, and CI runs them with real services.
 
 ---
@@ -105,7 +105,7 @@ only a JSON envelope (`{"ok": ...}`); the data lives in Postgres.
 ### Quality
 | Technology | Role |
 |---|---|
-| **pytest** | 360 tests; integration against disposable Postgres/Redis |
+| **pytest** | Unit + integration against disposable Postgres/Redis (count: see the CI run) |
 | **ruff** | Lint + format |
 | **pyright** | Strict type checking, 0 errors |
 | **bandit** + **pip-audit** | Security linting and dependency CVE scanning |

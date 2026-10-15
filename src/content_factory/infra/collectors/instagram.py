@@ -79,6 +79,13 @@ class InstagramCollector:
         message = str(error.get("message", "")).casefold()
         return error.get("code") == 10 and "public content access" in message
 
+    async def aclose(self) -> None:
+        """Fecha o AsyncClient no shutdown do worker (auditoria externa 4.1).
+
+        Idempotente: o httpx ignora o 2º `aclose` de um cliente já fechado.
+        """
+        await self._client.aclose()
+
     async def discover(self, segment: SegmentConfig, limit: int) -> list[CandidateVideo]:
         q = segment.keywords[0].replace("#", "") if segment.keywords else segment.slug
         search = await self._get("ig_hashtag_search", {"user_id": self._user, "q": q})
