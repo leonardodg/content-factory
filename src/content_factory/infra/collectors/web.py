@@ -1,5 +1,6 @@
 import asyncio
 import hashlib
+import logging
 from typing import ClassVar
 
 # classe real: o re-export `ddgs.DDGS` é proxy lazy — parcialmente Unknown p/ pyright
@@ -13,6 +14,8 @@ from content_factory.domain.errors import (
     UpstreamChanged,
 )
 from content_factory.domain.models import CandidateVideo, SegmentConfig
+
+logger = logging.getLogger(__name__)
 
 
 class WebCollector:
@@ -34,6 +37,13 @@ class WebCollector:
         except DDGSException as exc:
             raise_or_empty = _classify(self.platform, exc)
             if raise_or_empty is None:
+                # auditoria externa 4.3: o ddgs devolve None para status != 200
+                # sem exceção (base.py) — vazio legítimo e engine bloqueada
+                # (403/429) são indistinguíveis; não inventar classificação
+                logger.warning(
+                    "web: busca vazia (ambígua: sem resultado ou engines bloqueadas) — %s",
+                    segment.slug,
+                )
                 return []
             raise raise_or_empty from exc
         return [
