@@ -107,3 +107,22 @@ def test_coverage_and_scored_pass_through_with_ratios() -> None:
     assert out["scored"] == 42
     assert out["window"] == {"since": SINCE.isoformat(), "until": UNTIL.isoformat()}
     assert out["ticks"] == {"n": 0, "items": [], "wall_ms_max": None, "wall_ms_avg": None}
+
+
+def test_data_sufficiency_is_separate_from_ok_rate() -> None:
+    """Auditoria 3, N-3: ok com found=0 é sucesso operacional sem dado útil.
+
+    `ok_rate` não muda de semântica; `data_rate` (runs ok com found > 0 /
+    runs) e `found_avg_ok` (média de found nas runs ok) mostram a suficiência.
+    """
+    runs = [
+        _run("research:trends", found=0),
+        _run("research:trends", found=0),
+        _run("research:trends", found=10),
+        _run("research:trends", "failed", error_code="upstream_changed", found=0),
+    ]
+    trends = _report(runs)["collectors"]["research:trends"]
+    assert trends["ok_rate"] == 0.75
+    assert trends["data_runs"] == 1
+    assert trends["data_rate"] == 0.25
+    assert trends["found_avg_ok"] == round(10 / 3, 2)
