@@ -28,6 +28,13 @@ from content_factory.app.ports import (
     ResearchCampaignRepository,
 )
 from content_factory.app.research_pipeline import run_research_cycle
+from content_factory.app.results import (
+    collect_result,
+    exception_result,
+    job_result,
+    research_result,
+    score_result,
+)
 from content_factory.app.score import score
 from content_factory.config import Settings, get_settings
 from content_factory.domain.models import DepthConfig, Segment
@@ -147,14 +154,11 @@ async def _gather_segments(
             return await run_one(segment)
         except Exception as exc:
             logger.exception("segmento %s falhou em %s", segment.slug, job_name)
-            return {"ok": False, "error": redact(str(exc)), "error_type": type(exc).__name__}
+            return exception_result(exc, redact)
 
     outcomes = await bounded_gather(active, max_segments, _one)
     results = {segment.slug: outcome for segment, outcome in zip(active, outcomes, strict=True)}
-    return {
-        "ok": all(r["ok"] for r in results.values()) if results else True,
-        "segments": results,
-    }
+    return job_result(results)
 
 
 # hooks de teste: monkeypatch troca por fakes sem tocar no arq/banco
@@ -187,7 +191,7 @@ async def run_collect_job(ctx: dict[str, Any]) -> dict[str, Any]:
         async with app_deps.create_segment_deps(segment) as bundle:
             out = await _collect_impl(segment.slug, platforms, cfg["limit"], bundle.collect)
             await bundle.uow.commit()
-        return {"ok": out.ok, "partial": out.partial, **out.counts}
+        return collect_result(out)
 
     return await _gather_segments(active, _max_segments_from_env(), _one, "collect")
 
@@ -210,16 +214,8 @@ async def run_score_job(ctx: dict[str, Any]) -> dict[str, Any]:
         async with app_deps.create_segment_deps(segment) as bundle:
             out = await _score_impl(bundle.score)
             await bundle.uow.commit()
-        # R5: só contagens/categorias (a mensagem fica no log, redigida);
-        # `scored` é o nome legado de `persisted`
-        return {
-            "ok": out.ok,
-            "scored": out.scored,
-            "processed": out.processed,
-            "persisted": out.persisted,
-            "failed": out.failed,
-            "failures": out.failures,
-        }
+        # R5/C3: só contagens/categorias (a mensagem fica no log, redigida)
+        return score_result(out)
 
     return await _gather_segments(active, _max_segments_from_env(), _one, "score")
 
@@ -247,7 +243,7 @@ async def run_research_job(ctx: dict[str, Any]) -> dict[str, Any]:
         async with app_deps.create_segment_deps(segment) as bundle:
             out = await _research_impl(segment.slug, DepthConfig(), bundle.research)
             await bundle.uow.commit()
-        return {"ok": out.ok, "partial": out.partial, **out.counts}
+        return research_result(out)
 
     return await _gather_segments(active, _max_segments_from_env(), _one, "research")
 
