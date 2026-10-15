@@ -60,6 +60,14 @@ pós-implementação e achados A-1…A-7); plano:
   corrigidos; deploy do worker entre o score das 21:30 e o research das
   07:00 BRT. **Ressalva do B3:** Instagram usa mídia própria (gate #10),
   então fica fora do limiar "runs ok ≥ 90%".
+- **Auditoria externa (2026-10-15):** E-4.1 (clientes HTTP fechados no
+  shutdown), E-4.2 (contrato dos singletons), E-4.3 (WARNING de web vazio
+  ambíguo + `web_empty` no diário) e E-4.4 (README) corrigidos; registro
+  em `REVISAO_2026-10-14.md`. **App Meta próprio** (`content-factory`,
+  portfólio LDG Technology LTDA) criado e configurado (URLs legais,
+  permissões "Pronto para teste"); pendente: verificação da empresa
+  (usuário, 15/10), Provedor de Tecnologia, token novo, vídeo e envio —
+  procedimento em `manual/chaves-api.md` §2.1.
 - **Próximo:** **relatório diário** (1 linha por dia após o collect das
   20:00 BRT em [`manual/experimento-reativado.md`](manual/experimento-reativado.md)),
   D+3 (17/10) e D+7 (21/10, validação B3); depois C1–C3, D1–D2,
