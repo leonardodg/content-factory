@@ -123,3 +123,12 @@ def test_protocol_roundtrip() -> None:
     assert proto.segment_slug == "velas-artesanais"
     assert proto.queries == protocols
     assert proto.seed == QUERY_SEED
+
+
+def test_classify_intent_matches_whole_words_only() -> None:
+    assert classify_intent("ferro de passar resina") is None  # "erro" em "ferro"
+    assert classify_intent("peça incomoda na resina") is None  # "moda" em "incomoda"
+    assert classify_intent("acomodar velas na caixa") is None  # "como" em "acomodar"
+    assert classify_intent("vela não acende") == "resolver"
+    assert classify_intent("resina passo a passo") == "aprender"
+    assert classify_intent("vela dá dinheiro?") == "comercial"

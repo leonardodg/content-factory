@@ -60,7 +60,7 @@ async def web_rank(
     max_per_domain: int | None = None,
 ) -> WebRankOutcome:
     pages = await repo.pages_for_segment(segment.id, list(segment.keywords))
-    scored = [web_score(p) for p in pages]
+    scored = [web_score(p, now=now) for p in pages]
     kept, _dropped = dedupe_titles(scored)
     rows = [
         WebPageScoreRow(

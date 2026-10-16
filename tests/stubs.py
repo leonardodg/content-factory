@@ -264,21 +264,24 @@ class FakeWebScores(WebScoreRepository):
         self._pages = list(pages or [])
         self._hits = list(hits or [])
         self.appended: list[WebPageScoreRow] = []
+        self.until_asked: list[datetime | None] = []
 
-    async def pages_for_segment(self, segment_id: int, keywords: list[str]) -> list[WebPageInput]:
+    async def pages_for_segment(
+        self, segment_id: int, keywords: list[str], *, until: datetime | None = None
+    ) -> list[WebPageInput]:
         _ = segment_id, keywords
+        self.until_asked.append(until)
         return list(self._pages)
 
     async def append_scores(self, rows: Sequence[WebPageScoreRow]) -> int:
         self.appended.extend(rows)
         return len(rows)
 
-    async def latest_scores(self, segment_id: int) -> dict[int, float | None]:
+    async def hits_for_segment(
+        self, segment_id: int, *, until: datetime | None = None
+    ) -> list[WebSearchHit]:
         _ = segment_id
-        return {}
-
-    async def hits_for_segment(self, segment_id: int) -> list[WebSearchHit]:
-        _ = segment_id
+        self.until_asked.append(until)
         return list(self._hits)
 
 

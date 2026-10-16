@@ -90,21 +90,6 @@ def _rebuild(order: Sequence[str], sampled: Sequence[str]) -> list[str]:
     return out
 
 
-def bootstrap_interval(
-    values: Sequence[float],
-    *,
-    resamples: int = BOOTSTRAP_RESAMPLES,
-    seed: int = BOOTSTRAP_SEED,
-    alpha: float = 0.05,
-) -> tuple[float, float]:
-    """IC percentil 95% de uma estatística sobre reamostragens bootstrap."""
-    if not values:
-        raise ValueError("bootstrap de lista vazia")
-    rng = random.Random(seed)  # nosec B311 - reprodução por seed fixa
-    stats = sorted(rng.choice(values) for _ in range(resamples))
-    return _percentile(stats, alpha / 2), _percentile(stats, 1 - alpha / 2)
-
-
 def precision_interval(
     ranking: Sequence[str],
     relevant: Mapping[str, bool],

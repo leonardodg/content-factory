@@ -19,6 +19,7 @@ from content_factory.app.ports import (
 from content_factory.app.score import ScoreOutcome
 from content_factory.app.web_eval import WebEvalReport
 from content_factory.app.web_rank import WebRankOutcome
+from content_factory.app.web_sample import WebSampleRun
 from content_factory.cli.main import app, main
 from content_factory.domain.errors import CollectorError, SegmentNotFound
 from content_factory.domain.models import CollectRun, MetricCoverage, Segment, SegmentConfig
@@ -789,10 +790,12 @@ def test_web_rank_envelope_with_compare_and_explain(monkeypatch: pytest.MonkeyPa
 def test_web_sample_envelope(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     import json
 
-    async def _fake(segment: str, seed: int, out: Path) -> int:
-        _ = segment, seed
+    as_of = datetime(2026, 10, 19, 23, 0, tzinfo=UTC)
+
+    async def _fake(segment: str, seed: int, out: Path, allow_incomplete: bool) -> WebSampleRun:
+        _ = segment, seed, allow_incomplete
         out.write_text("item_id\n", encoding="utf-8")
-        return 3
+        return WebSampleRun(rows=3, as_of=as_of, missing_queries=[])
 
     monkeypatch.setattr("content_factory.cli.main._aweb_sample", _fake)
     out_path = tmp_path / "sample.csv"
@@ -801,7 +804,31 @@ def test_web_sample_envelope(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) ->
     assert result.exit_code == 0, result.stdout
     out = json.loads(result.stdout)
     assert out["command"] == "web-sample" and out["rows"] == 3
+    # a data de corte da amostra sai no envelope: é o --as-of do web-eval
+    assert out["as_of"] == as_of.isoformat()
     assert out_path.exists()
+
+
+def test_web_sample_refuses_incomplete_query_cycle(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    import json
+
+    async def _fake(segment: str, seed: int, out: Path, allow_incomplete: bool) -> WebSampleRun:
+        _ = segment, seed, out, allow_incomplete
+        return WebSampleRun(
+            rows=0, as_of=datetime(2026, 10, 19, tzinfo=UTC), missing_queries=["q1:seed:00"]
+        )
+
+    monkeypatch.setattr("content_factory.cli.main._aweb_sample", _fake)
+    result = runner.invoke(
+        app, ["web-sample", "--segment", "velas", "--out", str(tmp_path / "s.csv")]
+    )
+
+    assert result.exit_code != 0
+    out = json.loads(result.stdout)
+    assert out["ok"] is False and out["error"]["code"] == "incomplete_cycle"
+    assert "q1:seed:00" in out["error"]["message"]
 
 
 def test_web_eval_envelope_without_ranking_by_default(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -822,15 +849,42 @@ def test_web_eval_envelope_without_ranking_by_default(monkeypatch: pytest.Monkey
         ranking_base=["https://b.example"],
     )
 
-    async def _fake(segment: str, csv_path: Path) -> WebEvalReport:
+    seen: list[datetime] = []
+
+    async def _fake(segment: str, csv_path: Path, as_of: datetime) -> WebEvalReport:
         _ = segment, csv_path
+        seen.append(as_of)
         return report
 
     monkeypatch.setattr("content_factory.cli.main._aweb_eval", _fake)
-    result = runner.invoke(app, ["web-eval", "--segment", "velas", "--csv", "x.csv"])
+    result = runner.invoke(
+        app,
+        [
+            "web-eval",
+            "--segment",
+            "velas",
+            "--csv",
+            "x.csv",
+            "--as-of",
+            "2026-10-19T23:00:00+00:00",
+        ],
+    )
 
     assert result.exit_code == 0, result.stdout
     out = json.loads(result.stdout)
     assert out["command"] == "web-eval" and out["verdict"] == "aprovado"
     assert out["p5"] == {"point": 0.8, "low": 0.6, "high": 1.0, "n": 45}
     assert "ranking_v1" not in out  # rankings só com --explain
+    assert seen == [datetime(2026, 10, 19, 23, 0, tzinfo=UTC)]
+
+
+def test_web_eval_requires_timezone_aware_as_of() -> None:
+    import json
+
+    result = runner.invoke(
+        app,
+        ["web-eval", "--segment", "velas", "--csv", "x.csv", "--as-of", "2026-10-19T23:00"],
+    )
+
+    assert result.exit_code != 0
+    assert json.loads(result.stdout)["error"]["code"] == "usage_error"

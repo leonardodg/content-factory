@@ -10,7 +10,11 @@ vídeos.
 ## O que o anotador recebe
 
 `cf web-sample --segment <slug> --out docs/data/web-eval/<slug>.csv` gera um
-CSV com **50 linhas por segmento** e as colunas:
+CSV com **50 linhas por segmento** e as colunas abaixo. O comando recusa
+(`incomplete_cycle`) enquanto alguma consulta do protocolo `q1` não tiver
+nenhuma coleta: com 3 consultas por coleta, as 13 consultas pedem **5
+coletas** depois do deploy. Só use `--allow-incomplete` com o motivo
+registrado.
 
 | Coluna | Conteúdo |
 | --- | --- |
@@ -39,7 +43,10 @@ A amostra tem **três estratos** (não identificados na planilha):
 
 1. Abra o CSV na planilha. Mantenha `item_id` intacto.
 2. Preencha **`tema`**, **`intencao`** e **`utilidade`** com `0`, `1` ou `2`.
-3. Preencha **`invalido`** só quando o item não é uma página legítima.
+3. Preencha **`invalido`** só quando o item não é uma página legítima, com
+   um dos marcadores da tabela abaixo. Vazio, `0` ou `não` contam como
+   "válido"; qualquer outro texto (ex.: `anucio`) faz o `cf web-eval` recusar
+   o CSV com `usage_error`, em vez de virar "inválido" calado.
 4. Preencha **`motivo`** (uma frase) quando `tema ≤ 1` ou quando houver
    `invalido`.
 5. Salve com o mesmo nome; esse arquivo vai para o commit (é o registro da
@@ -111,6 +118,9 @@ anotadores. Opcional: um segundo anotador em 30 itens comuns daria um
 
 ## Depois de anotar
 
-`cf web-eval --segment <slug> --csv docs/data/web-eval/<slug>.csv` produz as
-métricas e o veredito, pelos critérios pré-registrados em
+`cf web-eval --segment <slug> --csv docs/data/web-eval/<slug>.csv --as-of <as_of>`
+produz as métricas e o veredito. `<as_of>` é o campo `as_of` do envelope do
+`cf web-sample` (data de corte com fuso): a avaliação lê os hits como estavam
+na hora da amostra, então coletas posteriores não mudam o resultado. Registre
+o `as_of` junto do CSV. Os critérios estão pré-registrados em
 [Validação web](validacao-web.md).

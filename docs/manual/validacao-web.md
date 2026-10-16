@@ -25,6 +25,14 @@ Seeds fixas: sorteio de consultas `20261017`, amostra `20261019`, bootstrap
 Duas funções ordenam **exatamente o mesmo conjunto**: os itens `kept`
 anotados do segmento, excluindo o estrato de descartados. O desempate é
 fixo por `video_id`. Nenhum ranking enxerga um candidato que o outro não viu.
+Na avaliação **não** há remoção de títulos repetidos (`dedupe_titles` escolhe
+o representante pelo próprio score e daria conjuntos diferentes a cada lado).
+Páginas de anúncio gravadas antes do filtro `ads-v1` ficam fora do conjunto.
+
+A avaliação é **reprodutível**: `cf web-eval --as-of` lê só os hits com
+`collected_at <= as_of` (o `as_of` do envelope do `cf web-sample`) e usa esse
+instante como relógio do componente `atualidade`. A amostra só é gerada com o
+ciclo `q1` completo (todas as consultas com ao menos uma coleta).
 
 - **`base-fase-h`** — cópia congelada da regra atual (o `viral_score` com
   métricas ausentes + `relevance_of` + `recency`). Se o score de vídeo mudar

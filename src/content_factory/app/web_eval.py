@@ -7,12 +7,16 @@ segmento (exclui o estrato de descartados). O empate é desfeito por
 
 import csv
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 
 from content_factory.app.ports import WebScoreRepository
 from content_factory.app.web_rank import rank_baseline
+from content_factory.domain.errors import DomainError
 from content_factory.domain.models import Segment
+from content_factory.domain.text import normalize
 from content_factory.domain.web_eval import (
+    INVALID_MARKERS,
     Interval,
     WebAnnotation,
     filter_coverage,
@@ -25,11 +29,35 @@ from content_factory.domain.web_queries import INTENT_ORDER
 from content_factory.domain.web_relevance import (
     WebPageInput,
     WebScore,
-    dedupe_titles,
     web_score,
 )
 
 ANNOTATION_HEADER = ["item_id", "tema", "intencao", "utilidade", "invalido", "motivo"]
+
+# célula de `invalido` que significa "NÃO é inválido" (o anotador escreveu algo
+# para dizer "válido"); comparado após `normalize`
+_NOT_INVALID = frozenset({"", "0", "nao", "n", "no", "false", "valido", "ok"})
+
+
+class InvalidAnnotation(DomainError):
+    """Célula de anotação fora do protocolo (erro de digitação, marcador novo)."""
+
+
+def _invalid_marker(cell: str | None, item_id: str) -> str | None:
+    """Marcador de inválido do protocolo, `None` (válido) ou erro.
+
+    Só os marcadores de `INVALID_MARKERS` invalidam o item; "0"/"não"/vazio
+    dizem que ele é válido. Qualquer outra coisa (ex.: "anucio") é rejeitada
+    em vez de virar "inválido" calado e mudar o veredito.
+    """
+    norm = normalize(cell or "")
+    if norm in _NOT_INVALID:
+        return None
+    if norm in INVALID_MARKERS:
+        return norm
+    raise InvalidAnnotation(
+        f"invalido={cell!r} em {item_id}: use vazio ou um de {', '.join(INVALID_MARKERS)}"
+    )
 
 
 @dataclass
@@ -68,7 +96,7 @@ def read_annotations(path: Path) -> dict[str, WebAnnotation]:
             tema = (rec.get("tema") or "").strip()
             if not item_id or tema == "":
                 continue
-            invalido = (rec.get("invalido") or "").strip() or None
+            invalido = _invalid_marker(rec.get("invalido"), item_id)
             annotations[item_id] = WebAnnotation(
                 item_id=item_id,
                 tema=_label_int(tema),
@@ -92,14 +120,20 @@ async def web_evaluate(
     segment: Segment,
     repo: WebScoreRepository,
     annotations: dict[str, WebAnnotation],
+    *,
+    as_of: datetime,
 ) -> WebEvalReport:
-    pages = await repo.pages_for_segment(segment.id, list(segment.keywords))
+    """Avaliação pareada com os dados como estavam em `as_of` (data da amostra).
+
+    Sem `dedupe_titles` aqui: ele escolhe o representante pelo próprio score,
+    então cada função ficaria com páginas diferentes. As duas ordenam
+    exatamente os mesmos itens anotados.
+    """
+    pages = await repo.pages_for_segment(segment.id, list(segment.keywords), until=as_of)
     by_url = {p.canonical_url: p for p in pages}
     url_by_video = {p.video_id: p.canonical_url for p in pages}
-    v1_kept, _ = dedupe_titles([web_score(p) for p in pages])
-    base_kept, _ = dedupe_titles(rank_baseline(pages))
-    v1_by_video = {s.video_id: s for s in v1_kept}
-    base_by_video = {s.video_id: s for s in base_kept}
+    v1_by_video = {p.video_id: web_score(p, now=as_of) for p in pages}
+    base_by_video = {s.video_id: s for s in rank_baseline(pages)}
 
     # só os itens `kept` anotados (o estrato de descartados não entra na comparação)
     annotated_kept = [item for item in annotations if item in by_url]

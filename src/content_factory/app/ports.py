@@ -142,14 +142,20 @@ class WebScoreRepository(Protocol):
     """
 
     async def pages_for_segment(
-        self, segment_id: int, keywords: list[str]
-    ) -> list[WebPageInput]: ...
+        self, segment_id: int, keywords: list[str], *, until: datetime | None = None
+    ) -> list[WebPageInput]:
+        """Páginas web do segmento, SEM as de anúncio (inclusive as antigas).
+
+        `until` corta os hits em `collected_at <= until` (avaliação na data da
+        amostra, reprodutível).
+        """
+        ...
 
     async def append_scores(self, rows: Sequence[WebPageScoreRow]) -> int: ...
 
-    async def latest_scores(self, segment_id: int) -> dict[int, float | None]: ...
-
-    async def hits_for_segment(self, segment_id: int) -> list[WebSearchHit]: ...
+    async def hits_for_segment(
+        self, segment_id: int, *, until: datetime | None = None
+    ) -> list[WebSearchHit]: ...
 
 
 class NoOpWebHitRepository:

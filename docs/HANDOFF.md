@@ -58,11 +58,31 @@ relatório **próprios** — nada muda em `viral_score`/`FORMULA_VERSION`/
   `base-fase-h` é **literal** (não chama `viral_score` vivo — congela de
   verdade); parsing tolerante dos rótulos no `web-eval`; `# nosec B311` nos
   sorteios por seed (bandit).
+- **Correções da revisão aprofundada (16/10, `/code-review` + manual):**
+  (1) `pages_for_segment` exclui páginas de anúncio antigas (gravadas antes do
+  F0; em produção, 12 das 15 páginas web de resina eram `bing.com/aclick`);
+  (2) `web-eval` sem `dedupe_titles` — as duas funções ordenam os MESMOS itens;
+  (3) `dedupe_titles` não perde mais páginas de título vazio; (4) `invalido`
+  só aceita os marcadores do protocolo (vazio/`0`/`não` = válido; outro texto
+  → `usage_error`); (5) léxico de intenção e `tema` casam por **palavra
+  inteira** (`domain/text.contains_phrase`: "ferro" não casa "erro"), e "não"
+  não conta como marcador no texto da página; (6) falha do score web no
+  `score_job` não perde o score de vídeos (commit antes, transação própria);
+  (7) `web_score(page, now=...)` — o domínio não lê o relógio; (8) `cf
+  web-eval --as-of` (obrigatório) corta os hits na data da amostra; (9) `cf
+  web-sample` recusa com `incomplete_cycle` se alguma consulta `q1` não tem
+  coleta e devolve `as_of` no envelope; (10) removidos `bootstrap_interval`
+  (IC errado, sem uso) e `latest_scores`.
+- **Operação da F2:** depois do deploy, as 13 consultas pedem 5 coletas (3 por
+  coleta). Com deploy na noite de 17/10, rodar um `cf collect` manual na
+  mesma noite (fora das janelas de cron) para a 5ª coleta cair no collect
+  das 20:00 de 19/10; sem ele, a amostra só sai depois do collect das 08:00
+  de 20/10.
 - **Pendente do usuário:** revisar e aprovar os
   `segments/web-queries/<slug>.q1.yaml` (só veto com motivo) antes do deploy.
 - **Infra de teste:** Postgres `cf-test-pg` (`127.0.0.1:55432`) e Redis
   `cf-test-redis` (`127.0.0.1:56379`); migração `0010` já aplicada no banco de
-  teste. Suíte completa: 549 passed (com `TEST_DATABASE_URL`/`TEST_REDIS_URL`).
+  teste. Suíte completa: 579 passed (com `TEST_DATABASE_URL`/`TEST_REDIS_URL`).
 
 _**Resiliência do worker e ranking por plataforma (2026-10-16).**_ Plano:
 `ai-plans/2026-10-16-worker-resiliencia-ranking.md`.

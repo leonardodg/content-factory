@@ -7,12 +7,12 @@ Tudo `None` dá score `None` — nunca 0. Nada aqui toca `viral_score`.
 
 from collections.abc import Sequence
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from datetime import datetime
 from typing import Any
 
 from content_factory.domain import web_queries
 from content_factory.domain.scoring import trend_decay
-from content_factory.domain.text import looks_like_domain, normalize
+from content_factory.domain.text import contains_phrase, looks_like_domain, normalize, word_tokens
 from content_factory.domain.web_urls import domain_of
 
 WEB_SCORE_VERSION = "web-v1"
@@ -30,6 +30,11 @@ WEB_WEIGHTS: dict[str, float] = {
 _TITLE_MIN = 15
 _TITLE_MAX = 120
 _SNIPPET_MIN = 60
+
+# Marcadores do léxico de intenção que NÃO provam intenção no texto da página:
+# "não" aparece em quase todo texto em PT. Na FRASE do Suggest ("vela não
+# acende") ele ainda classifica a consulta (`web_queries.classify_intent`).
+_PAGE_GENERIC_MARKERS = frozenset({"nao"})
 
 # Pesos/rótulos CONGELADOS de `base-fase-h`: literais de propósito. A linha de
 # base não pode referenciar `domain.scoring.WEIGHTS`/`viral_score` vivos — se a
@@ -70,7 +75,7 @@ class WebScore:
 def _theme_component(page: WebPageInput) -> tuple[float | None, dict[str, Any]]:
     if not page.keywords:
         return None, {"matched": []}
-    text = normalize(f"{page.title} {page.snippet}")
+    words = set(word_tokens(f"{page.title} {page.snippet}"))
     matched: list[str] = []
     seen: set[str] = set()
     for keyword in page.keywords:
@@ -78,8 +83,9 @@ def _theme_component(page: WebPageInput) -> tuple[float | None, dict[str, Any]]:
         if not norm or norm in seen:  # cada keyword conta UMA vez
             continue
         seen.add(norm)
-        parts = norm.split()
-        if all(part in text for part in parts):
+        parts = word_tokens(keyword)
+        # todas as palavras da keyword, cada uma INTEIRA (não substring)
+        if parts and all(part in words for part in parts):
             matched.append(keyword)
     return min(1.0, len(matched) / 2), {"matched": matched}
 
@@ -88,9 +94,11 @@ def _intent_component(page: WebPageInput) -> tuple[float | None, dict[str, Any]]
     intent = page.query_intent
     if intent not in web_queries.INTENT_ORDER:
         return None, {"intent": intent or None, "marker": None}
-    text = normalize(f"{page.title} {page.snippet}")
+    words = word_tokens(f"{page.title} {page.snippet}")
     for marker in web_queries.INTENT_LEXICON[intent]:
-        if normalize(marker) in text:
+        if normalize(marker) in _PAGE_GENERIC_MARKERS:
+            continue
+        if contains_phrase(words, marker):
             return 1.0, {"intent": intent, "marker": marker}
     return 0.0, {"intent": intent, "marker": None}
 
@@ -106,10 +114,9 @@ def _metadata_component(page: WebPageInput) -> tuple[float, dict[str, Any]]:
     return sum(1 for ok in checks.values() if ok) / len(checks), checks
 
 
-def _recency_component(page: WebPageInput) -> tuple[float | None, dict[str, Any]]:
+def _recency_component(page: WebPageInput, now: datetime) -> tuple[float | None, dict[str, Any]]:
     if page.published_at is None:
         return None, {"decay": "none"}
-    now = datetime.now(UTC)
     decay = trend_decay(page.published_at, now)
     return {"low": 1.0, "medium": 0.5, "high": 0.15, "none": 0.0}[decay], {"decay": decay}
 
@@ -122,12 +129,16 @@ def _position_component(page: WebPageInput) -> tuple[float | None, dict[str, Any
     return score, {"position": page.best_position, "total": page.total_positions}
 
 
-def web_score(page: WebPageInput) -> WebScore:
-    """Score `web-v1` com componentes e explicação por componente."""
+def web_score(page: WebPageInput, *, now: datetime) -> WebScore:
+    """Score `web-v1` com componentes e explicação por componente.
+
+    `now` entra por parâmetro (o domínio não lê o relógio): o mesmo dado e o
+    mesmo `now` dão sempre o mesmo score.
+    """
     tema, tema_x = _theme_component(page)
     intencao, intencao_x = _intent_component(page)
     metadados, metadados_x = _metadata_component(page)
-    atualidade, atualidade_x = _recency_component(page)
+    atualidade, atualidade_x = _recency_component(page, now)
     posicao, posicao_x = _position_component(page)
     components: dict[str, float | None] = {
         "tema": tema,
@@ -198,16 +209,21 @@ def dedupe_titles(scores: Sequence[WebScore]) -> tuple[list[WebScore], dict[int,
     """Título normalizado idêntico fica só com o de maior score.
 
     Devolve os mantidos e o mapa `descartado → mantido` (vai na `explanation`).
+    Título vazio não é duplicata de nada: fica sempre (nenhuma página some
+    sem rastro em `dropped`).
     """
-    kept: dict[str, WebScore] = {}
+    kept: list[WebScore] = []
+    by_title: dict[str, WebScore] = {}
     dropped: dict[int, int] = {}
     for item in sorted(scores, key=_rank_key):
         key = normalize(item.title)
-        if key and key in kept:
-            dropped[item.video_id] = kept[key].video_id
-        else:
-            kept[key] = item
-    return list(kept.values()), dropped
+        if key and key in by_title:
+            dropped[item.video_id] = by_title[key].video_id
+            continue
+        if key:
+            by_title[key] = item
+        kept.append(item)
+    return kept, dropped
 
 
 def select_top(

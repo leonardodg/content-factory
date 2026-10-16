@@ -536,6 +536,42 @@ async def test_run_score_job_skips_web_when_disabled(
     assert out["ok"] is True
 
 
+async def test_run_score_job_web_failure_keeps_video_score(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Item 6: erro no score web (experimental) não pode perder o score de vídeos."""
+    from content_factory.config import Settings
+
+    events: list[str] = []
+
+    async def fake_score(deps: ScoreDeps) -> object:
+        _ = deps
+        events.append("score")
+        return _ScoreOk()
+
+    async def boom(*args: object, **kwargs: object) -> object:
+        events.append("web")
+        raise RuntimeError("web_page_scores fora")
+
+    monkeypatch.setattr(w, "_score_impl", fake_score)
+    monkeypatch.setattr(w, "_web_rank_impl", boom)
+    monkeypatch.setattr(w, "get_settings", lambda: Settings(web_score_enabled=True))
+    committed: list[str] = []
+    rolled_back: list[str] = []
+    campaigns = _FakeCampaignsMultiSegment(slugs=["velas"])
+
+    out = await w.run_score_job(
+        {"campaigns_deps": campaigns, "app_deps": _FakeAppDeps(committed, rolled_back)}
+    )
+
+    assert out["ok"] is True
+    assert out["segments"]["velas"]["ok"] is True
+    # o score de vídeos foi commitado ANTES do score web
+    assert events == ["score", "web"]
+    assert committed[:1] == ["commit"]
+    assert rolled_back == ["rollback"]  # só a parte web foi revertida
+
+
 def test_cron_hours_parse() -> None:
     assert w.parse_cron_hours("08,20") == {8, 20}
     assert w.parse_cron_hours("") == {8, 20}  # default

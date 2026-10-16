@@ -11,7 +11,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import cast
 
-from content_factory.domain.text import normalize
+from content_factory.domain.text import contains_phrase, normalize, word_tokens
 
 INTENT_LEXICON_VERSION = "intent-v1"
 QUERY_PROTOCOL_VERSION = "q1"
@@ -60,10 +60,13 @@ class WebQueryProtocol:
 
 
 def classify_intent(phrase: str) -> str | None:
-    """Classe de intenção da frase, na ordem de precedência; `None` = sem."""
-    norm = normalize(phrase)
+    """Classe de intenção da frase, na ordem de precedência; `None` = sem.
+
+    Marcador casa por palavra inteira (`contains_phrase`), não por substring.
+    """
+    words = word_tokens(phrase)
     for intent in INTENT_ORDER:
-        if any(normalize(marker) in norm for marker in INTENT_LEXICON[intent]):
+        if any(contains_phrase(words, marker) for marker in INTENT_LEXICON[intent]):
             return intent
     return None
 

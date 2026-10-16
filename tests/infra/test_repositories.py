@@ -1455,7 +1455,7 @@ def _web_hit(
 
 
 @requires_infra
-async def test_web_repos_record_hits_provenance_and_latest_scores() -> None:
+async def test_web_repos_record_hits_provenance_and_append_scores() -> None:
     """F1/F3: hits (inclusive descartados) → proveniência; scores append-only."""
     engine = create_async_engine(os.environ["TEST_DATABASE_URL"])
     factory = async_sessionmaker(engine, expire_on_commit=False)
@@ -1537,7 +1537,6 @@ async def test_web_repos_record_hits_provenance_and_latest_scores() -> None:
             == 2
         )
         await s.commit()
-        assert await scores.latest_scores(seg.id) == {vid: 55.0}
         stored = await scores.hits_for_segment(seg.id)
         assert {h.status for h in stored} == {"kept", "discarded_ad", "duplicate"}
     await engine.dispose()
@@ -1589,4 +1588,79 @@ async def test_web_page_position_total_is_query_result_set_size() -> None:
         assert target.best_position == 3
         assert target.total_positions == 8  # N da consulta, não a posição da página
         assert target.query == "como fazer velas"
+    await engine.dispose()
+
+
+@requires_infra
+async def test_web_pages_exclude_legacy_ad_pages() -> None:
+    """Item 1: página de anúncio gravada ANTES do filtro F0 não entra no experimento."""
+    engine = create_async_engine(os.environ["TEST_DATABASE_URL"])
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    async with factory() as s:
+        await s.rollback()
+        seg = await SegmentRepositoryImpl(s).upsert(
+            SegmentConfig(
+                slug=f"teste-web-ad-{uuid4().hex[:8]}",
+                name="Web",
+                platforms=["web"],
+                keywords=["vela"],
+            )
+        )
+        legit = f"https://legit-{uuid4().hex[:8]}.example/vela"
+        legacy_ad = f"https://www.bing.com/aclick?ld={uuid4().hex[:8]}&u=abc"
+        await VideoRepositoryImpl(s).upsert_candidates(
+            seg.id, "web", [_web_candidate(legit), _web_candidate(legacy_ad)]
+        )
+        await s.commit()
+
+        pages = await WebScoreRepositoryImpl(s).pages_for_segment(seg.id, ["vela"])
+        assert [p.canonical_url for p in pages] == [legit]
+    await engine.dispose()
+
+
+@requires_infra
+async def test_web_pages_and_hits_respect_until_cutoff() -> None:
+    """Item 8: a avaliação lê os dados como estavam na data da amostra."""
+    engine = create_async_engine(os.environ["TEST_DATABASE_URL"])
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    async with factory() as s:
+        await s.rollback()
+        seg = await SegmentRepositoryImpl(s).upsert(
+            SegmentConfig(
+                slug=f"teste-web-cut-{uuid4().hex[:8]}",
+                name="Web",
+                platforms=["web"],
+                keywords=["vela"],
+            )
+        )
+        canonical = f"https://cut-{uuid4().hex[:8]}.example/vela"
+        await VideoRepositoryImpl(s).upsert_candidates(seg.id, "web", [_web_candidate(canonical)])
+        await s.commit()
+
+        cutoff = datetime(2026, 10, 19, 23, 0, tzinfo=UTC)
+        before = cutoff - timedelta(hours=3)
+        after = cutoff + timedelta(hours=9)
+        await WebHitRepositoryImpl(s).record(
+            seg.id,
+            [
+                _web_hit(seg.id, before, position=6, status="kept", canonical=canonical),
+                _web_hit(
+                    seg.id, before, position=9, status="kept", canonical="https://o.example/x"
+                ),
+                # coleta DEPOIS da amostra: posição melhor e lista maior
+                _web_hit(seg.id, after, position=1, status="kept", canonical=canonical),
+                _web_hit(
+                    seg.id, after, position=20, status="kept", canonical="https://p.example/y"
+                ),
+            ],
+        )
+        await s.commit()
+
+        repo = WebScoreRepositoryImpl(s)
+        page = (await repo.pages_for_segment(seg.id, ["vela"], until=cutoff))[0]
+        assert (page.best_position, page.total_positions) == (6, 9)
+        assert len(await repo.hits_for_segment(seg.id, until=cutoff)) == 2
+        # sem corte: vê tudo
+        page_all = (await repo.pages_for_segment(seg.id, ["vela"]))[0]
+        assert (page_all.best_position, page_all.total_positions) == (1, 20)
     await engine.dispose()

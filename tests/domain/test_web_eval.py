@@ -1,8 +1,6 @@
 from content_factory.domain.web_eval import (
-    BOOTSTRAP_SEED,
     Interval,
     WebAnnotation,
-    bootstrap_interval,
     filter_coverage,
     paired_gain_interval,
     precision_at_k,
@@ -36,14 +34,6 @@ def test_precision_at_k() -> None:
 
 def test_precision_at_k_insufficient() -> None:
     assert precision_at_k(["a"], {"a": True}, 5) is None
-
-
-def test_bootstrap_interval_deterministic() -> None:
-    values = [0.0, 0.5, 1.0, 0.5, 1.0]
-    a = bootstrap_interval(values, resamples=200, seed=BOOTSTRAP_SEED)
-    b = bootstrap_interval(values, resamples=200, seed=BOOTSTRAP_SEED)
-    assert a == b
-    assert a[0] <= 0.6 <= a[1]
 
 
 def test_precision_interval_bounds_point() -> None:

@@ -45,7 +45,7 @@ from content_factory.domain.models import (
 )
 from content_factory.domain.scoring import FORMULA_VERSION
 from content_factory.domain.web_relevance import WebPageInput
-from content_factory.domain.web_urls import canonicalize
+from content_factory.domain.web_urls import ad_signal, canonicalize
 from content_factory.infra.db.orm import (
     CollectRunRow,
     KeywordSignalRow,
@@ -809,8 +809,10 @@ class WebScoreRepositoryImpl(WebScoreRepository):
     def __init__(self, session: AsyncSession) -> None:
         self._s = session
 
-    async def pages_for_segment(self, segment_id: int, keywords: list[str]) -> list[WebPageInput]:
-        videos = (
+    async def pages_for_segment(
+        self, segment_id: int, keywords: list[str], *, until: datetime | None = None
+    ) -> list[WebPageInput]:
+        all_videos = (
             (
                 await self._s.execute(
                     select(VideoRow)
@@ -822,17 +824,10 @@ class WebScoreRepositoryImpl(WebScoreRepository):
             .scalars()
             .all()
         )
-        hits = (
-            (
-                await self._s.execute(
-                    select(WebSearchHitRow)
-                    .where(WebSearchHitRow.segment_id == segment_id)
-                    .order_by(WebSearchHitRow.collected_at, WebSearchHitRow.id)
-                )
-            )
-            .scalars()
-            .all()
-        )
+        # anúncio gravado ANTES do filtro F0 (linhas antigas de `videos`) fica
+        # fora do experimento: mesmo sinal verificável do coletor
+        videos = [v for v in all_videos if ad_signal(v.url, v.title, v.description) is None]
+        hits = await self._hit_rows(segment_id, until)
         by_video: dict[int, list[WebSearchHitRow]] = {}
         # N por consulta = tamanho da lista devolvida por aquele `query_id`
         # (maior posição entre TODOS os resultados da consulta, não só os desta
@@ -894,23 +889,17 @@ class WebScoreRepositoryImpl(WebScoreRepository):
         await self._s.flush()
         return len(rows)
 
-    async def latest_scores(self, segment_id: int) -> dict[int, float | None]:
-        latest = (
-            select(WebPageScoreOrmRow)
-            .where(WebPageScoreOrmRow.segment_id == segment_id)
-            .ext(distinct_on(WebPageScoreOrmRow.video_id))
-            .order_by(WebPageScoreOrmRow.video_id, WebPageScoreOrmRow.computed_at.desc())
-        )
-        rows = (await self._s.execute(latest)).scalars().all()
-        return {row.video_id: row.score for row in rows}
+    async def _hit_rows(self, segment_id: int, until: datetime | None) -> Sequence[WebSearchHitRow]:
+        stmt = select(WebSearchHitRow).where(WebSearchHitRow.segment_id == segment_id)
+        if until is not None:
+            stmt = stmt.where(WebSearchHitRow.collected_at <= until)
+        stmt = stmt.order_by(WebSearchHitRow.collected_at, WebSearchHitRow.id)
+        return (await self._s.execute(stmt)).scalars().all()
 
-    async def hits_for_segment(self, segment_id: int) -> list[WebSearchHit]:
-        stmt = (
-            select(WebSearchHitRow)
-            .where(WebSearchHitRow.segment_id == segment_id)
-            .order_by(WebSearchHitRow.collected_at, WebSearchHitRow.id)
-        )
-        rows = (await self._s.execute(stmt)).scalars().all()
+    async def hits_for_segment(
+        self, segment_id: int, *, until: datetime | None = None
+    ) -> list[WebSearchHit]:
+        rows = await self._hit_rows(segment_id, until)
         return [
             WebSearchHit(
                 segment_id=r.segment_id,

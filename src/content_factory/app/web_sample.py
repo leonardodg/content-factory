@@ -6,13 +6,16 @@ cega e a ordem das linhas é embaralhada (seed fixa gravada).
 
 import csv
 import random
+from collections.abc import Sequence
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 
 from content_factory.app.ports import WebScoreRepository
 from content_factory.app.web_rank import rank_baseline
-from content_factory.domain.models import Segment
+from content_factory.domain.models import Segment, WebSearchHit
 from content_factory.domain.web_hits import AD_DISCARD_STATUS
+from content_factory.domain.web_queries import PlannedQuery
 from content_factory.domain.web_relevance import WebPageInput
 from content_factory.domain.web_urls import domain_of
 
@@ -30,6 +33,19 @@ WEB_SAMPLE_HEADER = [
     "query",
     "query_intent",
 ]
+
+
+@dataclass(frozen=True)
+class WebSampleRun:
+    """Resultado do `cf web-sample`: linhas gravadas + data de corte.
+
+    `as_of` é o `--as-of` do `cf web-eval` (avaliação reprodutível).
+    `missing_queries` não vazio = ciclo incompleto (CSV não é gravado).
+    """
+
+    rows: int
+    as_of: datetime
+    missing_queries: list[str]
 
 
 @dataclass(frozen=True)
@@ -102,6 +118,19 @@ async def web_sample(
 
     rng.shuffle(items)
     return items
+
+
+def queries_without_hits(
+    protocol: Sequence[PlannedQuery], hits: Sequence[WebSearchHit]
+) -> list[str]:
+    """`query_id`s do protocolo que ainda não têm nenhum hit (ciclo incompleto).
+
+    A amostra só sai com o ciclo completo: com 3 consultas por coleta, 13
+    consultas pedem 5 coletas. Faltando uma, o estrato dela (pode ser a
+    consulta de controle) não existe na avaliação.
+    """
+    collected = {hit.query_id for hit in hits}
+    return [q.query_id for q in protocol if q.query_id not in collected]
 
 
 def write_web_sample_csv(items: list[WebSampleItem], path: Path) -> None:

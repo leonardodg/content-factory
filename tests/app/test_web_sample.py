@@ -8,10 +8,12 @@ from tests.stubs import FakeWebScores
 from content_factory.app.web_sample import (
     WEB_SAMPLE_HEADER,
     WEB_SAMPLE_SEED,
+    queries_without_hits,
     web_sample,
     write_web_sample_csv,
 )
 from content_factory.domain.models import Segment, WebSearchHit
+from content_factory.domain.web_queries import PlannedQuery
 from content_factory.domain.web_relevance import WebPageInput
 
 SEG = Segment(id=1, slug="velas", name="Velas", platforms=["web"], keywords=["vela"])
@@ -101,3 +103,14 @@ async def test_web_sample_csv_is_blind_and_roundtrips(tmp_path: Path) -> None:
     # a anotação é cega: nenhum score/posição/estrato no CSV
     assert not any("score" in col for col in rows[0])
     assert len(rows) == 1 + len(items)
+
+
+def test_queries_without_hits_lists_protocol_queries_never_collected() -> None:
+    """Ciclo incompleto: a amostra não pode sair sem todas as consultas coletadas."""
+    protocol = [
+        PlannedQuery("q1:aprender:00", "como fazer velas", "aprender"),
+        PlannedQuery("q1:seed:00", "vela OR velas", "seed"),
+    ]
+    hits = [_hit("https://x.example/a", "kept")]  # só q1:aprender:00
+    assert queries_without_hits(protocol, hits) == ["q1:seed:00"]
+    assert queries_without_hits(protocol[:1], hits) == []

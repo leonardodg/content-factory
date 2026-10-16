@@ -20,6 +20,7 @@ from content_factory.app.results import collect_result, score_result
 from content_factory.app.score import ScoreDeps, ScoreOutcome, score
 from content_factory.app.web_eval import WebEvalReport
 from content_factory.app.web_rank import WebRankOutcome
+from content_factory.app.web_sample import WebSampleRun
 from content_factory.cli.output import dumps, envelope_err, envelope_ok, exit_code_for
 from content_factory.domain.errors import CollectorError, DomainError, SegmentNotFound
 from content_factory.domain.models import CandidateVideo, ResearchCampaign, Segment
@@ -495,21 +496,41 @@ def web_rank_cmd(
     raise typer.Exit(exit_code_for(ok=True))
 
 
-async def _aweb_sample(segment_slug: str, seed: int, out: Path) -> int:
-    from content_factory.app.web_sample import web_sample, write_web_sample_csv
+async def _aweb_sample(
+    segment_slug: str, seed: int, out: Path, allow_incomplete: bool
+) -> WebSampleRun:
+    from content_factory.app.web_sample import (
+        queries_without_hits,
+        web_sample,
+        write_web_sample_csv,
+    )
     from content_factory.config import get_settings
+    from content_factory.infra.collectors.web_queries import (
+        DEFAULT_QUERIES_DIR,
+        load_protocol,
+        protocol_path,
+    )
     from content_factory.infra.db.base import get_session_factory
     from content_factory.infra.db.repositories import (
         SegmentRepositoryImpl,
         WebScoreRepositoryImpl,
     )
 
+    as_of = datetime.now(UTC)
     factory: async_sessionmaker[AsyncSession] = get_session_factory(get_settings())
     async with factory() as session:
         seg = await SegmentRepositoryImpl(session).get_by_slug(segment_slug)
-        items = await web_sample(seg, WebScoreRepositoryImpl(session), seed=seed)
+        repo = WebScoreRepositoryImpl(session)
+        path = protocol_path(DEFAULT_QUERIES_DIR, seg.slug)
+        missing: list[str] = []
+        if path.exists():
+            hits = await repo.hits_for_segment(seg.id, until=as_of)
+            missing = queries_without_hits(load_protocol(path).queries, hits)
+        if missing and not allow_incomplete:
+            return WebSampleRun(rows=0, as_of=as_of, missing_queries=missing)
+        items = await web_sample(seg, repo, seed=seed)
     write_web_sample_csv(items, out)
-    return len(items)
+    return WebSampleRun(rows=len(items), as_of=as_of, missing_queries=missing)
 
 
 @app.command("web-sample")
@@ -519,10 +540,19 @@ def web_sample_cmd(
     seed: int = typer.Option(
         20261019, "--seed", help="seed do sorteio (gravada/auditável; default fixo)"
     ),
+    allow_incomplete: bool = typer.Option(
+        False,
+        "--allow-incomplete",
+        help="gera mesmo com consulta do protocolo q1 ainda sem coleta (registrar o motivo)",
+    ),
 ) -> None:
-    """Exporta a amostra cega (topo + aleatório + descartados) para anotação (F2)."""
+    """Exporta a amostra cega (topo + aleatório + descartados) para anotação (F2).
+
+    Recusa (`incomplete_cycle`) enquanto alguma consulta do protocolo q1 não
+    tiver coleta. O `as_of` do envelope é o `--as-of` do `cf web-eval`.
+    """
     try:
-        rows = asyncio.run(_aweb_sample(segment, seed, Path(out)))
+        run = asyncio.run(_aweb_sample(segment, seed, Path(out), allow_incomplete))
     except SegmentNotFound as exc:
         print(dumps(envelope_err("web-sample", "segment_not_found", redact(str(exc)))))
         raise typer.Exit(exit_code_for(ok=False)) from exc
@@ -532,11 +562,27 @@ def web_sample_cmd(
     except Exception as exc:
         print(dumps(envelope_err("web-sample", "internal_error", redact(str(exc)))))
         raise typer.Exit(exit_code_for(ok=False)) from exc
-    print(dumps(envelope_ok("web-sample", segment=segment, rows=rows, out=out, seed=seed)))
+    if run.missing_queries and not allow_incomplete:
+        message = "consultas do protocolo sem coleta: " + ", ".join(run.missing_queries)
+        print(dumps(envelope_err("web-sample", "incomplete_cycle", message)))
+        raise typer.Exit(exit_code_for(ok=False))
+    print(
+        dumps(
+            envelope_ok(
+                "web-sample",
+                segment=segment,
+                rows=run.rows,
+                out=out,
+                seed=seed,
+                as_of=run.as_of.isoformat(),
+                missing_queries=run.missing_queries,
+            )
+        )
+    )
     raise typer.Exit(exit_code_for(ok=True))
 
 
-async def _aweb_eval(segment_slug: str, csv_path: Path) -> WebEvalReport:
+async def _aweb_eval(segment_slug: str, csv_path: Path, as_of: datetime) -> WebEvalReport:
     from content_factory.app.web_eval import read_annotations, web_evaluate
     from content_factory.config import get_settings
     from content_factory.infra.db.base import get_session_factory
@@ -549,7 +595,7 @@ async def _aweb_eval(segment_slug: str, csv_path: Path) -> WebEvalReport:
     factory: async_sessionmaker[AsyncSession] = get_session_factory(get_settings())
     async with factory() as session:
         seg = await SegmentRepositoryImpl(session).get_by_slug(segment_slug)
-        return await web_evaluate(seg, WebScoreRepositoryImpl(session), annotations)
+        return await web_evaluate(seg, WebScoreRepositoryImpl(session), annotations, as_of=as_of)
 
 
 def _interval(interval: Interval) -> dict[str, Any]:
@@ -560,11 +606,24 @@ def _interval(interval: Interval) -> dict[str, Any]:
 def web_eval_cmd(
     segment: str = typer.Option(..., "--segment", help="slug do segmento"),
     csv_path: str = typer.Option(..., "--csv", help="CSV já anotado (web-sample)"),
+    as_of: str = typer.Option(
+        ...,
+        "--as-of",
+        help="data de corte da amostra com fuso (o `as_of` do envelope do web-sample)",
+    ),
     explain: bool = typer.Option(False, "--explain", help="inclui os dois rankings de URL"),
 ) -> None:
     """Avaliação pareada base-fase-h x web-v1 com IC e veredito (F4)."""
     try:
-        report = asyncio.run(_aweb_eval(segment, Path(csv_path)))
+        cutoff = datetime.fromisoformat(as_of)
+    except ValueError as exc:
+        print(dumps(envelope_err("web-eval", "usage_error", f"--as-of inválido: {as_of}")))
+        raise typer.Exit(exit_code_for(ok=False)) from exc
+    if cutoff.tzinfo is None:
+        print(dumps(envelope_err("web-eval", "usage_error", "--as-of precisa de fuso (+00:00)")))
+        raise typer.Exit(exit_code_for(ok=False))
+    try:
+        report = asyncio.run(_aweb_eval(segment, Path(csv_path), cutoff))
     except FileNotFoundError as exc:
         print(dumps(envelope_err("web-eval", "file_not_found", redact(str(exc)))))
         raise typer.Exit(exit_code_for(ok=False)) from exc

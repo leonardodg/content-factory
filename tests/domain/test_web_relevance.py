@@ -1,4 +1,5 @@
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
+from functools import partial
 
 from content_factory.app.score import relevance_of
 from content_factory.domain.models import VideoMetrics, VideoSnapshot
@@ -12,6 +13,10 @@ from content_factory.domain.web_relevance import (
     select_top,
     web_score,
 )
+
+NOW = datetime(2026, 10, 18, 12, 0, tzinfo=UTC)
+# o relógio entra por parâmetro: `domain/` não lê a hora (reprodutível)
+_ws = partial(web_score, now=NOW)
 
 
 def page(**kw: object) -> WebPageInput:
@@ -32,8 +37,8 @@ def page(**kw: object) -> WebPageInput:
 
 
 def test_web_score_is_deterministic() -> None:
-    a = web_score(page())
-    b = web_score(page())
+    a = _ws(page())
+    b = _ws(page())
     assert a.score == b.score
     assert a.components == b.components
     assert a.explanation == b.explanation
@@ -41,7 +46,7 @@ def test_web_score_is_deterministic() -> None:
 
 def test_score_is_weighted_mean_of_evaluated_only() -> None:
     # só metadados avaliado (sem keywords/intenção/posição/data) → score = metadados*100
-    s = web_score(
+    s = _ws(
         page(
             title="Um título suficientemente longo",
             snippet="x" * 80,
@@ -62,7 +67,7 @@ def test_score_is_weighted_mean_of_evaluated_only() -> None:
 
 
 def test_score_renormalizes_partial_components() -> None:
-    s = web_score(page())
+    s = _ws(page())
     assert s.score is not None
     evaluated = {k: v for k, v in s.components.items() if v is not None}
     expected = round(
@@ -75,18 +80,18 @@ def test_score_renormalizes_partial_components() -> None:
 
 
 def test_theme_matches_keyword_by_all_tokens() -> None:
-    s = web_score(page(keywords=["cera de soja"]))
+    s = _ws(page(keywords=["cera de soja"]))
     # título/snippet têm "cera de soja" → casa
     assert s.explanation["tema"]["matched"] == ["cera de soja"]
 
 
 def test_theme_token_mismatch_does_not_match() -> None:
-    s = web_score(page(title="Como usar soja", snippet="soja " * 30, keywords=["cera de soja"]))
+    s = _ws(page(title="Como usar soja", snippet="soja " * 30, keywords=["cera de soja"]))
     assert s.explanation["tema"]["matched"] == []
 
 
 def test_theme_counts_repeated_keyword_once() -> None:
-    s = web_score(
+    s = _ws(
         page(
             title="Guia de vela artesanal",
             snippet="vela artesanal " * 8,
@@ -97,7 +102,7 @@ def test_theme_counts_repeated_keyword_once() -> None:
 
 
 def test_theme_is_accent_and_case_insensitive() -> None:
-    s = web_score(
+    s = _ws(
         page(
             title="RESINA EPÓXI",
             snippet="resina epóxi para iniciantes " * 4,
@@ -108,36 +113,36 @@ def test_theme_is_accent_and_case_insensitive() -> None:
 
 
 def test_theme_none_without_keywords() -> None:
-    assert web_score(page(keywords=[])).components["tema"] is None
+    assert _ws(page(keywords=[])).components["tema"] is None
 
 
 def test_intent_uses_marker_of_same_class() -> None:
-    s = web_score(page(query_intent="resolver", title="Por que a resina rachou", snippet="x" * 70))
+    s = _ws(page(query_intent="resolver", title="Por que a resina rachou", snippet="x" * 70))
     assert s.components["intencao"] == 1.0
     assert s.explanation["intencao"]["marker"] == "por que"
 
 
 def test_intent_none_for_seed_or_unknown_class() -> None:
-    assert web_score(page(query_intent="seed")).components["intencao"] is None
-    assert web_score(page(query_intent="")).components["intencao"] is None
+    assert _ws(page(query_intent="seed")).components["intencao"] is None
+    assert _ws(page(query_intent="")).components["intencao"] is None
 
 
 def test_metadata_never_none_and_empty_snippet_fails() -> None:
-    s = web_score(page(snippet=""))
+    s = _ws(page(snippet=""))
     assert s.components["metadados"] is not None
     assert s.explanation["metadados"]["snippet_ok"] is False
 
 
 def test_position_none_without_hit() -> None:
-    assert web_score(page(best_position=None)).components["posicao"] is None
+    assert _ws(page(best_position=None)).components["posicao"] is None
 
 
 def test_position_best_first() -> None:
-    assert web_score(page(best_position=1, total_positions=10)).components["posicao"] == 1.0
+    assert _ws(page(best_position=1, total_positions=10)).components["posicao"] == 1.0
 
 
 def test_select_top_does_not_change_scores() -> None:
-    items = [web_score(page(video_id=i, title=f"t {i} " + "x" * 20)) for i in range(5)]
+    items = [_ws(page(video_id=i, title=f"t {i} " + "x" * 20)) for i in range(5)]
     before = {i.video_id: i.score for i in items}
     top = select_top(items, 3)
     assert {i.video_id: i.score for i in top} == {
@@ -146,8 +151,8 @@ def test_select_top_does_not_change_scores() -> None:
 
 
 def test_select_top_max_per_domain() -> None:
-    items = [web_score(page(video_id=i, canonical_url=f"https://ex.com/{i}")) for i in range(4)] + [
-        web_score(page(video_id=9, canonical_url="https://outro.com/x"))
+    items = [_ws(page(video_id=i, canonical_url=f"https://ex.com/{i}")) for i in range(4)] + [
+        _ws(page(video_id=9, canonical_url="https://outro.com/x"))
     ]
     top = select_top(items, 3, max_per_domain=2)
     domains = [i.domain for i in top]
@@ -191,3 +196,46 @@ def test_baseline_is_frozen_literal_values() -> None:
     """
     assert baseline_web_score(page(keywords=[])) == 25.0
     assert baseline_web_score(page(title="Velas artesanais", keywords=["velas artesanais"])) == 75.0
+
+
+def test_dedupe_titles_keeps_every_empty_title() -> None:
+    """Título vazio não é duplicata de nada: nenhuma página some sem rastro."""
+    a = WebScore(video_id=1, title="", domain="a", score=50.0)
+    b = WebScore(video_id=2, title="  ", domain="b", score=40.0)
+    c = WebScore(video_id=3, title="X", domain="c", score=30.0)
+    kept, dropped = dedupe_titles([a, b, c])
+    assert sorted(k.video_id for k in kept) == [1, 2, 3]
+    assert dropped == {}
+
+
+def test_recency_uses_injected_clock_not_wall_clock() -> None:
+    published = NOW - timedelta(days=2)
+    fresh = web_score(page(published_at=published), now=NOW)
+    later = web_score(page(published_at=published), now=NOW + timedelta(days=400))
+    assert fresh.components["atualidade"] == 1.0
+    assert later.components["atualidade"] != fresh.components["atualidade"]
+
+
+def test_theme_matches_whole_words_not_substrings() -> None:
+    # "uv" não pode casar dentro de "luva"
+    s = _ws(page(title="Luva de proteção para resina", snippet="luva " * 20, keywords=["uv"]))
+    assert s.components["tema"] == 0.0
+    assert s.explanation["tema"]["matched"] == []
+
+
+def test_intent_marker_must_be_whole_word() -> None:
+    # "ferro" contém "erro", mas não é marcador de resolver
+    s = _ws(page(query_intent="resolver", title="Ferro de solda para resina", snippet="x" * 70))
+    assert s.components["intencao"] == 0.0
+
+
+def test_intent_ignores_generic_negation_on_page_text() -> None:
+    # "não" aparece em quase todo texto em PT: não prova intenção de resolver
+    s = _ws(
+        page(
+            query_intent="resolver",
+            title="Resina epóxi para mesas",
+            snippet="Você não precisa de muito material para começar " * 2,
+        )
+    )
+    assert s.components["intencao"] == 0.0
