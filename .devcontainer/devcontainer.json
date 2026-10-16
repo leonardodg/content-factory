@@ -2,6 +2,9 @@
   "name": "content-factory",
   "dockerComposeFile": "./docker-compose.yml",
   "service": "python",
+  // fechar a janela NÃO para postgres/redis de produção (incidente 2026-10-16:
+  // o default stopCompose fez `compose stop -t 0` e derrubou o worker)
+  "shutdownAction": "none",
   "workspaceFolder": "/app",
   "remoteUser": "appuser",
   "postCreateCommand": "uv sync --all-groups && uv run pre-commit install",

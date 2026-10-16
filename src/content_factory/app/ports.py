@@ -159,6 +159,18 @@ class CollectRunRepository(Protocol):
         ...
 
 
+class JobRunReader(Protocol):
+    """Última execução de cada job do cron — catch-up no startup do worker (T2)."""
+
+    async def last_runs(self, segment_ids: list[int]) -> dict[str, datetime | None]:
+        """`{"research", "collect", "score"}` → início da run mais recente entre os segmentos.
+
+        research/collect saem de `collect_runs` (prefixo `research:` separa um
+        do outro); score sai de `video_scores.computed_at`. `None` = nunca rodou.
+        """
+        ...
+
+
 class OpsReportReader(Protocol):
     """Leituras agregadas do `cf ops-report` (C2) — só Postgres."""
 
