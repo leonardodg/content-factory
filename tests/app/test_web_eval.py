@@ -81,3 +81,16 @@ def test_read_annotations_skips_unlabelled_rows(tmp_path: Path) -> None:
     assert set(annotations) == {"https://a.example"}
     assert annotations["https://a.example"].tema == 2
     assert annotations["https://a.example"].relevant is True
+
+
+def test_read_annotations_tolerates_non_integer_labels(tmp_path: Path) -> None:
+    path = tmp_path / "anotado.csv"
+    with path.open("w", newline="", encoding="utf-8") as f:
+        writer = csv.writer(f)
+        writer.writerow(ANNOTATION_HEADER)
+        writer.writerow(["https://a.example", "2", "1.0", "dois", "", "ok"])
+
+    annotations = read_annotations(path)
+
+    a = annotations["https://a.example"]
+    assert (a.tema, a.intencao, a.utilidade) == (2, 0, 0)

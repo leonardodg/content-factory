@@ -179,3 +179,15 @@ def test_baseline_equivalence_with_viral_score() -> None:
         None,
     ).total
     assert baseline_web_score(p) == expected
+
+
+def test_baseline_is_frozen_literal_values() -> None:
+    """Valores literais congelados: a base não pode seguir o score de vídeo.
+
+    Sem keywords → relevance 0 → recency 50 → 25,0. Keyword única que casa
+    inteira → relevance 1 → 25 + 50 = 75,0. Se a fórmula do vídeo mudar, este
+    teste continua verde (a base está congelada) e o de equivalência acima é
+    que acusa a deriva.
+    """
+    assert baseline_web_score(page(keywords=[])) == 25.0
+    assert baseline_web_score(page(title="Velas artesanais", keywords=["velas artesanais"])) == 75.0

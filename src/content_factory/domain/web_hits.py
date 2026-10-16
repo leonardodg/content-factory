@@ -12,6 +12,9 @@ from content_factory.domain.models import CandidateVideo, WebSearchHit
 
 DISCARDED_STATUSES = frozenset({"discarded_ad", "duplicate"})
 KEPT_STATUS = "kept"
+# descartado pelo FILTRO DE ANÚNCIO (o que a cobertura da F4 mede). `duplicate`
+# é descarte de dedupe, não falso positivo do filtro.
+AD_DISCARD_STATUS = "discarded_ad"
 
 
 def is_discarded(candidate: CandidateVideo) -> bool:

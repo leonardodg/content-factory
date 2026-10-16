@@ -85,7 +85,7 @@ def rank_intent_phrases(signals: Sequence[str], *, seed: int = QUERY_SEED) -> di
             continue
         seen.add(key)
         pools[intent].append(phrase)
-    rng = random.Random(seed)
+    rng = random.Random(seed)  # nosec B311 - reprodução por seed fixa
     ranked: dict[str, list[str]] = {}
     for intent in INTENT_ORDER:
         pool = sorted(pools[intent], key=normalize)

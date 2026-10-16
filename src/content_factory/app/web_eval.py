@@ -48,6 +48,17 @@ class WebEvalReport:
     ranking_base: list[str]
 
 
+def _label_int(value: str | None, *, default: int = 0) -> int:
+    """Inteiro do rótulo; célula vazia ou não-numérica cai no `default`."""
+    text = (value or "").strip()
+    if not text:
+        return default
+    try:
+        return int(text)
+    except ValueError:
+        return default
+
+
 def read_annotations(path: Path) -> dict[str, WebAnnotation]:
     """Lê o CSV anotado (item_id + rótulos). Linhas sem rótulo são ignoradas."""
     annotations: dict[str, WebAnnotation] = {}
@@ -60,9 +71,9 @@ def read_annotations(path: Path) -> dict[str, WebAnnotation]:
             invalido = (rec.get("invalido") or "").strip() or None
             annotations[item_id] = WebAnnotation(
                 item_id=item_id,
-                tema=int(tema),
-                intencao=int((rec.get("intencao") or "0") or 0),
-                utilidade=int((rec.get("utilidade") or "0") or 0),
+                tema=_label_int(tema),
+                intencao=_label_int(rec.get("intencao")),
+                utilidade=_label_int(rec.get("utilidade")),
                 invalido=invalido,
                 motivo=(rec.get("motivo") or "").strip(),
             )

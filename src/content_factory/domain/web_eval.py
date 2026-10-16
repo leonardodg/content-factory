@@ -100,7 +100,7 @@ def bootstrap_interval(
     """IC percentil 95% de uma estatística sobre reamostragens bootstrap."""
     if not values:
         raise ValueError("bootstrap de lista vazia")
-    rng = random.Random(seed)
+    rng = random.Random(seed)  # nosec B311 - reprodução por seed fixa
     stats = sorted(rng.choice(values) for _ in range(resamples))
     return _percentile(stats, alpha / 2), _percentile(stats, 1 - alpha / 2)
 
@@ -117,7 +117,7 @@ def precision_interval(
     pool = list(ranking)
     if len(pool) < k:
         return Interval(point=None, low=None, high=None, n=len(pool))
-    rng = random.Random(seed)
+    rng = random.Random(seed)  # nosec B311 - reprodução por seed fixa
     stats: list[float] = []
     for _ in range(resamples):
         sampled = [rng.choice(pool) for _ in pool]
@@ -146,7 +146,7 @@ def paired_gain_interval(
     pool = list(base_ranking)
     if len(pool) < k or len(v1_ranking) < k:
         return Interval(point=None, low=None, high=None, n=len(pool))
-    rng = random.Random(seed)
+    rng = random.Random(seed)  # nosec B311 - reprodução por seed fixa
     diffs: list[float] = []
     for _ in range(resamples):
         sampled = [rng.choice(pool) for _ in pool]

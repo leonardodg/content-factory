@@ -17,7 +17,7 @@ from content_factory.domain.web_relevance import WebPageInput
 SEG = Segment(id=1, slug="velas", name="Velas", platforms=["web"], keywords=["vela"])
 
 
-def _page(vid: int) -> WebPageInput:
+def _page(vid: int, query: str = "") -> WebPageInput:
     return WebPageInput(
         video_id=vid,
         title=f"Vela artesanal numero {vid}",
@@ -25,6 +25,7 @@ def _page(vid: int) -> WebPageInput:
         keywords=list(SEG.keywords),
         canonical_url=f"https://site{vid}.example/p/{vid}",
         canonical_ok=True,
+        query=query,
     )
 
 
@@ -50,7 +51,7 @@ async def test_web_sample_strata_sizes_and_ceiling() -> None:
     pages = [_page(i) for i in range(1, 7)]  # 4 kept após top_n=2 + random_n=2
     hits = [
         _hit("https://x.example/a", "discarded_ad"),
-        _hit("https://x.example/b", "duplicate"),
+        _hit("https://x.example/b", "discarded_ad"),
         _hit("https://x.example/c", "discarded_ad"),
         _hit("https://x.example/c", "discarded_ad"),  # mesma URL canônica: 1 item
     ]
@@ -60,6 +61,20 @@ async def test_web_sample_strata_sizes_and_ceiling() -> None:
 
     assert len(items) == 2 + 2 + 3  # topo + aleatório + 3 canônicas distintas
     assert len({i.item_id for i in items}) == len(items)  # sem duplicata na amostra
+
+
+async def test_web_sample_kept_item_carries_exact_query() -> None:
+    repo = FakeWebScores([_page(1, query="como fazer velas")])
+    items = await web_sample(SEG, repo, seed=1, top_n=1, random_n=0, discarded_n=0)
+    assert items[0].query == "como fazer velas"
+
+
+async def test_web_sample_discarded_stratum_is_ad_only() -> None:
+    """`duplicate` não é falso positivo do filtro e duplicaria o `item_id`."""
+    page = _page(1)
+    repo = FakeWebScores([page], [_hit(page.canonical_url, "duplicate")])
+    items = await web_sample(SEG, repo, seed=1, top_n=1, random_n=0, discarded_n=5)
+    assert [i.item_id for i in items] == [page.canonical_url]
 
 
 async def test_web_sample_is_deterministic_for_a_seed() -> None:

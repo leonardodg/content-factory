@@ -834,7 +834,13 @@ class WebScoreRepositoryImpl(WebScoreRepository):
             .all()
         )
         by_video: dict[int, list[WebSearchHitRow]] = {}
+        # N por consulta = tamanho da lista devolvida por aquele `query_id`
+        # (maior posição entre TODOS os resultados da consulta, não só os desta
+        # página): a fórmula da F3 é `1 - (p - 1)/N`.
+        query_size: dict[str, int] = {}
         for hit in hits:
+            qid = hit.query_id
+            query_size[qid] = max(query_size.get(qid, 0), hit.provider_result_position)
             if hit.video_id is not None:
                 by_video.setdefault(hit.video_id, []).append(hit)
         pages: list[WebPageInput] = []
@@ -842,16 +848,17 @@ class WebScoreRepositoryImpl(WebScoreRepository):
             video_hits = by_video.get(video.id, [])
             if video_hits:
                 best = min(video_hits, key=lambda h: h.provider_result_position)
-                same_query = [h for h in video_hits if h.query_id == best.query_id]
-                total = max(h.provider_result_position for h in same_query)
+                total = query_size.get(best.query_id, best.provider_result_position)
                 canonical = best.canonical_url
                 snippet = best.snippet
                 intent = best.query_intent
+                query = best.query
                 position: int | None = best.provider_result_position
             else:
                 canonical = video.url
                 snippet = video.description
                 intent = ""
+                query = ""
                 position = None
                 total = 0
             pages.append(
@@ -862,6 +869,7 @@ class WebScoreRepositoryImpl(WebScoreRepository):
                     keywords=list(keywords),
                     canonical_url=canonical,
                     canonical_ok=canonicalize(canonical).ok,
+                    query=query,
                     query_intent=intent,
                     best_position=position,
                     total_positions=total,

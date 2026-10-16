@@ -11,8 +11,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 from content_factory.domain import web_queries
-from content_factory.domain.models import VideoMetrics
-from content_factory.domain.scoring import trend_decay, viral_score
+from content_factory.domain.scoring import trend_decay
 from content_factory.domain.text import looks_like_domain, normalize
 from content_factory.domain.web_urls import domain_of
 
@@ -28,10 +27,17 @@ WEB_WEIGHTS: dict[str, float] = {
     "posicao": 0.10,
 }
 
-_EPOCH = datetime(1970, 1, 1, tzinfo=UTC)
 _TITLE_MIN = 15
 _TITLE_MAX = 120
 _SNIPPET_MIN = 60
+
+# Pesos/rótulos CONGELADOS de `base-fase-h`: literais de propósito. A linha de
+# base não pode referenciar `domain.scoring.WEIGHTS`/`viral_score` vivos — se a
+# fórmula do vídeo mudar, ela tem de continuar idêntica (o teste de
+# equivalência é que sinaliza a deriva).
+_BASE_RECENCY_WEIGHT = 0.20
+_BASE_RELEVANCE_WEIGHT = 0.20
+_BASE_RECENCY_NONE = 50.0  # sem data o `ddgs` devolve `trend_decay="none"`
 
 
 @dataclass(frozen=True)
@@ -44,6 +50,7 @@ class WebPageInput:
     keywords: list[str]
     canonical_url: str
     canonical_ok: bool
+    query: str = ""  # consulta exata que trouxe a página (proveniência do hit)
     query_intent: str = ""  # aprender|resolver|tendencia|comercial|seed|""
     best_position: int | None = None  # melhor provider_result_position (1-based)
     total_positions: int = 0
@@ -163,13 +170,20 @@ def _baseline_relevance(text: str, keywords: Sequence[str]) -> float:
 def baseline_web_score(page: WebPageInput) -> float:
     """Cópia congelada da regra atual (`base-fase-h`) aplicada a uma página.
 
-    `viral_score` com métricas ausentes + `relevance_of` + `recency` = 50
-    (sem data o `ddgs` devolve `trend_decay="none"`). Congelada: se o score
-    de vídeo mudar no futuro, esta linha de base NÃO muda junto.
+    Reproduz `viral_score` com métricas ausentes: só sobram `recency`
+    (sem data → 50) e `relevance`, média ponderada renormalizada x100.
+    Congelada de propósito: NÃO chama `domain.scoring` no runtime, então se o
+    score de vídeo mudar no futuro esta linha de base NÃO muda junto — o teste
+    de equivalência é que passa a falhar e sinaliza a deriva.
     """
     relevance = _baseline_relevance(f"{page.title} {page.snippet}", page.keywords)
-    now = page.published_at or _EPOCH
-    return viral_score(VideoMetrics(), relevance, now, page.published_at).total
+    components = {
+        "recency": _BASE_RECENCY_NONE,
+        "relevance": min(max(relevance, 0.0), 1.0) * 100,
+    }
+    weights = {"recency": _BASE_RECENCY_WEIGHT, "relevance": _BASE_RELEVANCE_WEIGHT}
+    weight_sum = sum(weights.values())
+    return round(sum(components[k] * weights[k] for k in components) / weight_sum, 2)
 
 
 # --- seleção (não é score) ---

@@ -12,7 +12,7 @@ from pathlib import Path
 from content_factory.app.ports import WebScoreRepository
 from content_factory.app.web_rank import rank_baseline
 from content_factory.domain.models import Segment
-from content_factory.domain.web_hits import DISCARDED_STATUSES
+from content_factory.domain.web_hits import AD_DISCARD_STATUS
 from content_factory.domain.web_relevance import WebPageInput
 from content_factory.domain.web_urls import domain_of
 
@@ -50,7 +50,7 @@ def _item_from_page(page: WebPageInput) -> WebSampleItem:
         domain=domain_of(page.canonical_url),
         title=page.title,
         snippet=page.snippet,
-        query="",
+        query=page.query,
         query_intent=page.query_intent,
     )
 
@@ -64,7 +64,7 @@ async def web_sample(
     random_n: int = RANDOM_N,
     discarded_n: int = DISCARDED_N,
 ) -> list[WebSampleItem]:
-    rng = random.Random(seed)
+    rng = random.Random(seed)  # nosec B311 - reprodução por seed fixa
     pages = await repo.pages_for_segment(segment.id, list(segment.keywords))
 
     # topo da linha de base (score atual congelado)
@@ -77,11 +77,14 @@ async def web_sample(
 
     items = [_item_from_page(p) for p in top + random_pick]
 
-    # descartados pelo filtro (falso positivo / cobertura), por URL canônica
+    # descartados pelo FILTRO DE ANÚNCIO (falso positivo / cobertura). Só
+    # `discarded_ad`: `duplicate` não é falso positivo do filtro (a página foi
+    # preservada uma vez) e sua URL canônica é a de um `kept`, o que duplicaria
+    # o `item_id` da amostra.
     hits = await repo.hits_for_segment(segment.id)
     discarded: dict[str, WebSampleItem] = {}
     for hit in hits:
-        if hit.status not in DISCARDED_STATUSES:
+        if hit.status != AD_DISCARD_STATUS:
             continue
         if hit.canonical_url in discarded:
             continue
