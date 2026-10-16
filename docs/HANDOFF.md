@@ -51,6 +51,13 @@ relatório **próprios** — nada muda em `viral_score`/`FORMULA_VERSION`/
   `cf web-rank` (`--compare/--explain/--k/--max-per-domain`),
   `cf web-sample`, `cf web-eval`; `cf ops-report` passa a mostrar os descartes
   por motivo.
+- **Correções da revisão (16/10):** `posicao` usa o tamanho da consulta como
+  `N` (não a posição da própria página); a amostra carrega a **consulta exata**
+  dos itens mantidos (`WebPageInput.query`) e o estrato de descartados só tem
+  `discarded_ad` (evita `item_id` duplicado com um `duplicate`); a linha de base
+  `base-fase-h` é **literal** (não chama `viral_score` vivo — congela de
+  verdade); parsing tolerante dos rótulos no `web-eval`; `# nosec B311` nos
+  sorteios por seed (bandit).
 - **Pendente do usuário:** revisar e aprovar os
   `segments/web-queries/<slug>.q1.yaml` (só veto com motivo) antes do deploy.
 - **Infra de teste:** Postgres `cf-test-pg` (`127.0.0.1:55432`) e Redis

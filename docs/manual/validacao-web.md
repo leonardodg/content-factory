@@ -83,6 +83,16 @@ descartada** é falso positivo do filtro. Se a cobertura ficar abaixo de 90%,
 o filtro `ads-v1` precisa ser revisto (nova versão, `ads-v2`, com a
 evidência registrada) antes de qualquer ativação.
 
+!!! warning "Limitação conhecida da cobertura (amostragem estratificada)"
+    A cobertura é `legítimas preservadas / (legítimas preservadas + legítimas
+    descartadas)` sobre as contagens **anotadas**, mas os estratos têm frações
+    de amostragem diferentes (até 40 mantidos vs. ≤ 10 descartados) e o topo
+    dos mantidos é enviesado por construção. Logo, a cobertura é um indicador
+    **direcional** do falso positivo do filtro, não uma estimativa pontual
+    precisa. Só o estrato de descartados mede falso positivo; uma reponderação
+    exigiria desmembrar os estratos (quebraria a anotação cega) — decisão
+    adiada, registrada aqui.
+
 ## Próximos passos
 
 - A ativação no `worker` (F5) só ocorre com veredito **aprovado em ≥ 2 dos 3
