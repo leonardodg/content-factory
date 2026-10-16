@@ -57,6 +57,18 @@ dos itens, seed fixa). Com 40 a 50 itens por segmento, os resultados são
 Definições de "relevante" e "legítima" em
 [Anotação da amostra web](anotacao-web.md).
 
+### Adendo registrado — 2026-10-16: P@k é sobre a amostra
+
+**Motivo:** explicitar o que o cálculo já faz, sem alterar nenhum número. As
+métricas P@5, P@10 e o ganho em P@10 são medidas sobre o **conjunto anotado da
+amostra** (os itens `kept` anotados), não sobre o ranking completo da coleta em
+produção: candidatos que não entraram na amostra não competem pelo topo. O
+estrato de 15 itens do topo da linha de base sempre está presente, mas um item
+fora da amostra poderia subir no ranking `web-v1` e não ser medido. O teste
+pareado (v1 − base, sobre a mesma amostra) continua válido para comparar as duas
+funções; as metas absolutas de P@5/P@10 valem como **P@k sobre a amostra** (piso
+aproximado), não como a precisão exata do top 5/10 completo.
+
 ## Indicadores (não são critérios até haver calibração)
 
 | Indicador | Cálculo | Referência |

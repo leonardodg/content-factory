@@ -78,6 +78,20 @@ relatório **próprios** — nada muda em `viral_score`/`FORMULA_VERSION`/
   mesma noite (fora das janelas de cron) para a 5ª coleta cair no collect
   das 20:00 de 19/10; sem ele, a amostra só sai depois do collect das 08:00
   de 20/10.
+- **Bloqueio da F1 — léxico de intenção (verificado 16/10, banco real):**
+  `intent-v1` classifica só 21/154 (velas), 17/150 (sabonetes) e 22/151
+  (resina) dos sinais do Suggest, e deixa `resolver` **0/0/0** e `tendencia`
+  **0/0/1** — o `q1` degenera em `aprender`+`comercial`+`seed` (7 de 13
+  consultas) e o aceite "todas as classes com frases" fica inatingível. Com
+  marcadores realistas `tendencia` sobe para 4/13/5, mas `resolver` segue fino
+  (6/1/0). Decisão do usuário: ampliar o léxico (`intent-v2`, registrado antes
+  da amostra) e/ou aceitar o `missing` registrado — **não inventar consultas**.
+- **`segments/` na imagem do worker:** o estágio `worker` do `Dockerfile` agora
+  copia `segments/` (o `FileWebQueries` lê
+  `segments/web-queries/<slug>.q1.yaml` em runtime; sem bind-mount, a ausência
+  degradava em silêncio para o legado de 1 consulta). Guarda: teste de política
+  `tests/test_worker_image.py`; smoke test de imagem
+  `scripts/smoke_worker_segments.sh` (rodar no deploy; não exige rebuild agora).
 - **Pendente do usuário:** revisar e aprovar os
   `segments/web-queries/<slug>.q1.yaml` (só veto com motivo) antes do deploy.
 - **Infra de teste:** Postgres `cf-test-pg` (`127.0.0.1:55432`) e Redis

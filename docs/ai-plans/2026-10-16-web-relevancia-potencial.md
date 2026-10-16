@@ -76,7 +76,7 @@ Cada um tem sua métrica. Nenhum é misturado ao `viral_score` dos vídeos.
 | Fase | Entrega | Quando |
 | --- | --- | --- |
 | F0 + F1 | Filtro com rastro, proveniência, protocolo de consultas `q1` aprovado | código em 17/10; deploy na noite de 17/10 |
-| — | Coleta com o protocolo `q1` | 18–19/10 (4 coletas = 1 ciclo completo de consultas) |
+| — | Coleta com o protocolo `q1` | 18–19/10 (5 coletas = 1 ciclo completo de consultas) |
 | F2 | Amostra gerada depois do collect de 19/10 20:00; anotação pelo usuário | 19/10 (noite) e 20/10 |
 | F3 | Score `web-v1` e linha de base congelada, na CLI | 17–19/10, sobre dados gravados, **sem olhar a anotação** |
 | — | Pré-registro dos critérios da F4 (commit) | **antes** de gerar a amostra, em 19/10 |
@@ -187,9 +187,9 @@ promissoras".
    `cf segment load`.
 4. **Rodízio:** são 13 consultas por segmento (4 classes × 3 + 1 seed), e
    cada coleta usa `WEB_QUERIES_PER_RUN` (default 3) em ordem cíclica
-   determinística. Com 2 coletas por dia, o ciclo completo leva cerca de 2
-   dias, o que garante que **todas as intenções** sejam coletadas antes da
-   amostra.
+   determinística. Com 2 coletas por dia, o ciclo completo leva cerca de dois
+   dias e meio (5 coletas), o que garante que **todas as intenções** sejam
+   coletadas antes da amostra.
 5. **Mudar consultas = nova versão** (`q2`). Hits de versões diferentes
    nunca se misturam numa mesma avaliação.
 

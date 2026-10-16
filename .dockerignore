@@ -1,6 +1,7 @@
 # Build context enxuto — a imagem base copia só pyproject.toml + uv.lock;
 # o serviço `python` recebe o código por bind-mount (..:/app) e o `worker`
-# o copia no estágio final do Dockerfile (COPY src).
+# o copia no estágio final do Dockerfile (COPY src e COPY segments — este
+# último traz `segments/web-queries/<slug>.q1.yaml`, lido em runtime).
 
 # VCS e caches
 .git
