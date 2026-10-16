@@ -17,10 +17,13 @@ from content_factory.app.score_sample import (
 )
 
 
-def _row(video_id: int, total: float, url: str = "https://x") -> ScoreSampleRow:
+def _row(
+    video_id: int, total: float, url: str = "https://x", platform: str = "youtube"
+) -> ScoreSampleRow:
     return ScoreSampleRow(
         video_id=video_id,
         url=url,
+        platform=platform,
         total=total,
         performance=None,
         velocity=None,
@@ -37,10 +40,12 @@ def _row(video_id: int, total: float, url: str = "https://x") -> ScoreSampleRow:
 class _FakeScoreSampleRepo:
     def __init__(self, rows: list[ScoreSampleRow]) -> None:
         self._rows = rows
-        self.calls: list[tuple[int, int]] = []
+        self.calls: list[tuple[int, int, str | None]] = []
 
-    async def top_scored_for_segment(self, segment_id: int, limit: int) -> list[ScoreSampleRow]:
-        self.calls.append((segment_id, limit))
+    async def top_scored_for_segment(
+        self, segment_id: int, limit: int, platform: str | None = None
+    ) -> list[ScoreSampleRow]:
+        self.calls.append((segment_id, limit, platform))
         return self._rows[:limit]
 
 
@@ -49,8 +54,18 @@ async def test_score_sample_delegates_to_repo() -> None:
 
     repo = _FakeScoreSampleRepo([_row(1, 90.0), _row(2, 80.0)])
     out = await score_sample(segment_id=7, limit=50, repo=repo)
-    assert repo.calls == [(7, 50)]
+    assert repo.calls == [(7, 50, None)]
     assert [r.video_id for r in out] == [1, 2]
+
+
+async def test_score_sample_passes_platform_filter() -> None:
+    """T4 (2026-10-16): scores de plataformas diferentes não são comparáveis —
+    o B3 avalia o ranking por plataforma."""
+    from content_factory.app.score_sample import score_sample
+
+    repo = _FakeScoreSampleRepo([_row(1, 90.0)])
+    await score_sample(segment_id=7, limit=50, repo=repo, platform="youtube")
+    assert repo.calls == [(7, 50, "youtube")]
 
 
 # --- Passo 8.3: CSV roundtrip ---
@@ -70,6 +85,7 @@ def test_write_score_csv_roundtrip(tmp_path: Path) -> None:
     assert header.split(",") == [
         "video_id",
         "url",
+        "platform",
         "total",
         "performance",
         "velocity",
@@ -84,6 +100,7 @@ def test_write_score_csv_roundtrip(tmp_path: Path) -> None:
     assert len(reloaded) == 2
     assert reloaded[0].video_id == 1
     assert reloaded[0].total == 90.0
+    assert reloaded[0].platform == "youtube"
     # coluna avaliacao_manual fica vazia no export
     assert reloaded[0].avaliacao_manual is None
 
@@ -239,3 +256,16 @@ def test_exported_csv_has_empty_annotation_column(tmp_path: Path) -> None:
     with out.open(newline="", encoding="utf-8") as f:
         reader = list(csv.reader(f))
     assert reader[1][-1] == ""  # avaliacao_manual vazia
+
+
+def test_read_score_csv_accepts_csv_without_platform_column(tmp_path: Path) -> None:
+    """CSV exportado antes da T4 (sem `platform`) continua legível."""
+    out = tmp_path / "old.csv"
+    out.write_text(
+        "video_id,url,total,performance,velocity,engagement,relevance,recency,"
+        "metrics_available,avaliacao_manual\n"
+        "1,https://a,90.0,,,,45.0,45.0,,3\n",
+        encoding="utf-8",
+    )
+    rows = read_score_csv(out)
+    assert rows[0].platform == "" and rows[0].avaliacao_manual == 3.0

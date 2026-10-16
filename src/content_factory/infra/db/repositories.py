@@ -531,7 +531,9 @@ class ScoreSampleRepositoryImpl:
     def __init__(self, session: AsyncSession) -> None:
         self._s = session
 
-    async def top_scored_for_segment(self, segment_id: int, limit: int) -> list[ScoreSampleRow]:
+    async def top_scored_for_segment(
+        self, segment_id: int, limit: int, platform: str | None = None
+    ) -> list[ScoreSampleRow]:
         # 1a passada: 1 linha por vídeo (DISTINCT ON — captura mais recente).
         # 2a passada: ordena pelo viral_score e aplica o LIMIT em SQL — evita
         # trazer todo o segmento pra memória só pra cortar em Python.
@@ -544,11 +546,13 @@ class ScoreSampleRepositoryImpl:
         )
         LatestScore = aliased(VideoScoreRow, latest)
         stmt = (
-            select(LatestScore, VideoRow.url)
+            select(LatestScore, VideoRow.url, VideoRow.platform)
             .join(VideoRow, VideoRow.id == LatestScore.video_id)
             .order_by(LatestScore.viral_score.desc())
             .limit(limit)
         )
+        if platform is not None:
+            stmt = stmt.where(VideoRow.platform == platform)
         rows = (await self._s.execute(stmt)).all()
         return [
             ScoreSampleRow(
@@ -561,8 +565,9 @@ class ScoreSampleRepositoryImpl:
                 relevance=score.relevance,
                 recency=score.recency,
                 metrics_available=list(score.metrics_available or []),
+                platform=video_platform,
             )
-            for score, url in rows
+            for score, url, video_platform in rows
         ]
 
 

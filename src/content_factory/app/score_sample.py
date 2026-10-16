@@ -50,18 +50,26 @@ class ScoreSampleRow:
     recency: float
     metrics_available: list[str]
     avaliacao_manual: float | None = None
+    platform: str = ""  # vazio = CSV exportado antes da T4 (2026-10-16)
 
 
 class ScoreSampleRepository(Protocol):
-    async def top_scored_for_segment(self, segment_id: int, limit: int) -> list[ScoreSampleRow]:
-        """Últimos scores calculados, ordenados por viral_score desc."""
+    async def top_scored_for_segment(
+        self, segment_id: int, limit: int, platform: str | None = None
+    ) -> list[ScoreSampleRow]:
+        """Últimos scores calculados, ordenados por viral_score desc.
+
+        `platform` restringe a uma plataforma: sem `views` o Instagram fica só
+        com recency/relevance (pesos renormalizados) e o score não é comparável
+        ao do YouTube. O B3 avalia o ranking por plataforma.
+        """
         ...
 
 
 async def score_sample(
-    segment_id: int, limit: int, repo: ScoreSampleRepository
+    segment_id: int, limit: int, repo: ScoreSampleRepository, platform: str | None = None
 ) -> list[ScoreSampleRow]:
-    return await repo.top_scored_for_segment(segment_id, limit)
+    return await repo.top_scored_for_segment(segment_id, limit, platform)
 
 
 # --- CSV roundtrip ---
@@ -69,6 +77,7 @@ async def score_sample(
 CSV_HEADER = [
     "video_id",
     "url",
+    "platform",
     "total",
     "performance",
     "velocity",
@@ -89,6 +98,7 @@ def write_score_csv(rows: list[ScoreSampleRow], path: Path) -> None:
                 [
                     r.video_id,
                     r.url,
+                    r.platform,
                     r.total,
                     "" if r.performance is None else r.performance,
                     "" if r.velocity is None else r.velocity,
@@ -124,6 +134,7 @@ def read_score_csv(path: Path) -> list[ScoreSampleRow]:
                         rec["metrics_available"].split(";") if rec["metrics_available"] else []
                     ),
                     avaliacao_manual=_opt_float(rec["avaliacao_manual"]),
+                    platform=rec.get("platform") or "",
                 )
             )
     return rows
