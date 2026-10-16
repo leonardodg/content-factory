@@ -98,6 +98,43 @@ class ScoreResult(BaseModel):
     metrics_available: list[str] = Field(default_factory=list[str])
 
 
+class WebSearchHit(BaseModel):
+    """F1 — uma linha de `web_search_hits` (inclui descartados pelo filtro).
+
+    `provider="unknown"` enquanto o `ddgs` agregar engines; `status` diz se a
+    página entrou em `videos` (`kept`) ou por que foi descartada.
+    """
+
+    segment_id: int | None = None
+    video_id: int | None = None
+    collected_at: datetime | None = None
+    query: str
+    query_id: str
+    query_intent: str
+    provider: str = "unknown"
+    provider_result_position: int
+    url_original: str
+    canonical_url: str
+    status: str  # kept|discarded_ad|duplicate
+    discard_reason: str | None = None
+    collector_version: str
+    rules_version: str
+    title: str = ""
+    snippet: str = ""
+
+
+class WebPageScoreRow(BaseModel):
+    """Uma linha de `web_page_scores` (append-only) a persistir."""
+
+    video_id: int
+    segment_id: int
+    computed_at: datetime
+    score: float | None
+    score_version: str
+    components: dict[str, float | None] = Field(default_factory=dict[str, float | None])
+    explanation: dict[str, Any] = Field(default_factory=dict[str, Any])
+
+
 class UpsertStats(BaseModel):
     inserted: int = 0
     updated: int = 0

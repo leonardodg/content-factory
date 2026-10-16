@@ -27,6 +27,10 @@ class Settings(BaseSettings):
     ig_user_id: str = ""
     tiktok_ms_token: str = ""
     tiktok_proxy: str | None = None
+    # F5: liga a gravação de `web_page_scores` no score_job. Kill switch,
+    # reversível sem mudar schema (migração 0010 é aditiva). Default off — só
+    # ligar com veredito "aprovado" na F4 em >= 2 dos 3 segmentos PT.
+    web_score_enabled: bool = False
 
 
 def get_settings() -> Settings:

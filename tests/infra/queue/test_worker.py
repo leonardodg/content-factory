@@ -193,6 +193,7 @@ class _FakeSegmentBundle:
     collect: object
     score: _FakeScorePart
     research: _FakeResearchPart
+    web: object = None
 
 
 class _FakeAppDeps:
@@ -482,6 +483,93 @@ async def test_run_score_job_noop_when_no_active_segment(
     )
     assert out == {"ok": True, "partial": False, "segments": {}}
     assert calls == []
+
+
+async def test_run_score_job_scores_web_when_enabled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """F5: `WEB_SCORE_ENABLED` liga a gravação de `web_page_scores` no score_job."""
+    from content_factory.config import Settings
+
+    async def fake_score(deps: ScoreDeps) -> object:
+        _ = deps
+        return _ScoreOk()
+
+    web_calls: list[tuple[str, object]] = []
+
+    async def fake_web(segment: Segment, repo: object, *, now: object) -> object:
+        _ = now
+        web_calls.append((segment.slug, repo))
+        return object()
+
+    monkeypatch.setattr(w, "_score_impl", fake_score)
+    monkeypatch.setattr(w, "_web_rank_impl", fake_web)
+    monkeypatch.setattr(w, "get_settings", lambda: Settings(web_score_enabled=True))
+    campaigns = _FakeCampaignsMultiSegment(slugs=["velas"])
+
+    out = await w.run_score_job({"campaigns_deps": campaigns, "app_deps": _FakeAppDeps([], [])})
+
+    assert out["ok"] is True
+    assert web_calls == [("velas", None)]  # bundle.web do fake é None por default
+
+
+async def test_run_score_job_skips_web_when_disabled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Default (kill switch off): o score web NÃO roda no worker (F5)."""
+    from content_factory.config import Settings
+
+    async def fake_score(deps: ScoreDeps) -> object:
+        _ = deps
+        return _ScoreOk()
+
+    async def fake_web(*args: object, **kwargs: object) -> object:
+        raise AssertionError("score web não devia rodar com WEB_SCORE_ENABLED=0")
+
+    monkeypatch.setattr(w, "_score_impl", fake_score)
+    monkeypatch.setattr(w, "_web_rank_impl", fake_web)
+    monkeypatch.setattr(w, "get_settings", lambda: Settings(web_score_enabled=False))
+    campaigns = _FakeCampaignsMultiSegment(slugs=["velas"])
+
+    out = await w.run_score_job({"campaigns_deps": campaigns, "app_deps": _FakeAppDeps([], [])})
+
+    assert out["ok"] is True
+
+
+async def test_run_score_job_web_failure_keeps_video_score(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Item 6: erro no score web (experimental) não pode perder o score de vídeos."""
+    from content_factory.config import Settings
+
+    events: list[str] = []
+
+    async def fake_score(deps: ScoreDeps) -> object:
+        _ = deps
+        events.append("score")
+        return _ScoreOk()
+
+    async def boom(*args: object, **kwargs: object) -> object:
+        events.append("web")
+        raise RuntimeError("web_page_scores fora")
+
+    monkeypatch.setattr(w, "_score_impl", fake_score)
+    monkeypatch.setattr(w, "_web_rank_impl", boom)
+    monkeypatch.setattr(w, "get_settings", lambda: Settings(web_score_enabled=True))
+    committed: list[str] = []
+    rolled_back: list[str] = []
+    campaigns = _FakeCampaignsMultiSegment(slugs=["velas"])
+
+    out = await w.run_score_job(
+        {"campaigns_deps": campaigns, "app_deps": _FakeAppDeps(committed, rolled_back)}
+    )
+
+    assert out["ok"] is True
+    assert out["segments"]["velas"]["ok"] is True
+    # o score de vídeos foi commitado ANTES do score web
+    assert events == ["score", "web"]
+    assert committed[:1] == ["commit"]
+    assert rolled_back == ["rollback"]  # só a parte web foi revertida
 
 
 def test_cron_hours_parse() -> None:

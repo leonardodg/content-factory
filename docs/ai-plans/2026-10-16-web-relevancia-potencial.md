@@ -1,358 +1,424 @@
 # Relevância web e potencial de conteúdo — plano de implementação
 
-Data: 2026-10-16. Origem: especificação técnica "relevância web e potencial
-de conteúdo" (recebida em 16/10). Este plano a confronta com o código e os
-dados reais antes de propor mudanças.
+Data: 2026-10-16 (revisado no mesmo dia com as decisões do usuário).
+Origem: especificação técnica "relevância web e potencial de conteúdo",
+confrontada com o código e os dados reais antes de propor mudanças.
 
-> **Regra do experimento:** a coleta vai até 2026-10-21 e o B3 vem depois.
-> Nada aqui altera `viral_score`, `FORMULA_VERSION`, `video_scores` nem os
-> critérios do B3. A web já está **fora do B3** (decisão de 16/10), então
-> mudar a **coleta web** não contamina a validação dos vídeos. O score web
-> novo nasce em modo comparativo, em tabela própria.
+## Três objetivos, três perguntas, nunca um score só
 
-## 0. Diagnóstico (inventário feito em 16/10)
+| Objetivo | Pergunta | Onde é tratado |
+| --- | --- | --- |
+| **1. Qualidade da coleta** | Os resultados são páginas legítimas, sem anúncios, duplicatas ou ruído evitável? | F0, F1 (filtro e proveniência) |
+| **2. Relevância temática** | A página corresponde ao segmento e à intenção da consulta? | F3 (score `web-v1`), F4 |
+| **3. Potencial criativo** | O conteúdo pode gerar uma ideia original e útil? | F2 (rótulo humano), F6 (conteúdo) |
+
+Cada um tem sua métrica. Nenhum é misturado ao `viral_score` dos vídeos.
+
+## Separação entre o experimento web e o de vídeos
+
+- O experimento de vídeos (coleta até 2026-10-21 e B3 depois) **não muda**:
+  `viral_score`, `FORMULA_VERSION`, `video_scores` e critérios do B3 ficam
+  como estão.
+- O experimento web tem **dados, versão e relatório próprios**: as tabelas
+  `web_search_hits` e `web_page_scores`, os protocolos `web-queries-q1` e
+  `web-v1`, e o relatório `docs/manual/validacao-web.md`.
+- A web já está fora do B3 (decisão de 16/10). Diversificar as consultas
+  web muda o conjunto de páginas, não os vídeos. Por isso a comparação de
+  rankings é sempre **pareada**, sobre os mesmos candidatos (F4).
+- O score web novo fica **só na CLI** até haver evidência (F5).
+
+## 0. Diagnóstico (inventário de 16/10)
 
 ### Como a web funciona hoje
 
 | Etapa | Código | O que acontece |
 | --- | --- | --- |
-| Busca | `infra/collectors/web.py` (`WebCollector.discover`) | `ddgs` 9.16 `DDGS().text(" OR ".join(keywords[:3]), max_results=limit)`. **Uma consulta fixa por segmento**, sempre a mesma. |
-| Mapeamento | idem | Vira `CandidateVideo(platform="web")` com `platform_video_id = sha1(href)`, `title`, `description = body` e `raw = {href, title, body}`. Sem métricas. |
-| Persistência | `VideoRepositoryImpl.upsert_candidates` | Grava em `videos` (dedupe por `(platform, sha1(href))`), `video_segments` (`discovery_source="web"`) e `video_metrics` com tudo `NULL`. |
-| Score | `app/score.py` + `domain/scoring.py` | O mesmo `viral_score` dos vídeos: sem métricas, sobram `recency` (sem data, 50 fixo) e `relevance_of`. |
-| Relevância | `relevance_of` | Fração das keywords do segmento que aparecem como substring em título e descrição: `hits / len(keywords)`. Com 16 keywords, uma página que casa 1 delas recebe 6,25%. |
+| Busca | `infra/collectors/web.py` | `ddgs` 9.16 `DDGS().text(" OR ".join(keywords[:3]), max_results=limit)`. **Uma consulta fixa por segmento.** |
+| Mapeamento | idem | `CandidateVideo(platform="web")`, `platform_video_id = sha1(href)`, `title`, `description = body`, `raw = {href, title, body}`. Sem métricas. |
+| Persistência | `VideoRepositoryImpl.upsert_candidates` | `videos` (dedupe por `sha1(href)` cru), `video_segments` (`discovery_source="web"`) e `video_metrics` com tudo `NULL`. |
+| Score | `app/score.py` + `domain/scoring.py` | O `viral_score` dos vídeos: sem métricas, sobram `recency` (sem data, 50 fixo) e `relevance_of`. |
+| Relevância | `relevance_of` | Substring de keyword em título+descrição, `hits / len(keywords)`. Com 16 keywords, uma página que casa 1 delas recebe 6,25%. |
 
-### Campos da especificação × o que existe
+### Campos × o que existe
 
-| Campo lógico | Situação | Observação |
-| --- | --- | --- |
-| `segment_id` | ✅ `video_segments` | |
-| `query` | ❌ não gravado | A consulta é derivada das keywords e se perde. |
-| `provider` | ❌ indisponível | O `ddgs` agrega engines (bing, brave, google…) e o resultado não diz de qual veio. Só fixando `backend=` por chamada. |
-| `provider_rank` | ❌ não gravado | Só existe a ordem da lista devolvida pelo `ddgs`, que é **agregada**, não a posição real no provedor. |
-| `url` | ✅ `videos.url` | |
-| `canonical_url` | ❌ | Hoje o dedupe é por `sha1(href)` cru: os mesmos parâmetros de rastreio com valores diferentes viram páginas diferentes. |
-| `title` / `snippet` | ✅ `title` / `description` | |
-| `domain` | ❌ coluna | É derivável da URL; não precisa de coluna. |
-| `published_at` | ❌ sempre `NULL` | O `ddgs.text` não devolve data (0 de 40 páginas têm). |
-| `content_fetched_at` | ❌ | Não há extração de conteúdo. |
-| `relevance_score` | ⚠️ | Existe `video_segments.relevance_score`, que hoje não é usado no ranking, e `video_scores.relevance`, que mede só substring. |
-| `creative_potential_score` | ❌ | |
-| `score_version` | ⚠️ | `video_scores.formula_version` é do score de vídeo, não da web. |
-| `score_explanation` | ❌ | |
+| Campo | Situação |
+| --- | --- |
+| segmento | ✅ `video_segments` |
+| consulta exata | ❌ não gravada |
+| provedor | ❌ o `ddgs` agrega engines e não diz a origem: é **desconhecido** |
+| posição | ❌ só existe a ordem da lista do `ddgs` (agregada), que não é gravada |
+| URL original | ✅ `videos.url` (pelo dedupe atual) |
+| URL canônica | ❌ |
+| data da coleta | ✅ `videos.first/last_collected_at` (sem vínculo com a consulta) |
+| versão do coletor | ❌ |
+| data de publicação | ❌ o `ddgs.text` não devolve: 0 de 40 páginas |
+| score, versão e explicação web | ❌ |
+| marcação explícita de anúncio | ❌ o `ddgs.text` só devolve `title/href/body`: não existe flag de publicidade |
 
 ### Dados reais (produção, 16/10)
 
-| Segmento | Páginas | Anúncios `bing.com/aclick` | Títulos distintos | Marketplaces |
+| Segmento | Páginas | `bing.com/aclick` | Títulos distintos | Marketplaces |
 | --- | --- | --- | --- | --- |
 | velas-artesanais | 5 | 0 | 5 | 0 |
 | sabonetes-artesanais | 7 | 0 | 7 | 0 |
 | resina-artesanal | 15 | **12** | 10 | 2 |
 
-Conclusões:
+1. **Entrada contaminada:** em resina, 12 das 15 páginas são cliques de
+   anúncio do Bing, vários com título repetido.
+2. **A amostra não sustenta avaliação:** são 27 páginas, porque a consulta é
+   fixa.
+3. **As consultas por intenção já existem** nos ~145 `keyword_signals` do
+   Suggest por segmento.
+4. **Atualidade não é avaliável** com o `ddgs`, porque não há data.
 
-1. **O problema mais grave não é o score, é a entrada.** Em resina, 12 das
-   15 páginas são cliques de anúncio do Bing (Temu, "Em Oferta"), e várias
-   têm título repetido com URLs diferentes só pelos parâmetros. Nenhum score
-   de relevância conserta isso: é filtro e canonicalização.
-2. **A amostra é pequena demais para avaliar.** São 27 páginas nos 3
-   segmentos. Com a consulta fixa, o `COLLECT_LIMIT=25` (a partir do
-   deploy noturno de 16/10) aumenta o volume por coleta, mas repete as
-   mesmas páginas. Para avaliar, é preciso **diversificar as consultas**.
-3. **Os sinais de intenção já existem:** o Suggest grava ~145
-   `keyword_signals` por segmento ("como fazer vela aromática", "resina
-   epóxi da dinheiro"…). São as consultas por intenção que a especificação
-   (§4.2) propõe, sem precisar de um classificador.
-4. **Atualidade não é avaliável com o `ddgs`:** nenhuma data. O componente
-   existe, mas fica "não avaliado" e sai da média (a mesma política de
-   métrica ausente do `viral_score`, Fase G).
+## Cronograma
 
-## 1. Fases e dependências
+| Fase | Entrega | Quando |
+| --- | --- | --- |
+| F0 + F1 | Filtro com rastro, proveniência, protocolo de consultas `q1` aprovado | código em 17/10; deploy na noite de 17/10 |
+| — | Coleta com o protocolo `q1` | 18–19/10 (4 coletas = 1 ciclo completo de consultas) |
+| F2 | Amostra gerada depois do collect de 19/10 20:00; anotação pelo usuário | 19/10 (noite) e 20/10 |
+| F3 | Score `web-v1` e linha de base congelada, na CLI | 17–19/10, sobre dados gravados, **sem olhar a anotação** |
+| — | Pré-registro dos critérios da F4 (commit) | **antes** de gerar a amostra, em 19/10 |
+| F4 | Avaliação pareada e relatório | 21–22/10, junto do B3 |
+| F5 | Ativação, só se aprovado | depois do B3 |
+| F6 | Potencial criativo por conteúdo | decisão depois da F4 |
 
-```
-F0  Entrada limpa ──► F1  Proveniência + consultas diversas ──► (coleta 2–3 dias)
-                                                                  │
-F3  Score web v1 (puro, comparativo) ◄── F2  Amostra + anotação ◄─┘
-        │
-        ▼
-F4  Avaliação contra os limiares ──► F5  Ativação (ou não)
-                                       │
-                                       ▼
-                       F6  Potencial criativo (conteúdo) — decisão após F4
-```
+## F0 — Filtro conservador e normalização, com rastro dos descartes
 
-Calendário proposto: F0 e F1 com deploy na janela noturna de 16 ou 17/10;
-coleta até 19/10; F2 (anotação) em 19–20/10; F3 em paralelo, sobre os dados
-gravados; F4 em 21–22/10, junto do B3; F5 depois do B3.
-
-## F0 — Entrada limpa (bug, não hipótese)
-
-São regras determinísticas e sem peso: corrigem dado errado. Entram antes de
-qualquer score, porque um score calculado em cima de anúncio mede ruído.
+**Princípio:** descartar só com **sinal verificável**. Uma página nunca é
+descartada por ter parâmetros na URL, por "parecer comercial" ou por ser
+de marketplace. Marketplace é página legítima, cuja intenção (comercial) é
+avaliada na F2/F3, não no filtro.
 
 **Arquivos:** `src/content_factory/domain/web_urls.py` (novo, puro) e
 `infra/collectors/web.py`.
 
-1. `canonical_url(url) -> str`: põe o host em minúsculas, remove o fragmento
-   e os parâmetros de rastreio conhecidos (`utm_*`, `fbclid`, `gclid`,
-   `msclkid`, `ref`, `ref_src`, `srsltid`), **mantém** os outros parâmetros
-   (que podem mudar o conteúdo), ordena os que ficam e normaliza a barra
-   final só no path vazio.
-2. `is_ad_redirect(url) -> bool`: `bing.com/aclick`, `bing.com/aclk`,
-   `duckduckgo.com/y.js`, `googleadservices.com`, `doubleclick.net`. O
-   coletor **descarta** essas páginas e conta quantas descartou (log e
-   `CollectRun.skipped`).
-3. O `platform_video_id` passa a ser `sha1(canonical_url)`. As páginas
-   antigas (27) mantêm o id antigo. A transição pode gerar no máximo uma
-   duplicata por página antiga, o que é aceitável e fica documentado.
-4. `raw` passa a guardar `href_original` quando difere da URL canônica
-   (auditoria).
+1. `ad_signal(url, title, body) -> str | None` devolve o **motivo**
+   verificável, ou `None`. Lista fechada e versionada (`AD_RULES_VERSION =
+   "ads-v1"`):
+   - domínio e caminho de redirecionamento publicitário: `bing.com/aclick`,
+     `bing.com/aclk`, `duckduckgo.com/y.js`, `googleadservices.com`,
+     `*.doubleclick.net`, `google.com/aclk`;
+   - marcação explícita de publicidade, **se** o provedor expuser. O `ddgs`
+     hoje não expõe; a regra fica preparada e documentada como inativa.
+   Título com "oferta" ou "desconto" **não** é sinal.
+2. `canonical_url(url) -> str`:
+   - host em minúsculas, sem fragmento;
+   - remove **só** os parâmetros de rastreio de uma lista fechada (`utm_*`,
+     `fbclid`, `gclid`, `msclkid`, `mc_eid`, `srsltid`, `ref_src`) e ordena
+     os que ficam;
+   - **mantém** qualquer outro parâmetro (`?id=`, `?p=`, `?q=` podem mudar o
+     conteúdo);
+   - URL inválida volta como veio, com a marca `canonical_ok=false`, sem
+     levantar exceção.
+3. **Rastro:** cada resultado, descartado ou não, gera uma linha em
+   `web_search_hits` (F1) com `status` (`kept` | `discarded_ad` |
+   `duplicate`) e `discard_reason`. Os descartados **não** entram em
+   `videos`, mas ficam auditáveis e amostráveis na F2, para medir o falso
+   positivo do filtro. `CollectRun.skipped` soma os descartes, e o
+   `ops-report` os mostra por motivo.
+4. **Identidade:** `platform_video_id = sha1(canonical_url)` para páginas
+   novas. As 27 antigas mantêm o id: a transição admite no máximo uma
+   duplicata por página antiga, registrada no relatório.
+5. **Duplicata na mesma coleta:** a mesma URL canônica vinda de duas
+   consultas grava uma página em `videos` e **dois** hits (as duas
+   consultas e posições são proveniência válida).
 
-**Testes (unit):** parâmetros de rastreio removidos e parâmetros de conteúdo
-mantidos (`?id=`, `?p=`); fragmento; host em maiúsculas; idempotência
-(`canonical(canonical(u)) == canonical(u)`); cada padrão de anúncio; URL sem
-esquema ou inválida (não levanta exceção: devolve a URL como veio e marca
-como inválida); coletor descarta o anúncio e conta em `skipped`.
+**Testes (unit):** cada padrão de anúncio é descartado com o motivo certo;
+URL de marketplace, com `?id=`, com "oferta" no título ou com `utm_` (é
+canonicalizada, não descartada) **não** é descartada; idempotência de
+`canonical_url`; fragmento e host; URL inválida não levanta exceção;
+`AD_RULES_VERSION` vai para o hit.
 
-**Aceite:** um collect de resina sem nenhum `bing.com/aclick`, com a
-contagem de descartes visível no `cf ops-report`.
+## F1 — Proveniência completa e protocolo fixo de consultas
 
-## F1 — Proveniência e consultas diversificadas
+### Tabela `web_search_hits` (migração `0010`)
 
-**Migração `0010`** (só o que falta, conforme a tabela do §0):
+Uma linha por resultado devolvido, inclusive os descartados.
 
-```
-web_search_hits                      -- 1 linha por (resultado × consulta × coleta)
-  id, segment_id FK, video_id FK, collected_at,
-  query TEXT, query_source VARCHAR(16)  -- 'seed' | 'suggest'
-  position INT                          -- ordem na lista do ddgs (agregada)
-  provider VARCHAR(32) NULL             -- NULL enquanto o ddgs agrega engines
-  INDEX (segment_id, collected_at)
-```
-
-Por que uma tabela própria: a mesma página aparece em várias consultas e
-coletas com posições diferentes, então isso não cabe em `videos`. É
-append-only, como `trend_observations`. `domain` é derivado da URL e não
-ganha coluna.
-
-**Consultas:** `WebCollector.discover` passa a fazer **N consultas por
-coleta** (`WEB_QUERIES_PER_RUN`, default 3), cada uma com `max_results =
-limit // N`:
-
-- 1 consulta das seeds, em rodízio determinístico pelas keywords do segmento
-  (a coleta k usa a janela `k mod len`);
-- as N−1 consultas restantes vêm dos `keyword_signals` do Suggest com maior
-  peso, também em rodízio, para não repetir sempre os mesmos.
-
-O coletor recebe as consultas prontas: quem escolhe é a camada `app`, numa
-função pura `plan_web_queries(segment, signals, run_index, n)`. O coletor
-continua sem acesso ao banco. A porta `Collector.discover(segment, limit)`
-não muda: as consultas chegam por um adaptador por segmento, no mesmo padrão
-do `SearchBoundYoutube`.
-
-**Custo e risco:** o `ddgs` é gratuito, mas sofre rate limit
-(`PLATFORM_MAX_CONCURRENCY` web=1 já vale). Com N=3 e 2 coletas por dia, são
-6 consultas por segmento por dia. Se `web_empty` subir no `ops-report`, o
-N volta para 1 por env, sem deploy.
-
-**Distinguir vazio de falha (critério 4 da especificação):** o `ddgs`
-devolve vazio tanto para "sem resultado" quanto para engine bloqueada
-(auditoria E-4.3). Com N consultas, passa a haver um sinal: `hits_por_query`
-no `raw` da run. Se todas as consultas vierem vazias, o resultado continua
-"ambíguo"; se só algumas, foi vazio legítimo daquela consulta. Essa limitação
-fica documentada e não é inventada nenhuma classificação.
-
-**Testes:** `plan_web_queries` (rodízio, sem repetição na janela,
-segmento sem sinais cai só nas seeds, determinismo pelo `run_index`);
-gravação de `web_search_hits` (integração em `cf-test-pg`); `position`
-1-based na ordem do `ddgs`; isolamento entre segmentos.
-
-**Aceite:** depois de 2 dias, cada segmento PT com **≥ 60 páginas únicas e
-canônicas** e a consulta de origem de cada uma registrada.
-
-## F2 — Conjunto de avaliação (anotação humana)
-
-**Comando:** `cf web-sample --segment X --n 60 --out arquivo.csv`. Faz uma
-amostra **estratificada**: metade do topo do ranking atual (a linha de base)
-e metade aleatória com seed fixa, gravada no CSV para ser reproduzível.
-Assim se mede tanto a precisão do topo quanto o que o ranking deixa de fora.
-
-**Colunas do CSV:** `video_id, url, domain, title, snippet, query,
-query_source, position, baseline_rank`, e as colunas a anotar:
-
-| Coluna | Escala | Pergunta |
+| Coluna | Tipo | Conteúdo |
 | --- | --- | --- |
-| `relevante` | 0/1/2 | Trata do nicho e do público do segmento? (0 fora, 1 tangencial, 2 central) |
-| `intencao` | aprender / resolver / tendencia / comercial / outro | Qual necessidade a página atende? |
-| `util` | 0/1/2 | Daria para tirar dela um conteúdo original? |
-| `motivo` | texto curto | Por quê, em uma frase |
+| `id` | PK | |
+| `segment_id` | FK | |
+| `video_id` | FK NULL | `NULL` quando descartado |
+| `collected_at` | timestamptz | |
+| `query` | text | **consulta exata** enviada |
+| `query_id` | varchar | id no protocolo (ex.: `q1:resolver:03`) |
+| `query_intent` | varchar | `aprender` / `resolver` / `tendencia` / `comercial` / `seed` |
+| `provider` | varchar | `unknown` enquanto o `ddgs` agregar engines; nunca uma origem presumida |
+| `provider_result_position` | int | posição **na lista devolvida pelo `ddgs`**, 1-based. Não é a posição no Google ou no Bing |
+| `url_original` | text | `href` como veio |
+| `canonical_url` | text | |
+| `status` | varchar | `kept` / `discarded_ad` / `duplicate` |
+| `discard_reason` | varchar NULL | ex.: `ad:bing_aclick` |
+| `collector_version` | varchar | ex.: `web-c2` (sobe quando o coletor muda de comportamento) |
+| `rules_version` | varchar | `ads-v1` |
+| `title`, `snippet` | text | como devolvidos (o descartado não tem linha em `videos`) |
 
-**Protocolo** em `docs/manual/anotacao-web.md`: definições com exemplos
-reais de cada nota, regra para casos ambíguos e instrução para anotar **sem
-ver o score novo** (o CSV não traz score novo, só a ordem da linha de base,
-que pode ser escondida com `--blind`).
+É append-only, com índice `(segment_id, collected_at)`. O domínio é
+derivado da URL canônica e não ganha coluna.
 
-**Versionamento:** os CSVs anotados ficam em `docs/data/web-eval/` só com
-`video_id` e as anotações. URL e título vêm do banco na hora da avaliação.
-O repositório é público: nada de dados de terceiros além de URLs públicas.
-O teste de privacidade cobre a pasta.
+### Protocolo de consultas `web-queries-q1`
 
-**Esforço:** 3 segmentos × 60 páginas ≈ 180 anotações, ~1 h 30 min de
-trabalho humano.
+Fixo e versionado **antes** da coleta. Não se escolhem "as que parecem
+promissoras".
 
-**Aceite:** os 3 CSVs anotados, com o protocolo publicado e a seed registrada.
+1. **Classificação por intenção** por léxico fechado e versionado
+   (`INTENT_LEXICON_VERSION = "intent-v1"`), sobre as frases do Suggest de
+   cada segmento:
+   - `aprender`: como, passo a passo, tutorial, receita, para iniciantes;
+   - `resolver`: erro, não, por que, problema, afunda, rachou, manchada, derrete;
+   - `tendencia`: tendência, 2026, moda, novidade, ideias;
+   - `comercial`: preço, vender, lucro, dá dinheiro, embalagem, fornecedor,
+     comprar.
+   Frase que casa mais de uma classe vai para a primeira, nessa ordem
+   documentada. Frase sem marcador vai para `sem_intencao` e não entra.
+2. **Seleção estratificada e cega:** de cada classe, **3 frases sorteadas
+   com seed fixa** (`seed = 20261017`). O sorteio não usa o peso do Suggest,
+   para não favorecer as consultas "boas". Também entra 1 consulta `seed`
+   (as keywords do segmento, como hoje), que serve de controle. Uma classe
+   com menos de 3 frases leva as que houver, e a falta fica registrada.
+3. **Congelamento:** `cf web-queries --segment X --propose` gera
+   `segments/web-queries/<slug>.q1.yaml` com as consultas, a classe, a seed e
+   as versões. **O usuário revisa e aprova** (só pode vetar uma frase
+   inadequada; o veto e o motivo são registrados e a substituta é a próxima
+   do sorteio). O arquivo vai para o commit e é carregado no banco por
+   `cf segment load`.
+4. **Rodízio:** são 13 consultas por segmento (4 classes × 3 + 1 seed), e
+   cada coleta usa `WEB_QUERIES_PER_RUN` (default 3) em ordem cíclica
+   determinística. Com 2 coletas por dia, o ciclo completo leva cerca de 2
+   dias, o que garante que **todas as intenções** sejam coletadas antes da
+   amostra.
+5. **Mudar consultas = nova versão** (`q2`). Hits de versões diferentes
+   nunca se misturam numa mesma avaliação.
 
-## F3 — Score web v1, puro e comparativo
+**Arquitetura:** `plan_web_queries(protocol, run_index, n)` fica em
+`domain`, puro. O coletor recebe as consultas prontas por um adaptador por
+segmento (o padrão do `SearchBoundYoutube`), e a porta `Collector` não muda.
 
-**Arquivos:** `src/content_factory/domain/web_relevance.py` (puro);
-`app/web_rank.py` (caso de uso); tabela `web_page_scores` na migração `0010`.
+**Vazio × falha:** o `ddgs` não distingue "sem resultado" de "engine
+bloqueada" (E-4.3). Por consulta, grava-se `hits = 0` com o status da run.
+Uma consulta vazia num ciclo em que as outras trouxeram resultado indica
+vazio legítimo; todas vazias continua "ambíguo". Nada além disso é
+inventado.
 
-```
-web_page_scores                      -- append-only, como video_scores
-  id, video_id FK, segment_id FK, computed_at,
-  score FLOAT, score_version VARCHAR(16)   -- 'web-v1'
-  components JSONB                          -- {tema: 0.8, intencao: null, …}
-  explanation JSONB                         -- evidências legíveis
-```
+**Testes:** léxico (cada classe, ordem de precedência, frase sem
+marcador); sorteio determinístico pela seed e independente do peso; classe
+com menos de 3 frases; rodízio cobre as 13 em `ceil(13/3)` coletas;
+`provider='unknown'`; posição 1-based; integração da gravação dos hits,
+inclusive os descartados, em `cf-test-pg`; isolamento entre segmentos.
 
-**Componentes**, cada um em [0, 1] ou `None` (não avaliado). O score é a
-média ponderada **só dos avaliados**, com os pesos renormalizados e o
-resultado × 100:
+**Aceite da F1:** depois de um ciclo completo, cada segmento PT tem
+resultados de **todas** as classes com frases, e cada página tem a consulta,
+a posição, a URL original e a URL canônica.
 
-| Componente | Peso | Regra v1 | `None` quando |
+## F2 — Conjunto de avaliação
+
+### Amostra: `cf web-sample --segment X --out arquivo.csv`
+
+Por segmento, **50 candidatos**, seed fixa gravada no CSV:
+
+| Estrato | Quantidade | Para medir |
+| --- | --- | --- |
+| Topo da linha de base | 15 | precisão do ranking atual |
+| Aleatório entre os `kept` | 25 | o que o ranking deixa de fora; base da comparação pareada |
+| Descartados pelo filtro | até 10 | falso positivo do filtro (cobertura) |
+
+Total de **≤ 150 itens** nos 3 segmentos. O CSV traz `item_id`, a URL
+canônica, o domínio, o título, o snippet, a consulta exata e a classe de
+intenção da consulta. **Não** traz score novo, posição da linha de base nem
+estrato: a anotação é cega e a ordem das linhas é embaralhada.
+
+### Rótulos (definidos antes de anotar)
+
+| Coluna | 0 | 1 | 2 |
 | --- | --- | --- | --- |
-| `tema` | 0,40 | Keywords do segmento presentes em título+snippet, com acentos e caixa normalizados e casamento por **todos os tokens da keyword** (não substring). Cada keyword conta **uma vez**, não importa onde ou quantas vezes apareça. Satura em 2: `min(1, casadas / 2)`. | o segmento não tem keywords |
-| `intencao` | 0,25 | A consulta de origem tem um marcador de intenção (léxico pt por classe: "como", "passo a passo" = aprender; "erro", "não", "por que", "afunda" = resolver; "tendência", "2026" = tendência; "preço", "vender", "comprar" = comercial) e o título ou snippet atendem à mesma classe. | a consulta não tem marcador |
-| `metadados` | 0,15 | Média de 3 testes: título informativo (15–120 caracteres, não é só o nome do domínio), snippet com ≥ 60 caracteres e URL `https` válida. | nunca |
-| `atualidade` | 0,10 | Decaimento por idade (mesma faixa do `trend_decay`). | sem `published_at`, ou seja, **sempre** com o `ddgs` hoje |
-| `posicao` | 0,10 | `1 − (posição − 1) / N`, a **melhor** posição entre as consultas da coleta mais recente. | página sem `web_search_hits` (anterior à F1) |
+| `tema` | não trata do segmento | trata de forma **efetiva** mas secundária | o segmento é o assunto central |
+| `intencao` | não atende à intenção da consulta | atende em parte | atende claramente |
+| `utilidade` | nada aproveitável | dá uma ideia, sem detalhe | material concreto (técnica, erro, dado, exemplo) para conteúdo original |
+| `invalido` | — | marcador: `anuncio` / `vazia` / `duplicata` / `inacessivel` | — |
+| `motivo` | obrigatório quando `tema` ≤ 1 ou quando há `invalido`; uma frase | | |
 
-Os pesos são hipótese, não valor validado. Ficam numa constante
-`WEB_WEIGHTS` versionada com `WEB_SCORE_VERSION = "web-v1"`; mudar um
-peso exige subir a versão. A `explanation` guarda, por componente, a
-evidência: as keywords que casaram, o marcador de intenção, os testes de
-metadados que falharam e a posição usada. É isso que responde "por que esta
-página".
+**Positivo (pré-definido):**
+- relevante = `tema ≥ 1` **e** sem `invalido`. Página que só menciona o
+  tema de passagem é 0;
+- útil = `utilidade ≥ 1` e sem `invalido`;
+- página legítima (para a cobertura) = sem `invalido`.
 
-**Diversidade (separada do score):** `select_top(scored, k, max_per_domain=2)`
-seleciona sobre a lista ordenada **sem alterar** o score de nenhuma página.
-Antes dela, `dedupe_titles` remove título normalizado idêntico dentro do
-segmento (casefold, sem acento, sem pontuação), mantendo o de maior score.
-Similaridade aproximada fica fora da v1.
+**Tempo:** cerca de 1 min por item, o que dá **~2 h 30 min** no total.
+Proposta: 2 sessões, 19/10 à noite (velas, sabonetes) e 20/10 (resina). O
+protocolo, com exemplos reais de cada nota, fica em
+`docs/manual/anotacao-web.md`.
 
-**Linha de base:** a ordem atual da web (o `viral_score` dos vídeos aplicado
-a páginas) é recalculada do banco pela mesma função de avaliação. Assim os
-dois rankings são comparáveis.
+**Anotadores:** um só (o usuário). Por isso a métrica se chama
+**"concordância do score com o rótulo humano"**, e nunca concordância entre
+anotadores. Opcional: um segundo anotador em 30 itens comuns daria um kappa
+de Cohen, reportado à parte, como teto de qualidade do rótulo.
 
-**Comando:** `cf web-rank --segment X [--top 10] [--compare]`. Calcula e
-grava em `web_page_scores` e, com `--compare`, devolve no envelope as duas
-listas lado a lado (ids). Fica **só na CLI** até a F5: o worker não muda e
-o `score_job` não é tocado durante o experimento.
+**Versionamento:** `docs/data/web-eval/<slug>.csv` com `item_id`, os
+rótulos e a seed. URL e título vêm do banco na avaliação; o repositório é
+público, e o teste de privacidade cobre a pasta.
 
-**Testes (unit, domínio puro):**
+## F3 — Score `web-v1` e linha de base congelada (só CLI)
 
-- limites: score em [0, 100]; pesos somam 1; renormalização com 1 a 4 `None`;
-  tudo `None` dá score `None`, não 0;
-- determinismo: mesma entrada e mesma versão dão o mesmo score e a mesma
-  explicação;
-- sinal contado uma vez: keyword repetida 5 vezes no título = 1 vez;
-  keyword no título e no snippet = 1;
-- tokens: "cera de soja" não casa com "soja" sozinha; acento e caixa não
-  importam;
-- dado ausente: sem data, `atualidade` é `None` com motivo "sem data";
-  snippet vazio reprova o teste de metadados sem quebrar;
-- diversidade: com `max_per_domain=2` e 5 páginas do mesmo domínio no topo,
-  entram 2 e o score delas não muda;
-- dedupe de títulos: títulos idênticos normalizados mantêm o maior score;
-- isolamento: keywords de um segmento não afetam o score de outro;
-- não contaminação: `web_rank` não escreve em `video_scores`. É um teste de
-  integração que conta as linhas antes e depois.
+**Arquivos:** `domain/web_relevance.py` (puro), `app/web_rank.py` e a
+tabela `web_page_scores` (migração `0010`): `video_id`, `segment_id`,
+`computed_at`, `score`, `score_version`, `components JSONB` e
+`explanation JSONB`, append-only.
 
-**Integração:** gravação em `web_page_scores`, falha de infraestrutura
-propagada sem ser engolida (padrão da Etapa 1 Task 11) e envelope `{"ok": …}`.
+### Componentes
 
-## F4 — Avaliação (limiares fixados ANTES de ver os resultados)
+Cada um em [0, 1] ou `None` (não avaliado). O score é a média ponderada
+**só dos avaliados**, com os pesos renormalizados e o resultado × 100. Tudo
+`None` dá score `None`, nunca 0.
 
-**Comando:** `cf web-eval --annotated docs/data/web-eval/<seg>.csv`,
-somente leitura. Calcula as métricas para a linha de base e para a v1 sobre
-as mesmas páginas.
+| Componente | Peso | Regra | `None` quando |
+| --- | --- | --- | --- |
+| `tema` | 0,40 | keywords do segmento em título+snippet, normalizadas (caixa, acento) e casadas por **todos os tokens** da keyword. Cada keyword conta **uma vez**. Satura em 2: `min(1, casadas/2)` | o segmento não tem keywords |
+| `intencao` | 0,25 | o título ou snippet tem um marcador da **mesma classe** da consulta (léxico `intent-v1`) | consulta `seed` ou sem classe |
+| `metadados` | 0,15 | média de: título de 15 a 120 caracteres e não só o nome do domínio; snippet ≥ 60 caracteres; `canonical_ok` | nunca |
+| `atualidade` | 0,10 | faixas do `trend_decay` | sem data, ou seja, sempre com o `ddgs` hoje |
+| `posicao` | 0,10 | `1 − (p − 1)/N`, melhor `provider_result_position` da última coleta | sem hit |
 
-Limiares propostos, **para aprovação do usuário antes da F4** (com
-`relevante ≥ 1` = relevante e `util ≥ 1` = útil):
+Os pesos são hipótese: constante `WEB_WEIGHTS` com `WEB_SCORE_VERSION =
+"web-v1"`. Mudar regra ou peso sobe a versão. A `explanation` registra, por
+componente, a evidência: as keywords casadas, o marcador, os testes de
+metadados que falharam e a posição usada.
 
-| Métrica | Definição | Limiar para a v1 |
-| --- | --- | --- |
-| Precisão no top 5 | relevantes / 5 (após dedupe e diversidade) | ≥ 0,6 por segmento |
-| Precisão no top 10 | relevantes / 10 | ≥ 0,5 **e** ≥ a linha de base + 0,1 |
-| Concordância humana | Spearman (score × `relevante + util`) | ≥ 0,5 (mesmo do B3) |
-| Cobertura | páginas com `tema` e `metadados` avaliáveis | ≥ 90% |
-| Diversidade | domínios distintos no top 10 | ≥ 6 |
-| Estabilidade | Spearman entre duas coletas consecutivas (páginas em comum) | ≥ 0,7 (mesmo do B3) |
-| Custo e latência | tempo de `web-rank` por segmento; chamadas externas | < 2 s; 0 chamadas externas |
+### Linha de base reproduzível
 
-Se a amostra de um segmento tiver menos de 40 páginas anotadas, o resultado
-dele é "insuficiente" e não "reprovado": a amostra é ampliada antes de
-qualquer conclusão.
+`baseline_web_score` (`base-fase-h`) é uma cópia congelada da regra atual
+aplicada a uma página: `viral_score` com métricas ausentes, `relevance_of` e
+`recency` = 50. É uma função pura com teste de equivalência contra
+`domain/scoring.py` na data do congelamento. Assim, se o score de vídeo
+mudar no futuro, a linha de base não muda junto.
 
-**Relatório** em `docs/manual/validacao-web.md`: tabela por segmento
-(linha de base × v1), onde a v1 melhora, piora ou não muda, e os 5 piores
-erros da v1 com a `explanation`, para orientar a v2. Se reprovar: muda a
-regra, sobe a versão (`web-v2`) e repete a F4. Os limiares não mudam.
+### Diversidade e duplicatas: seleção, não score
 
-## F5 — Ativação
+- `dedupe_titles`: título normalizado idêntico dentro do segmento fica só
+  com o de maior score. O descartado aparece na `explanation` do mantido.
+- `select_top(k, max_per_domain)`: limita páginas por domínio **na lista
+  final**, sem mexer em score nenhum. Na F4 o top-k é medido **com e sem**
+  esse limite, para ver se a diversidade rebaixa páginas excelentes.
 
-Só com a F4 aprovada:
+**Comando:** `cf web-rank --segment X [--compare]` grava `web_page_scores`
+e devolve no envelope os dois rankings (ids). **O worker não muda.**
 
-1. O `score_job` passa a calcular `web_page_scores` também (é barato: CPU,
-   sem rede).
-2. A web **sai do `viral_score`**: o `score()` filtra `platform != "web"`.
-   Isso altera o ranking de vídeos, mas a web já estava fora do B3, então só
-   muda a mistura que o B3 já não usa. Exige uma nota no diário e
-   **não** sobe o `FORMULA_VERSION` (a fórmula não muda, muda o escopo).
-3. Um `cf web-top --segment X --k 10` entrega as melhores referências à
-   próxima etapa (critério 5 da especificação), sem extrair conteúdo.
-4. **Rollback:** desligar a env `WEB_SCORE_ENABLED=0` volta ao estado
-   anterior. As tabelas da `0010` são aditivas, e o `downgrade` remove as
-   duas sem tocar nas outras.
+**Testes:** limites e renormalização (de 1 a 4 componentes `None`);
+determinismo (mesma entrada e versão dão o mesmo score e a mesma
+explicação); keyword repetida ou em título e snippet conta 1; casamento por
+tokens ("cera de soja" ≠ "soja"); acento e caixa; snippet vazio; ausência
+de data; `select_top` não altera scores; `dedupe_titles`; isolamento entre
+segmentos; **não contaminação** (integração: `web-rank` não escreve em
+`video_scores`); erro de infraestrutura propaga; envelope `{"ok": …}`.
 
-Se a F4 reprovar e a v2 não resolver, a web continua coletando com
-proveniência (F0 e F1 já têm valor sozinhas) e o score fica como sinal
-experimental, fora do worker.
+## F4 — Avaliação pareada com critérios pré-registrados
 
-## F6 — Potencial criativo (fora do caminho crítico; decisão após a F4)
+### Pré-registro
 
-Precisa do conteúdo da página. Não é possível julgar potencial por título e
-snippet com a mesma confiança.
+Em 19/10, **antes** de gerar a amostra, um commit fixa em
+`docs/manual/validacao-web.md` as definições abaixo, as versões (`q1`,
+`ads-v1`, `intent-v1`, `web-v1`, `base-fase-h`) e as seeds. Depois disso,
+mudar um critério exige registrar o motivo e a data, e o resultado é
+reportado pelos dois critérios.
 
-- Extração **só das top-k validadas** (k=10 por segmento por dia), com o
-  `assert_public_http` já existente (`infra/ssrf.py`; TOCTOU em
+### Comparação pareada
+
+As duas funções (`base-fase-h` e `web-v1`) ordenam **exatamente o mesmo
+conjunto**: os itens `kept` anotados do segmento, excluindo o estrato de
+descartados. O empate é desfeito por `video_id`. Nenhum ranking enxerga um
+candidato que o outro não viu.
+
+### Métricas: definição operacional e papel
+
+| Métrica | Cálculo | Papel | Meta |
+| --- | --- | --- | --- |
+| **P@5** | relevantes entre os 5 primeiros / 5 | **critério** | ≥ 0,6 por segmento |
+| **P@10** | relevantes entre os 10 primeiros / 10 | **critério** | ≥ 0,5 |
+| **Ganho em P@10** | P@10(v1) − P@10(base), no mesmo conjunto | **critério** | ≥ 0,1, **com o limite inferior do IC 95% > 0** |
+| **Cobertura do filtro** | legítimas preservadas / legítimas antes do filtro, estimada pelo estrato de descartados (legítimas descartadas = falso positivo) | **critério** | ≥ 90% |
+| Concordância score × rótulo | Spearman entre o score e `tema + intencao + utilidade`, sobre os `kept` anotados | indicador | referência: 0,5 |
+| Diversidade | domínios distintos no top 10, com e sem `max_per_domain` | indicador | referência: 6 |
+| Estabilidade | sobreposição média do top 10 (\|A∩B\|/10) entre 200 reamostragens bootstrap dos candidatos; e entre as duas últimas coletas | indicador | referência: 0,7 |
+| Utilidade no top 10 | úteis entre os 10 primeiros / 10 | indicador (prepara a F6) | — |
+| Custo/latência | tempo de `web-rank` por segmento; chamadas externas | indicador | < 2 s; 0 chamadas |
+
+**Incerteza:** toda métrica sai com **n** e **IC 95% por bootstrap**
+(1.000 reamostragens dos itens, seed fixa). Com 40 a 50 itens por segmento,
+os resultados são **direcionais**. O relatório diz isso e nunca transforma
+uma diferença pontual em garantia.
+
+### Veredito por segmento
+
+| Veredito | Condição |
+| --- | --- |
+| **aprovado** | os 4 critérios atingidos, com o ganho de IC inferior > 0 |
+| **direcional** | metas pontuais atingidas, mas o IC do ganho inclui 0 |
+| **insuficiente** | < 40 itens `kept` anotados, ou uma classe de intenção sem dados. Amplia-se a amostra antes de concluir |
+| **não atingido** | algum critério abaixo da meta com n suficiente. Leva a investigar dado, métrica ou segmento, não necessariamente a uma falha do projeto |
+
+**Relatório** (`docs/manual/validacao-web.md`): tabela por segmento
+(base × v1, com IC), os 5 piores erros da v1 com a `explanation`, os falsos
+positivos do filtro e a decisão. Uma v2 sobe a versão e repete a F4 com o
+**mesmo** pré-registro.
+
+## F5 — Ativação (só com evidência)
+
+Condição: veredito **aprovado** em pelo menos 2 dos 3 segmentos PT, sem
+nenhum "não atingido" por cobertura.
+
+1. O `score_job` passa a gravar `web_page_scores` (só CPU), atrás de
+   `WEB_SCORE_ENABLED`.
+2. A web sai do `viral_score` (`score()` filtra `platform != "web"`). Muda
+   só a mistura que o B3 já não usa, fica anotado no diário e o
+   `FORMULA_VERSION` não sobe (a fórmula não muda, muda o escopo).
+3. `cf web-top --segment X --k 10` entrega as melhores referências à próxima
+   etapa, sem extrair conteúdo.
+4. **Rollback:** `WEB_SCORE_ENABLED=0` volta ao comportamento anterior. A
+   migração `0010` é aditiva, e o `downgrade` remove só as duas tabelas.
+
+Sem aprovação, F0 e F1 continuam (qualidade da coleta e proveniência valem
+sozinhas) e o `web-v1` segue como sinal experimental, fora do worker.
+
+## F6 — Potencial criativo por conteúdo (fora do caminho crítico)
+
+Decisão depois da F4. Esboço:
+
+- extração só das top-k aprovadas (k = 10 por segmento por dia), com o
+  `assert_public_http` (`infra/ssrf.py`; TOCTOU em
   [ADR-0008](../adr/0008-ssrf-toctou-adiado.md)), timeout, limite de bytes e
-  respeito a `robots.txt`.
-- Rubrica de 5 dimensões, de 0 a 2 cada (utilidade, especificidade,
-  adaptabilidade, ângulo, evidência), **anotada por humano primeiro** sobre
-  as mesmas páginas da F2. O nome do resultado é `creative_potential`,
-  nunca `viral`.
-- IA generativa só entra se uma comparação com a anotação humana mostrar
-  ganho que pague o custo, com plano próprio.
+  `robots.txt`;
+- rubrica de 5 dimensões de 0 a 2 (utilidade, especificidade,
+  adaptabilidade, ângulo, evidência), **anotada por humano primeiro**;
+  resultado `creative_potential`, nunca `viral`;
+- IA generativa só com ganho medido contra o rótulo humano, em plano próprio.
 
-## 2. Fora de escopo (da especificação, confirmado)
+## Fora de escopo
 
 Estimativa de tráfego; SEO pago; IA sobre página não processada; busca
-semântica nova; o `insta_kb` (bloqueado até o content-factory fechar 100%);
+semântica; o `insta_kb` (bloqueado até o content-factory fechar 100%);
 score único misturando vídeo, página e potencial.
 
-## 3. Gates por PR
+## Gates por PR
 
-pytest, ruff, pyright strict 0, `alembic check` (F1 e F3), bandit,
-pip-audit, `mkdocs --strict`, privacidade. TDD em toda função de `domain/`.
-Deploy só na janela noturna (depois do score das 21:30 BRT, com a fila vazia).
+pytest, ruff, pyright strict 0, `alembic check`, bandit, pip-audit,
+`mkdocs --strict`, privacidade. TDD em todo `domain/`. Deploy só na janela
+noturna (depois do score das 21:30 BRT, com a fila vazia).
 
-## 4. Decisões pendentes do usuário
+## Decisões registradas (usuário, 2026-10-16)
 
-1. **Limiares da F4** (tabela acima): aprovar ou ajustar **antes** da
-   anotação.
-2. **Consultas diversificadas na web durante o experimento (F1):** muda a
-   coleta web antes de 21/10. Recomendo fazer, porque a web está fora do B3
-   e sem isso não há amostra para a F2.
-3. **Quem anota a F2** (~1 h 30 min) e quando (proposta: 19–20/10).
-4. **F6** só depois do resultado da F4.
+- **Limiares:** P@5, P@10 com ganho e cobertura são **critérios**, com as
+  definições acima. Concordância, diversidade e estabilidade são
+  **indicadores** até haver calibração. Os critérios são pré-registrados
+  antes da F4.
+- **Consultas diversificadas durante o experimento:** sim, com o protocolo
+  fixo `q1` estratificado por intenção e cego ao peso, versionado e com a
+  consulta exata gravada por resultado.
+- **Anotação:** pelo usuário, em 19/10 (noite) e 20/10, com a coleta e a
+  normalização estáveis.
+
+## Pendente do usuário
+
+- Revisar e aprovar o arquivo `segments/web-queries/<slug>.q1.yaml` de cada
+  segmento (só veto com motivo), em 17/10, antes do deploy.

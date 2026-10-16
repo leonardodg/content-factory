@@ -18,9 +18,14 @@ from content_factory.app.ports import (
 )
 from content_factory.app.results import collect_result, score_result
 from content_factory.app.score import ScoreDeps, ScoreOutcome, score
+from content_factory.app.web_eval import WebEvalReport
+from content_factory.app.web_rank import WebRankOutcome
+from content_factory.app.web_sample import WebSampleRun
 from content_factory.cli.output import dumps, envelope_err, envelope_ok, exit_code_for
 from content_factory.domain.errors import CollectorError, DomainError, SegmentNotFound
 from content_factory.domain.models import CandidateVideo, ResearchCampaign, Segment
+from content_factory.domain.web_eval import Interval
+from content_factory.domain.web_relevance import WebScore
 from content_factory.infra.logs import configure_logging
 from content_factory.infra.redact import redact
 
@@ -109,6 +114,7 @@ async def _collect_deps(platforms: list[str]) -> AsyncGenerator[CollectDeps]:
         CollectRunRepositoryImpl,
         SegmentRepositoryImpl,
         VideoRepositoryImpl,
+        WebHitRepositoryImpl,
     )
     from content_factory.infra.lock import RedisLock
     from content_factory.infra.ratelimit import RedisRateLimiter
@@ -125,6 +131,7 @@ async def _collect_deps(platforms: list[str]) -> AsyncGenerator[CollectDeps]:
             runs=CollectRunRepositoryImpl(session),
             limiter=RedisRateLimiter(client),
             lock=RedisLock(client),
+            web_hits=WebHitRepositoryImpl(session),
         )
         await session.commit()
 
@@ -341,6 +348,313 @@ def score_correlation_cmd(
     raise typer.Exit(exit_code_for(ok=False))
 
 
+# --- web: proveniência, protocolo, score e avaliação (R #45) ---
+# Plano: docs/ai-plans/2026-10-16-web-relevancia-potencial.md (F1-F4 na CLI).
+# O score web tem tabela própria (`web_page_scores`) e NUNCA toca o
+# `viral_score` dos vídeos.
+
+
+async def _apropose_web_queries(
+    segment_slug: str, directory: Path, vetoes: dict[str, str]
+) -> tuple[str, Path, dict[str, int]]:
+    """Lê os signals do Suggest do segmento e grava o protocolo `q1`."""
+    from content_factory.app.web_queries_plan import build_protocol, write_protocol
+    from content_factory.config import get_settings
+    from content_factory.infra.collectors.web_queries import protocol_path
+    from content_factory.infra.db.base import get_session_factory
+    from content_factory.infra.db.repositories import (
+        KeywordSignalRepositoryImpl,
+        SegmentRepositoryImpl,
+    )
+
+    factory: async_sessionmaker[AsyncSession] = get_session_factory(get_settings())
+    async with factory() as session:
+        seg = await SegmentRepositoryImpl(session).get_by_slug(segment_slug)
+        signals = await KeywordSignalRepositoryImpl(session).top_for_segment(seg.id, None, 500)
+    protocol = build_protocol(
+        seg.slug, [s.keyword for s in signals], list(seg.keywords), vetoes=vetoes
+    )
+    path = protocol_path(directory, seg.slug)
+    write_protocol(path, protocol)
+    return seg.slug, path, dict(protocol.missing)
+
+
+@app.command("web-queries")
+def web_queries_cmd(
+    segment: str = typer.Option(..., "--segment", help="slug do segmento"),
+    propose: bool = typer.Option(
+        False, "--propose", help="gera e grava o protocolo q1 (revisão do usuário)"
+    ),
+    veto: list[str] | None = typer.Option(  # noqa: B008 (typer exige a chamada no default)
+        None, "--veto", help="frase do protocolo a vetar (repetível); exige --reason"
+    ),
+    reason: str = typer.Option("", "--reason", help="motivo do veto (registrado no protocolo)"),
+    directory: str | None = typer.Option(
+        None, "--dir", help="diretório do protocolo (default: segments/web-queries)"
+    ),
+) -> None:
+    """Monta o protocolo fixo de consultas web `q1` do segmento (F1)."""
+    if not propose:
+        print(dumps(envelope_err("web-queries", "usage_error", "informe --propose")))
+        raise typer.Exit(exit_code_for(ok=False))
+    vetoes = {phrase: reason or "vetado pelo usuário" for phrase in (veto or [])}
+    try:
+        from content_factory.infra.collectors.web_queries import DEFAULT_QUERIES_DIR
+
+        target = Path(directory) if directory else DEFAULT_QUERIES_DIR
+        slug, path, missing = asyncio.run(_apropose_web_queries(segment, target, vetoes))
+    except SegmentNotFound as exc:
+        print(dumps(envelope_err("web-queries", "segment_not_found", redact(str(exc)))))
+        raise typer.Exit(exit_code_for(ok=False)) from exc
+    except DomainError as exc:
+        print(dumps(envelope_err("web-queries", "usage_error", redact(str(exc)))))
+        raise typer.Exit(exit_code_for(ok=False)) from exc
+    except Exception as exc:
+        print(dumps(envelope_err("web-queries", "internal_error", redact(str(exc)))))
+        raise typer.Exit(exit_code_for(ok=False)) from exc
+    print(
+        dumps(
+            envelope_ok(
+                "web-queries", segment=slug, path=str(path), missing=missing, vetoes=len(vetoes)
+            )
+        )
+    )
+    raise typer.Exit(exit_code_for(ok=True))
+
+
+async def _aweb_rank(segment_slug: str, k: int, max_per_domain: int | None) -> WebRankOutcome:
+    from content_factory.app.web_rank import web_rank
+    from content_factory.config import get_settings
+    from content_factory.infra.db.base import get_session_factory
+    from content_factory.infra.db.repositories import (
+        SegmentRepositoryImpl,
+        WebScoreRepositoryImpl,
+    )
+
+    factory: async_sessionmaker[AsyncSession] = get_session_factory(get_settings())
+    async with factory() as session:
+        seg = await SegmentRepositoryImpl(session).get_by_slug(segment_slug)
+        outcome = await web_rank(
+            seg,
+            WebScoreRepositoryImpl(session),
+            now=datetime.now(UTC),
+            k=k,
+            max_per_domain=max_per_domain,
+        )
+        await session.commit()
+        return outcome
+
+
+def _brief(score: WebScore) -> dict[str, Any]:
+    return {"video_id": score.video_id, "domain": score.domain, "score": score.score}
+
+
+def _explained(score: WebScore) -> dict[str, Any]:
+    return {**_brief(score), "components": score.components, "explanation": score.explanation}
+
+
+@app.command("web-rank")
+def web_rank_cmd(
+    segment: str = typer.Option(..., "--segment", help="slug do segmento"),
+    compare: bool = typer.Option(
+        False, "--compare", help="inclui o ranking da linha de base congelada base-fase-h"
+    ),
+    explain: bool = typer.Option(
+        False, "--explain", help="inclui componentes e explicação por página do topo"
+    ),
+    k: int = typer.Option(10, "--k", min=1, max=100, help="tamanho do topo"),
+    max_per_domain: int | None = typer.Option(
+        None, "--max-per-domain", min=1, help="limita páginas por domínio na lista final"
+    ),
+) -> None:
+    """Score `web-v1` + linha de base, só na CLI (grava `web_page_scores`)."""
+    try:
+        outcome = asyncio.run(_aweb_rank(segment, k, max_per_domain))
+    except SegmentNotFound as exc:
+        print(dumps(envelope_err("web-rank", "segment_not_found", redact(str(exc)))))
+        raise typer.Exit(exit_code_for(ok=False)) from exc
+    except DomainError as exc:
+        print(dumps(envelope_err("web-rank", "usage_error", redact(str(exc)))))
+        raise typer.Exit(exit_code_for(ok=False)) from exc
+    except Exception as exc:
+        print(dumps(envelope_err("web-rank", "internal_error", redact(str(exc)))))
+        raise typer.Exit(exit_code_for(ok=False)) from exc
+
+    render = _explained if explain else _brief
+    body: dict[str, Any] = {
+        "segment": outcome.segment,
+        "scored": outcome.scored,
+        "score_version": outcome.score_version,
+        "k": k,
+        "top_v1": [render(s) for s in outcome.top_v1],
+        "domains_v1": len({s.domain for s in outcome.top_v1}),
+    }
+    if compare:
+        body["top_base"] = [_brief(s) for s in outcome.top_base]
+        body["domains_base"] = len({s.domain for s in outcome.top_base})
+    print(dumps(envelope_ok("web-rank", **body)))
+    raise typer.Exit(exit_code_for(ok=True))
+
+
+async def _aweb_sample(
+    segment_slug: str, seed: int, out: Path, allow_incomplete: bool
+) -> WebSampleRun:
+    from content_factory.app.web_sample import (
+        queries_without_hits,
+        web_sample,
+        write_web_sample_csv,
+    )
+    from content_factory.config import get_settings
+    from content_factory.infra.collectors.web_queries import (
+        DEFAULT_QUERIES_DIR,
+        load_protocol,
+        protocol_path,
+    )
+    from content_factory.infra.db.base import get_session_factory
+    from content_factory.infra.db.repositories import (
+        SegmentRepositoryImpl,
+        WebScoreRepositoryImpl,
+    )
+
+    as_of = datetime.now(UTC)
+    factory: async_sessionmaker[AsyncSession] = get_session_factory(get_settings())
+    async with factory() as session:
+        seg = await SegmentRepositoryImpl(session).get_by_slug(segment_slug)
+        repo = WebScoreRepositoryImpl(session)
+        path = protocol_path(DEFAULT_QUERIES_DIR, seg.slug)
+        missing: list[str] = []
+        if path.exists():
+            hits = await repo.hits_for_segment(seg.id, until=as_of)
+            missing = queries_without_hits(load_protocol(path).queries, hits)
+        if missing and not allow_incomplete:
+            return WebSampleRun(rows=0, as_of=as_of, missing_queries=missing)
+        items = await web_sample(seg, repo, seed=seed)
+    write_web_sample_csv(items, out)
+    return WebSampleRun(rows=len(items), as_of=as_of, missing_queries=missing)
+
+
+@app.command("web-sample")
+def web_sample_cmd(
+    segment: str = typer.Option(..., "--segment", help="slug do segmento"),
+    out: str = typer.Option(..., "--out", help="caminho do CSV cego a gravar"),
+    seed: int = typer.Option(
+        20261019, "--seed", help="seed do sorteio (gravada/auditável; default fixo)"
+    ),
+    allow_incomplete: bool = typer.Option(
+        False,
+        "--allow-incomplete",
+        help="gera mesmo com consulta do protocolo q1 ainda sem coleta (registrar o motivo)",
+    ),
+) -> None:
+    """Exporta a amostra cega (topo + aleatório + descartados) para anotação (F2).
+
+    Recusa (`incomplete_cycle`) enquanto alguma consulta do protocolo q1 não
+    tiver coleta. O `as_of` do envelope é o `--as-of` do `cf web-eval`.
+    """
+    try:
+        run = asyncio.run(_aweb_sample(segment, seed, Path(out), allow_incomplete))
+    except SegmentNotFound as exc:
+        print(dumps(envelope_err("web-sample", "segment_not_found", redact(str(exc)))))
+        raise typer.Exit(exit_code_for(ok=False)) from exc
+    except DomainError as exc:
+        print(dumps(envelope_err("web-sample", "usage_error", redact(str(exc)))))
+        raise typer.Exit(exit_code_for(ok=False)) from exc
+    except Exception as exc:
+        print(dumps(envelope_err("web-sample", "internal_error", redact(str(exc)))))
+        raise typer.Exit(exit_code_for(ok=False)) from exc
+    if run.missing_queries and not allow_incomplete:
+        message = "consultas do protocolo sem coleta: " + ", ".join(run.missing_queries)
+        print(dumps(envelope_err("web-sample", "incomplete_cycle", message)))
+        raise typer.Exit(exit_code_for(ok=False))
+    print(
+        dumps(
+            envelope_ok(
+                "web-sample",
+                segment=segment,
+                rows=run.rows,
+                out=out,
+                seed=seed,
+                as_of=run.as_of.isoformat(),
+                missing_queries=run.missing_queries,
+            )
+        )
+    )
+    raise typer.Exit(exit_code_for(ok=True))
+
+
+async def _aweb_eval(segment_slug: str, csv_path: Path, as_of: datetime) -> WebEvalReport:
+    from content_factory.app.web_eval import read_annotations, web_evaluate
+    from content_factory.config import get_settings
+    from content_factory.infra.db.base import get_session_factory
+    from content_factory.infra.db.repositories import (
+        SegmentRepositoryImpl,
+        WebScoreRepositoryImpl,
+    )
+
+    annotations = read_annotations(csv_path)
+    factory: async_sessionmaker[AsyncSession] = get_session_factory(get_settings())
+    async with factory() as session:
+        seg = await SegmentRepositoryImpl(session).get_by_slug(segment_slug)
+        return await web_evaluate(seg, WebScoreRepositoryImpl(session), annotations, as_of=as_of)
+
+
+def _interval(interval: Interval) -> dict[str, Any]:
+    return {"point": interval.point, "low": interval.low, "high": interval.high, "n": interval.n}
+
+
+@app.command("web-eval")
+def web_eval_cmd(
+    segment: str = typer.Option(..., "--segment", help="slug do segmento"),
+    csv_path: str = typer.Option(..., "--csv", help="CSV já anotado (web-sample)"),
+    as_of: str = typer.Option(
+        ...,
+        "--as-of",
+        help="data de corte da amostra com fuso (o `as_of` do envelope do web-sample)",
+    ),
+    explain: bool = typer.Option(False, "--explain", help="inclui os dois rankings de URL"),
+) -> None:
+    """Avaliação pareada base-fase-h x web-v1 com IC e veredito (F4)."""
+    try:
+        cutoff = datetime.fromisoformat(as_of)
+    except ValueError as exc:
+        print(dumps(envelope_err("web-eval", "usage_error", f"--as-of inválido: {as_of}")))
+        raise typer.Exit(exit_code_for(ok=False)) from exc
+    if cutoff.tzinfo is None:
+        print(dumps(envelope_err("web-eval", "usage_error", "--as-of precisa de fuso (+00:00)")))
+        raise typer.Exit(exit_code_for(ok=False))
+    try:
+        report = asyncio.run(_aweb_eval(segment, Path(csv_path), cutoff))
+    except FileNotFoundError as exc:
+        print(dumps(envelope_err("web-eval", "file_not_found", redact(str(exc)))))
+        raise typer.Exit(exit_code_for(ok=False)) from exc
+    except SegmentNotFound as exc:
+        print(dumps(envelope_err("web-eval", "segment_not_found", redact(str(exc)))))
+        raise typer.Exit(exit_code_for(ok=False)) from exc
+    except DomainError as exc:
+        print(dumps(envelope_err("web-eval", "usage_error", redact(str(exc)))))
+        raise typer.Exit(exit_code_for(ok=False)) from exc
+    except Exception as exc:
+        print(dumps(envelope_err("web-eval", "internal_error", redact(str(exc)))))
+        raise typer.Exit(exit_code_for(ok=False)) from exc
+
+    body: dict[str, Any] = {
+        "segment": report.segment,
+        "kept_annotated": report.kept_annotated,
+        "p5": _interval(report.p5),
+        "p10": _interval(report.p10),
+        "gain_p10": _interval(report.gain_p10),
+        "coverage": report.coverage,
+        "verdict": report.verdict,
+        "correlation": report.correlation,
+        "useful_top10": report.useful_top10,
+    }
+    if explain:
+        body["ranking_v1"] = report.ranking_v1
+        body["ranking_base"] = report.ranking_base
+    print(dumps(envelope_ok("web-eval", **body)))
+    raise typer.Exit(exit_code_for(ok=True))
+
+
 @asynccontextmanager
 async def _status_deps() -> AsyncGenerator[tuple[SegmentRepository, CollectRunRepository]]:
     """Deps do `status`: só Postgres (sem Redis/registry — é leitura)."""
@@ -461,6 +775,7 @@ async def _aops_report(segment_slug: str, hours: int) -> dict[str, Any]:
             since=since,
             until=until,
             coverage_window=await reader.metric_coverage(seg.id, since=since),
+            web_discards=await reader.discard_stats(seg.id, since),
         )
 
 

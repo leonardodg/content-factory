@@ -5,6 +5,85 @@
 
 ## 🔄 EM ANDAMENTO
 
+_**Relevância web e potencial de conteúdo (2026-10-16, branch
+`docs/plano-web-relevancia`).**_ Plano:
+`ai-plans/2026-10-16-web-relevancia-potencial.md` (F0–F6). Dados, versão e
+relatório **próprios** — nada muda em `viral_score`/`FORMULA_VERSION`/
+`video_scores`/critérios do B3.
+
+- **F0 — filtro com rastro:** `domain/web_urls.py` (puro) descarta só com
+  sinal **verificável** (`ads-v1`: `bing.com/aclick|aclk`,
+  `duckduckgo.com/y.js`, `googleadservices.com`, `*.doubleclick.net`,
+  `google.com/aclk`). Parâmetro na URL, marketplace ou "oferta" no título
+  **não** descartam. `canonicalize` (`canon-v1`) tira só rastreio fechado
+  (`utm_*`, `fbclid`, `gclid`, `msclkid`, `mc_eid`, `srsltid`, `ref_src`),
+  preserva `?id=`/`?p=`/`?q=`. Marcação explícita de anúncio fica preparada e
+  **inativa** (o `ddgs` não expõe flag). Todo resultado gera hit, inclusive
+  descartado (`status`: `kept`/`discarded_ad`/`duplicate` + `discard_reason`).
+- **F1 — proveniência + protocolo `q1`:** tabela `web_search_hits`
+  (migração `0010`, append-only) grava consulta exata, `query_id`,
+  `query_intent`, `provider='unknown'`, `provider_result_position`,
+  URL original + canônica, `collector_version=web-c2`, `rules_version`. O
+  protocolo `q1` (`domain/web_queries.py`, léxico `intent-v1`) classifica as
+  frases do Suggest por intenção (`aprender`/`resolver`/`tendencia`/`comercial`),
+  sorteia 3 por classe com seed fixa (cego ao peso) + 1 `seed` de controle, e
+  roda 3 por coleta em ordem cíclica determinística (`run_index_for`: 2
+  coletas/dia, sem estado).
+- **F2 — amostra cega:** `cf web-sample` gera 50/segmento (15 topo + 25
+  aleatórios + até 10 descartados), CSV sem score/posição/estrato e linhas
+  embaralhadas; protocolo de anotação em `manual/anotacao-web.md`.
+- **F3 — score `web-v1` (só CLI):** `web_page_scores` (migração `0010`),
+  componentes `tema` .40 / `intencao` .25 / `metadados` .15 / `atualidade` .10
+  / `posicao` .10, média só dos avaliados (tudo `None` → score `None`), com
+  `explanation` por componente. Linha de base congelada `base-fase-h` (cópia
+  da regra atual) para a comparação pareada. `dedupe_titles`/`select_top` são
+  seleção, não score.
+- **F4 — pré-registro:** `manual/validacao-web.md` fixa critérios (P@5 ≥ 0,6;
+  P@10 ≥ 0,5; ganho P@10 ≥ 0,1 com IC-95 inferior > 0; cobertura ≥ 90%), as
+  versões (`q1`/`ads-v1`/`intent-v1`/`web-v1`/`base-fase-h`) e as seeds.
+  `cf web-eval` compara os dois rankings sobre o MESMO conjunto `kept` (IC por
+  bootstrap, veredito `aprovado`/`direcional`/`insuficiente`/`nao_atingido`).
+- **F5 — gated:** `WEB_SCORE_ENABLED` (default `0`) liga a gravação no
+  `score_job`; só ligar com veredito **aprovado** em ≥ 2 dos 3 segmentos PT.
+  Kill switch: voltar a `0` restaura o comportamento anterior. Sem aprovação,
+  F0/F1 valem sozinhas e o `web-v1` segue experimental, fora do worker.
+- **Comandos novos (só CLI):** `cf web-queries --propose` (+ `--veto/--reason`),
+  `cf web-rank` (`--compare/--explain/--k/--max-per-domain`),
+  `cf web-sample`, `cf web-eval`; `cf ops-report` passa a mostrar os descartes
+  por motivo.
+- **Correções da revisão (16/10):** `posicao` usa o tamanho da consulta como
+  `N` (não a posição da própria página); a amostra carrega a **consulta exata**
+  dos itens mantidos (`WebPageInput.query`) e o estrato de descartados só tem
+  `discarded_ad` (evita `item_id` duplicado com um `duplicate`); a linha de base
+  `base-fase-h` é **literal** (não chama `viral_score` vivo — congela de
+  verdade); parsing tolerante dos rótulos no `web-eval`; `# nosec B311` nos
+  sorteios por seed (bandit).
+- **Correções da revisão aprofundada (16/10, `/code-review` + manual):**
+  (1) `pages_for_segment` exclui páginas de anúncio antigas (gravadas antes do
+  F0; em produção, 12 das 15 páginas web de resina eram `bing.com/aclick`);
+  (2) `web-eval` sem `dedupe_titles` — as duas funções ordenam os MESMOS itens;
+  (3) `dedupe_titles` não perde mais páginas de título vazio; (4) `invalido`
+  só aceita os marcadores do protocolo (vazio/`0`/`não` = válido; outro texto
+  → `usage_error`); (5) léxico de intenção e `tema` casam por **palavra
+  inteira** (`domain/text.contains_phrase`: "ferro" não casa "erro"), e "não"
+  não conta como marcador no texto da página; (6) falha do score web no
+  `score_job` não perde o score de vídeos (commit antes, transação própria);
+  (7) `web_score(page, now=...)` — o domínio não lê o relógio; (8) `cf
+  web-eval --as-of` (obrigatório) corta os hits na data da amostra; (9) `cf
+  web-sample` recusa com `incomplete_cycle` se alguma consulta `q1` não tem
+  coleta e devolve `as_of` no envelope; (10) removidos `bootstrap_interval`
+  (IC errado, sem uso) e `latest_scores`.
+- **Operação da F2:** depois do deploy, as 13 consultas pedem 5 coletas (3 por
+  coleta). Com deploy na noite de 17/10, rodar um `cf collect` manual na
+  mesma noite (fora das janelas de cron) para a 5ª coleta cair no collect
+  das 20:00 de 19/10; sem ele, a amostra só sai depois do collect das 08:00
+  de 20/10.
+- **Pendente do usuário:** revisar e aprovar os
+  `segments/web-queries/<slug>.q1.yaml` (só veto com motivo) antes do deploy.
+- **Infra de teste:** Postgres `cf-test-pg` (`127.0.0.1:55432`) e Redis
+  `cf-test-redis` (`127.0.0.1:56379`); migração `0010` já aplicada no banco de
+  teste. Suíte completa: 579 passed (com `TEST_DATABASE_URL`/`TEST_REDIS_URL`).
+
 _**Resiliência do worker e ranking por plataforma (2026-10-16).**_ Plano:
 `ai-plans/2026-10-16-worker-resiliencia-ranking.md`.
 

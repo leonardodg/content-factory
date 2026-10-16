@@ -109,6 +109,20 @@ def test_coverage_and_scored_pass_through_with_ratios() -> None:
     assert out["ticks"] == {"n": 0, "items": [], "wall_ms_max": None, "wall_ms_avg": None}
 
 
+def test_web_discards_passthrough_defaults_empty() -> None:
+    """F0: descartes por motivo chegam ao relatório; default é vazio."""
+    assert _report([_run("web")])["web_discards"] == {}
+    out = build_ops_report(
+        [_run("web")],
+        {},
+        0,
+        since=SINCE,
+        until=UNTIL,
+        web_discards={"ad:bing_aclick": 3, "duplicate": 1},
+    )
+    assert out["web_discards"] == {"ad:bing_aclick": 3, "duplicate": 1}
+
+
 def test_data_sufficiency_is_separate_from_ok_rate() -> None:
     """Auditoria 3, N-3: ok com found=0 é sucesso operacional sem dado útil.
 

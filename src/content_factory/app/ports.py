@@ -17,7 +17,10 @@ from content_factory.domain.models import (
     TrendPoint,
     UpsertStats,
     VideoSnapshot,
+    WebPageScoreRow,
+    WebSearchHit,
 )
+from content_factory.domain.web_relevance import WebPageInput
 
 
 class UnitOfWork(Protocol):
@@ -125,6 +128,44 @@ class ScoreRepository(Protocol):
         ...
 
 
+class WebHitRepository(Protocol):
+    """Grava a proveniência dos resultados web (F1), inclusive descartados."""
+
+    async def record(self, segment_id: int, hits: Sequence[WebSearchHit]) -> int: ...
+
+
+class WebScoreRepository(Protocol):
+    """Leitura/escrita do experimento web próprio (`web_page_scores`, hits).
+
+    Não toca `video_scores`: a web tem score e tabela próprios (F3). O score
+    novo só chega ao worker sob `WEB_SCORE_ENABLED` (F5).
+    """
+
+    async def pages_for_segment(
+        self, segment_id: int, keywords: list[str], *, until: datetime | None = None
+    ) -> list[WebPageInput]:
+        """Páginas web do segmento, SEM as de anúncio (inclusive as antigas).
+
+        `until` corta os hits em `collected_at <= until` (avaliação na data da
+        amostra, reprodutível).
+        """
+        ...
+
+    async def append_scores(self, rows: Sequence[WebPageScoreRow]) -> int: ...
+
+    async def hits_for_segment(
+        self, segment_id: int, *, until: datetime | None = None
+    ) -> list[WebSearchHit]: ...
+
+
+class NoOpWebHitRepository:
+    """Default de `CollectDeps` quando o chamador não grava hits (testes, uso avulso)."""
+
+    async def record(self, segment_id: int, hits: Sequence[WebSearchHit]) -> int:
+        _ = segment_id
+        return len(hits)
+
+
 class SegmentRepository(Protocol):
     async def get_by_slug(self, slug: str) -> Segment: ...
     async def upsert(self, cfg: SegmentConfig) -> Segment: ...
@@ -186,6 +227,10 @@ class OpsReportReader(Protocol):
 
     async def scored_since(self, segment_id: int, since: datetime) -> int:
         """Scores calculados para o segmento depois de `since`."""
+        ...
+
+    async def discard_stats(self, segment_id: int, since: datetime) -> dict[str, int]:
+        """Descartes web por motivo (`web_search_hits.discard_reason`) na janela (F0)."""
         ...
 
 

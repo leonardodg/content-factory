@@ -4,6 +4,7 @@ from content_factory.infra.collectors.instagram import InstagramCollector
 from content_factory.infra.collectors.registry import register
 from content_factory.infra.collectors.tiktok import TikTokCollector
 from content_factory.infra.collectors.web import WebCollector
+from content_factory.infra.collectors.web_queries import FileWebQueries
 from content_factory.infra.collectors.youtube import YoutubeCollector
 
 
@@ -21,4 +22,5 @@ def register_defaults(settings: Settings) -> None:
     )
     register(TikTokCollector(ms_token=settings.tiktok_ms_token, proxy=settings.tiktok_proxy))
     register(InstagramCollector(settings.instagram_access_token, settings.ig_user_id))
-    register(WebCollector())
+    # protocolo `q1` por segmento; sem arquivo, o coletor cai no legado
+    register(WebCollector(queries=FileWebQueries()))

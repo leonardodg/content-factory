@@ -38,6 +38,7 @@ from content_factory.app.results import (
     score_result,
 )
 from content_factory.app.score import score
+from content_factory.app.web_rank import web_rank
 from content_factory.config import Settings, get_settings
 from content_factory.domain.models import DepthConfig, Segment
 from content_factory.infra.logs import configure_logging
@@ -176,6 +177,7 @@ async def _gather_segments(
 _collect_impl: Callable[..., Awaitable[Any]] = collect
 _score_impl: Callable[..., Awaitable[Any]] = score
 _research_impl: Callable[..., Awaitable[Any]] = run_research_cycle
+_web_rank_impl: Callable[..., Awaitable[Any]] = web_rank
 
 
 async def run_collect_job(ctx: dict[str, Any]) -> dict[str, Any]:
@@ -222,11 +224,28 @@ async def run_score_job(ctx: dict[str, Any]) -> dict[str, Any]:
     active = await campaigns.active_segments()
 
     async def _one(segment: Segment) -> dict[str, Any]:
+        web_failed = False
         async with app_deps.create_segment_deps(segment) as bundle:
             out = await _score_impl(bundle.score)
+            # o score de vídeos é commitado ANTES do web: o experimento nunca
+            # pode custar o `viral_score` do segmento
             await bundle.uow.commit()
+            # F5: score web próprio (tabela separada), atrás do kill switch
+            # `WEB_SCORE_ENABLED` (default off — só ligar com veredito da F4).
+            # Transação própria; falha só reverte a parte web.
+            if get_settings().web_score_enabled:
+                try:
+                    await _web_rank_impl(segment, bundle.web, now=_now())
+                    await bundle.uow.commit()
+                except Exception:
+                    web_failed = True
+                    logger.exception("score web falhou — %s (vídeos mantidos)", segment.slug)
+                    await bundle.uow.rollback()
         # R5/C3: só contagens/categorias (a mensagem fica no log, redigida)
-        return score_result(out)
+        result = score_result(out)
+        if web_failed:
+            result["web_score"] = "failed"
+        return result
 
     return await _gather_segments(active, _max_segments_from_env(), _one, "score")
 

@@ -1,3 +1,4 @@
+import hashlib
 import logging
 from collections.abc import Sequence
 from datetime import UTC, datetime
@@ -21,6 +22,8 @@ from content_factory.app.ports import (
     TrendObservationRepository,
     UpsertReport,
     VideoRepository,
+    WebHitRepository,
+    WebScoreRepository,
 )
 from content_factory.app.score_sample import ScoreSampleRow
 from content_factory.domain.errors import SegmentNotFound
@@ -37,8 +40,12 @@ from content_factory.domain.models import (
     UpsertStats,
     VideoMetrics,
     VideoSnapshot,
+    WebPageScoreRow,
+    WebSearchHit,
 )
 from content_factory.domain.scoring import FORMULA_VERSION
+from content_factory.domain.web_relevance import WebPageInput
+from content_factory.domain.web_urls import ad_signal, canonicalize
 from content_factory.infra.db.orm import (
     CollectRunRow,
     KeywordSignalRow,
@@ -49,6 +56,10 @@ from content_factory.infra.db.orm import (
     VideoRow,
     VideoScoreRow,
     VideoSegmentRow,
+    WebSearchHitRow,
+)
+from content_factory.infra.db.orm import (
+    WebPageScoreRow as WebPageScoreOrmRow,
 )
 
 logger = logging.getLogger(__name__)
@@ -422,6 +433,18 @@ class OpsReportReaderImpl(OpsReportReader):
         )
         return int((await self._s.execute(stmt)).scalar_one())
 
+    async def discard_stats(self, segment_id: int, since: datetime) -> dict[str, int]:
+        stmt = (
+            select(WebSearchHitRow.discard_reason, func.count(WebSearchHitRow.id))
+            .where(
+                WebSearchHitRow.segment_id == segment_id,
+                WebSearchHitRow.collected_at > since,
+                WebSearchHitRow.discard_reason.is_not(None),
+            )
+            .group_by(WebSearchHitRow.discard_reason)
+        )
+        return {str(reason): int(n) for reason, n in (await self._s.execute(stmt)).all()}
+
 
 SCORE_UPSERT_BATCH_SIZE = 500
 """Linhas por bloco em `ScoreRepositoryImpl.upsert_many` (Task 13).
@@ -727,6 +750,174 @@ class TrendObservationRepositoryImpl(TrendObservationRepository):
                 period_start=r.period_start,
                 period_granularity=r.period_granularity,
                 interest=r.interest,
+            )
+            for r in rows
+        ]
+
+
+def _web_platform_video_id(canonical_url: str) -> str:
+    return hashlib.sha1(canonical_url.encode(), usedforsecurity=False).hexdigest()
+
+
+class WebHitRepositoryImpl(WebHitRepository):
+    """F1 — grava `web_search_hits`; resolve `video_id` (kept) por URL canônica."""
+
+    def __init__(self, session: AsyncSession) -> None:
+        self._s = session
+
+    async def record(self, segment_id: int, hits: Sequence[WebSearchHit]) -> int:
+        saved = 0
+        for hit in hits:
+            video_id: int | None = None
+            if hit.status == "kept":
+                video_id = (
+                    await self._s.execute(
+                        select(VideoRow.id).where(
+                            VideoRow.platform == "web",
+                            VideoRow.platform_video_id == _web_platform_video_id(hit.canonical_url),
+                        )
+                    )
+                ).scalar_one_or_none()
+            self._s.add(
+                WebSearchHitRow(
+                    segment_id=segment_id,
+                    video_id=video_id,
+                    collected_at=hit.collected_at or datetime.now(UTC),
+                    query=hit.query,
+                    query_id=hit.query_id,
+                    query_intent=hit.query_intent,
+                    provider=hit.provider,
+                    provider_result_position=hit.provider_result_position,
+                    url_original=hit.url_original,
+                    canonical_url=hit.canonical_url,
+                    status=hit.status,
+                    discard_reason=hit.discard_reason,
+                    collector_version=hit.collector_version,
+                    rules_version=hit.rules_version,
+                    title=hit.title,
+                    snippet=hit.snippet,
+                )
+            )
+            saved += 1
+        await self._s.flush()
+        return saved
+
+
+class WebScoreRepositoryImpl(WebScoreRepository):
+    """F3 — leitura das páginas web + escrita/leitura de `web_page_scores`."""
+
+    def __init__(self, session: AsyncSession) -> None:
+        self._s = session
+
+    async def pages_for_segment(
+        self, segment_id: int, keywords: list[str], *, until: datetime | None = None
+    ) -> list[WebPageInput]:
+        all_videos = (
+            (
+                await self._s.execute(
+                    select(VideoRow)
+                    .join(VideoSegmentRow, VideoSegmentRow.video_id == VideoRow.id)
+                    .where(VideoSegmentRow.segment_id == segment_id, VideoRow.platform == "web")
+                    .order_by(VideoRow.id)
+                )
+            )
+            .scalars()
+            .all()
+        )
+        # anúncio gravado ANTES do filtro F0 (linhas antigas de `videos`) fica
+        # fora do experimento: mesmo sinal verificável do coletor
+        videos = [v for v in all_videos if ad_signal(v.url, v.title, v.description) is None]
+        hits = await self._hit_rows(segment_id, until)
+        by_video: dict[int, list[WebSearchHitRow]] = {}
+        # N por consulta = tamanho da lista devolvida por aquele `query_id`
+        # (maior posição entre TODOS os resultados da consulta, não só os desta
+        # página): a fórmula da F3 é `1 - (p - 1)/N`.
+        query_size: dict[str, int] = {}
+        for hit in hits:
+            qid = hit.query_id
+            query_size[qid] = max(query_size.get(qid, 0), hit.provider_result_position)
+            if hit.video_id is not None:
+                by_video.setdefault(hit.video_id, []).append(hit)
+        pages: list[WebPageInput] = []
+        for video in videos:
+            video_hits = by_video.get(video.id, [])
+            if video_hits:
+                best = min(video_hits, key=lambda h: h.provider_result_position)
+                total = query_size.get(best.query_id, best.provider_result_position)
+                canonical = best.canonical_url
+                snippet = best.snippet
+                intent = best.query_intent
+                query = best.query
+                position: int | None = best.provider_result_position
+            else:
+                canonical = video.url
+                snippet = video.description
+                intent = ""
+                query = ""
+                position = None
+                total = 0
+            pages.append(
+                WebPageInput(
+                    video_id=video.id,
+                    title=video.title,
+                    snippet=snippet,
+                    keywords=list(keywords),
+                    canonical_url=canonical,
+                    canonical_ok=canonicalize(canonical).ok,
+                    query=query,
+                    query_intent=intent,
+                    best_position=position,
+                    total_positions=total,
+                    published_at=video.published_at,
+                )
+            )
+        return pages
+
+    async def append_scores(self, rows: Sequence[WebPageScoreRow]) -> int:
+        for row in rows:
+            self._s.add(
+                WebPageScoreOrmRow(
+                    video_id=row.video_id,
+                    segment_id=row.segment_id,
+                    computed_at=row.computed_at,
+                    score=row.score,
+                    score_version=row.score_version,
+                    components=row.components,
+                    explanation=row.explanation,
+                )
+            )
+        await self._s.flush()
+        return len(rows)
+
+    async def _hit_rows(self, segment_id: int, until: datetime | None) -> Sequence[WebSearchHitRow]:
+        stmt = select(WebSearchHitRow).where(WebSearchHitRow.segment_id == segment_id)
+        if until is not None:
+            stmt = stmt.where(WebSearchHitRow.collected_at <= until)
+        stmt = stmt.order_by(WebSearchHitRow.collected_at, WebSearchHitRow.id)
+        return (await self._s.execute(stmt)).scalars().all()
+
+    async def hits_for_segment(
+        self, segment_id: int, *, until: datetime | None = None
+    ) -> list[WebSearchHit]:
+        rows = await self._hit_rows(segment_id, until)
+        return [
+            WebSearchHit(
+                segment_id=r.segment_id,
+                video_id=r.video_id,
+                collected_at=r.collected_at,
+                query=r.query,
+                query_id=r.query_id,
+                query_intent=r.query_intent,
+                provider=r.provider,
+                provider_result_position=r.provider_result_position,
+                url_original=r.url_original,
+                canonical_url=r.canonical_url,
+                status=r.status,
+                discard_reason=r.discard_reason,
+                collector_version=r.collector_version,
+                rules_version=r.rules_version,
+                title=r.title,
+                snippet=r.snippet,
             )
             for r in rows
         ]
