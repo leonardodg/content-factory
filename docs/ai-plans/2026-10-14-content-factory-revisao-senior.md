@@ -235,6 +235,12 @@ Limiares propostos, **para você decidir**:
 Se não passar: recalibrar com **bump de `FORMULA_VERSION`**, sem acrescentar
 dimensões.
 
+**Por plataforma (2026-10-16):** sem `views`, o Instagram só tem recency e
+relevância (pesos renormalizados), e o score dele não é comparável ao do
+YouTube. Todos os critérios acima são medidos **por plataforma**
+(`cf score-sample --segment X --platform youtube|instagram`). A web fica
+fora, porque não tem métricas. A fórmula não muda antes do B3.
+
 ---
 
 # Bloco C — Confiabilidade (após a troca)
