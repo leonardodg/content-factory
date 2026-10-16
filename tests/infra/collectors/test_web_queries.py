@@ -5,12 +5,14 @@ mtime, ausencia de arquivo (fallback legado) e protocolo malformado. Sem estes
 testes, a ausencia de `segments/` na imagem do worker passava despercebida.
 """
 
+import os
 from datetime import UTC, datetime
 from pathlib import Path
 
 from content_factory.app.web_queries_plan import write_protocol
 from content_factory.domain.models import SegmentConfig
 from content_factory.domain.web_queries import (
+    INTENT_LEXICON_VERSION,
     QUERY_PROTOCOL_VERSION,
     PlannedQuery,
     WebQueryProtocol,
@@ -36,7 +38,7 @@ def _protocol(slug: str) -> WebQueryProtocol:
         segment_slug=slug,
         version=QUERY_PROTOCOL_VERSION,
         seed=20261017,
-        lexicon_version="intent-v1",
+        lexicon_version=INTENT_LEXICON_VERSION,
         queries=queries,
     )
 
@@ -69,9 +71,14 @@ def test_queries_for_reloads_after_mtime_change(tmp_path: Path) -> None:
     write_protocol(path, _protocol(SEG.slug))
     source = FileWebQueries(tmp_path)
     assert source.queries_for(SEG) is not None
+    before = path.stat().st_mtime
 
     trimmed = _protocol(SEG.slug)
     trimmed.queries.pop()  # remove o seed
     write_protocol(path, trimmed)
+    # Fs com resolucao grossa (1 s) podem manter o mtime no mesmo segundo e o
+    # cache nao invalidaria; forca a mudanca para o teste depender do conteudo.
+    stamp = before + 10
+    os.utime(path, (stamp, stamp))
 
     assert all(q.intent != "seed" for q in (source.queries_for(SEG) or []))

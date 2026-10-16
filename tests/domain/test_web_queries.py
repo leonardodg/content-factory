@@ -1,6 +1,7 @@
 from datetime import UTC, datetime
 
 from content_factory.domain.web_queries import (
+    INTENT_LEXICON,
     INTENT_LEXICON_VERSION,
     INTENT_ORDER,
     QUERY_PROTOCOL_VERSION,
@@ -8,6 +9,7 @@ from content_factory.domain.web_queries import (
     PlannedQuery,
     WebQueryProtocol,
     classify_intent,
+    intent_coverage,
     normalize,
     plan_web_queries,
     protocol_from_dict,
@@ -132,3 +134,101 @@ def test_classify_intent_matches_whole_words_only() -> None:
     assert classify_intent("vela não acende") == "resolver"
     assert classify_intent("resina passo a passo") == "aprender"
     assert classify_intent("vela dá dinheiro?") == "comercial"
+
+
+# --- intent-v2: marcadores ancorados no vocabulário real do Suggest ---
+
+
+def test_intent_lexicon_version_is_v2() -> None:
+    assert INTENT_LEXICON_VERSION == "intent-v2"
+
+
+def test_intent_coverage_counts_every_class_in_stable_order() -> None:
+    phrases = [
+        "como fazer vela",
+        "vela nao acende",
+        "vela tendencia",
+        "vela preco",
+        "frase solta",
+        "outra frase solta",
+    ]
+    assert intent_coverage(phrases) == {
+        "aprender": 1,
+        "resolver": 1,
+        "tendencia": 1,
+        "comercial": 1,
+        "sem_intencao": 2,
+    }
+    assert list(intent_coverage([])) == [
+        "aprender",
+        "resolver",
+        "tendencia",
+        "comercial",
+        "sem_intencao",
+    ]
+
+
+def test_intent_markers_are_conjunctions() -> None:
+    # contrato do léxico: cada marcador é uma tupla de frases (todas exigidas);
+    # marcador de 1 frase = indicador direto, de 2+ = indicador contextual.
+    for intent in INTENT_ORDER:
+        markers = INTENT_LEXICON[intent]
+        assert markers, f"classe sem marcadores: {intent}"
+        for marker in markers:
+            assert isinstance(marker, tuple)
+            assert marker and all(isinstance(phrase, str) for phrase in marker)
+
+
+def test_aprender_positive_and_negative() -> None:
+    assert classify_intent("como fazer velas perfumadas") == "aprender"
+    assert classify_intent("sabonete artesanal passo a passo") == "aprender"
+    assert classify_intent("soap making for beginners") == "aprender"
+    assert classify_intent("handmade soap recipes") == "aprender"
+    assert classify_intent("resina para artesanato como usar") == "aprender"
+    # negativo: "como" só vale como palavra inteira
+    assert classify_intent("acomodar velas na caixa") is None
+
+
+def test_resolver_matches_doubt_problem_and_comparison() -> None:
+    assert classify_intent("cera de soja para que serve") == "resolver"
+    assert classify_intent("soy wax candles good or bad") == "resolver"
+    assert classify_intent("scented candles bad for you") == "resolver"
+    assert classify_intent("soy wax candles safe") == "resolver"
+    assert classify_intent("candle wick too short") == "resolver"
+    assert classify_intent("cold process soap vs hot process soap") == "resolver"
+    assert classify_intent("cera de soja e parafina é a mesma coisa") == "resolver"
+    assert classify_intent("flores encapsuladas em resina significado") == "resolver"
+    assert classify_intent("saboaria artesanal anvisa") == "resolver"
+    assert classify_intent("vela não acende") == "resolver"
+
+
+def test_resolver_rejects_plain_mentions() -> None:
+    # menção simples de material não é dúvida, problema ou comparação
+    assert classify_intent("cera de soja") is None
+    assert classify_intent("resina epóxi transparente") is None
+    assert classify_intent("base glicerinada transparente") is None
+
+
+def test_tendencia_requires_context_for_ambiguous_words() -> None:
+    # palavra ambígua isolada NÃO classifica (ideias/natal/2026/moda)
+    assert classify_intent("handmade candles ideas") is None
+    assert classify_intent("homemade soap ideas") is None
+    assert classify_intent("resin art ideas") is None
+    assert classify_intent("vela artesanal de natal") is None
+    assert classify_intent("sabonetes artesanais de natal") is None
+    # combinação com atualidade/sazonalidade/popularidade classifica
+    assert classify_intent("ideias de vela para 2026") == "tendencia"
+    assert classify_intent("handmade soap ideas for natal") == "tendencia"
+    assert classify_intent("sabonetes artesanais mais vendidos") == "tendencia"
+    assert classify_intent("tendência de velas artesanais") == "tendencia"
+
+
+def test_comercial_positive_and_negative() -> None:
+    assert classify_intent("velas artesanais da dinheiro") == "comercial"
+    assert classify_intent("resina para artesanato onde comprar") == "comercial"
+    assert classify_intent("melt and pour soap base wholesale") == "comercial"
+    assert classify_intent("soy wax candles wholesale") == "comercial"
+    assert classify_intent("resin keychains price") == "comercial"
+    assert classify_intent("saboaria artesanal atacado") == "comercial"
+    # negativo: "design"/"valor" de peça não são preço por si sós
+    assert classify_intent("resin keychains design") is None

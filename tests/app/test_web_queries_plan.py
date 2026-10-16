@@ -21,7 +21,8 @@ SIGNALS = [
     "preco da cera",  # comercial
     "tutorial de vela",  # aprender
     "por que a vela afunda",  # resolver
-    "moda em velas",  # tendencia
+    "moda em velas",  # tendencia — VETADO no intent-v2 (ambígua, isolada)
+    "velas em alta",  # tendencia
     "lucro com velas",  # comercial
     "receita de vela",  # aprender
     "problema no pavio",  # resolver

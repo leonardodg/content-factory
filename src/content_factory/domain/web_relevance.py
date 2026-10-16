@@ -12,7 +12,7 @@ from typing import Any
 
 from content_factory.domain import web_queries
 from content_factory.domain.scoring import trend_decay
-from content_factory.domain.text import contains_phrase, looks_like_domain, normalize, word_tokens
+from content_factory.domain.text import looks_like_domain, normalize, word_tokens
 from content_factory.domain.web_urls import domain_of
 
 WEB_SCORE_VERSION = "web-v1"
@@ -96,10 +96,10 @@ def _intent_component(page: WebPageInput) -> tuple[float | None, dict[str, Any]]
         return None, {"intent": intent or None, "marker": None}
     words = word_tokens(f"{page.title} {page.snippet}")
     for marker in web_queries.INTENT_LEXICON[intent]:
-        if normalize(marker) in _PAGE_GENERIC_MARKERS:
+        if all(normalize(part) in _PAGE_GENERIC_MARKERS for part in marker):
             continue
-        if contains_phrase(words, marker):
-            return 1.0, {"intent": intent, "marker": marker}
+        if web_queries.marker_matches(words, marker):
+            return 1.0, {"intent": intent, "marker": " + ".join(marker)}
     return 0.0, {"intent": intent, "marker": None}
 
 

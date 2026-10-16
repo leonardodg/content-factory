@@ -100,10 +100,18 @@ class _FakeSignalRepo(KeywordSignalRepository):
 
 class _FakeSegmentsWithKeywords:
     """Diferente de FakeRepos().segments: devolve keywords/platforms reais
-    pro guard.admit ter o que filtrar e pro loop social bater com `socials`."""
+    pro guard.admit ter o que filtrar e pro loop social bater com `socials`.
+    `probe_terms` alimenta as sondas de intencao (opcao (a))."""
 
     async def get_by_slug(self, slug: str) -> Segment:
-        return Segment(id=1, slug=slug, name=slug, platforms=["instagram"], keywords=["vela"])
+        return Segment(
+            id=1,
+            slug=slug,
+            name=slug,
+            platforms=["instagram"],
+            keywords=["vela"],
+            probe_terms=["vela"],
+        )
 
     async def upsert(self, cfg: SegmentConfig) -> Segment:
         raise NotImplementedError
@@ -140,7 +148,28 @@ async def test_run_research_cycle_orchestrates_web_trends_social() -> None:
     assert out.counts["signals_saved"] == 2  # web + trends
     assert isinstance(social, _FakeSocial) and social.calls  # social chamado com keywords
     assert signals.saved and signals.saved[0].source == "web_suggest"
-    assert web.calls == [["vela"]]
+    # opcao (a): o Suggest recebe a seed do segmento + as sondas de intencao
+    assert web.calls == [
+        [
+            "vela",
+            "como fazer vela",
+            "vela nao",
+            "vela tendencia",
+            "vela mais vendido",
+            "vela preco",
+        ]
+    ]
+
+
+@pytest.mark.asyncio
+async def test_probes_go_only_to_suggest_not_to_socials() -> None:
+    """As sondas de intencao nao vazam para a busca das redes sociais."""
+    deps, web, _ = _make_deps()
+    social = deps.socials["instagram"]
+    await run_research_cycle("candles", DepthConfig(), deps)
+    assert any(p.startswith("como fazer") for p in web.calls[0])  # Suggest: com sondas
+    assert isinstance(social, _FakeSocial)
+    assert social.calls == [["vela", "vela relacionada"]]  # social: so seeds + sinais
 
 
 @pytest.mark.asyncio
@@ -262,7 +291,9 @@ async def test_run_research_cycle_dedupes_seeds_via_guard() -> None:
     )
     out = await run_research_cycle("candles", DepthConfig(), deps)
     assert out.ok is True
-    assert web.calls == [["Vela"]]  # as duas variantes deduplicadas pelo guard
+    # sem probe_terms o Suggest recebe so as seeds; as 3 variantes (mesmo
+    # casefold) sao deduplicadas pelo guard numa unica seed
+    assert web.calls == [["Vela"]]
 
 
 @pytest.mark.asyncio

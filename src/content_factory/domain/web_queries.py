@@ -13,7 +13,7 @@ from typing import cast
 
 from content_factory.domain.text import contains_phrase, normalize, word_tokens
 
-INTENT_LEXICON_VERSION = "intent-v1"
+INTENT_LEXICON_VERSION = "intent-v2"
 QUERY_PROTOCOL_VERSION = "q1"
 QUERY_SEED = 20261017
 WEB_QUERIES_PER_RUN = 3
@@ -23,18 +23,85 @@ NO_INTENT = "sem_intencao"
 # para a PRIMEIRA nesta ordem.
 INTENT_ORDER: tuple[str, ...] = ("aprender", "resolver", "tendencia", "comercial")
 
-INTENT_LEXICON: dict[str, tuple[str, ...]] = {
-    "aprender": ("como", "passo a passo", "tutorial", "receita", "para iniciantes"),
-    "resolver": ("erro", "não", "por que", "problema", "afunda", "rachou", "manchada", "derrete"),
-    "tendencia": ("tendência", "2026", "moda", "novidade", "ideias"),
+# Cada marcador é uma CONJUNÇÃO de frases: TODAS precisam aparecer no texto,
+# como palavra inteira. Marcador de 1 frase = indicador direto; de 2+ =
+# contextual, para palavras ambíguas (ex.: "ideas" só é tendência quando vem
+# com contexto de atualidade/sazonalidade/popularidade). Ancorado no
+# vocabulário real do Suggest; mudar o léxico sobe a versão (`intent-v3`).
+IntentMarker = tuple[str, ...]
+
+INTENT_LEXICON: dict[str, tuple[IntentMarker, ...]] = {
+    "aprender": (
+        ("como",),
+        ("passo a passo",),
+        ("tutorial",),
+        ("receita",),
+        ("recipe",),
+        ("recipes",),
+        ("para iniciantes",),
+        ("for beginners",),
+        ("iniciante",),
+    ),
+    "resolver": (
+        ("por que",),
+        ("para que serve",),
+        ("o que fazer",),
+        ("vale a pena",),
+        ("funciona",),
+        ("erro",),
+        ("problema",),
+        ("nao",),
+        ("afunda",),
+        ("rachou",),
+        ("manchada",),
+        ("derrete",),
+        ("mesma coisa",),
+        ("diferenca",),
+        ("vs",),
+        ("tem cheiro",),
+        ("significado",),
+        ("anvisa",),
+        ("legislacao",),
+        ("tem que ser",),
+        ("safe",),
+        ("too short",),
+        ("bad for",),
+        ("good or bad",),
+        ("benefits",),
+    ),
+    "tendencia": (
+        ("tendencia",),
+        ("novidade",),
+        ("em alta",),
+        ("lancamento",),
+        ("lancamentos",),
+        ("mais vendidos",),
+        ("mais vendido",),
+        # ambíguas: só com contexto de atualidade/sazonalidade
+        ("ideas", "2026"),
+        ("ideas", "natal"),
+        ("ideias", "2026"),
+        ("ideias", "natal"),
+        ("natal", "2026"),
+        ("moda", "2026"),
+    ),
     "comercial": (
-        "preço",
-        "vender",
-        "lucro",
-        "dá dinheiro",
-        "embalagem",
-        "fornecedor",
-        "comprar",
+        ("preco",),
+        ("price",),
+        ("valor",),
+        ("comprar",),
+        ("vender",),
+        ("sell",),
+        ("sale",),
+        ("lucro",),
+        ("da lucro",),
+        ("da dinheiro",),
+        ("embalagem",),
+        ("fornecedor",),
+        ("atacado",),
+        ("wholesale",),
+        ("revenda",),
+        ("loja",),
     ),
 }
 
@@ -59,16 +126,35 @@ class WebQueryProtocol:
     vetoes: dict[str, str] = field(default_factory=dict[str, str])
 
 
+def marker_matches(words: list[str], marker: IntentMarker) -> bool:
+    """Todas as frases do marcador aparecem em `words` (conjunção, palavra inteira)."""
+    return all(contains_phrase(words, phrase) for phrase in marker)
+
+
 def classify_intent(phrase: str) -> str | None:
     """Classe de intenção da frase, na ordem de precedência; `None` = sem.
 
-    Marcador casa por palavra inteira (`contains_phrase`), não por substring.
+    Cada marcador casa por palavra inteira (`contains_phrase`); marcadores de
+    2+ frases exigem TODAS (indicador contextual).
     """
     words = word_tokens(phrase)
     for intent in INTENT_ORDER:
-        if any(contains_phrase(words, marker) for marker in INTENT_LEXICON[intent]):
+        if any(marker_matches(words, marker) for marker in INTENT_LEXICON[intent]):
             return intent
     return None
+
+
+def intent_coverage(phrases: Sequence[str]) -> dict[str, int]:
+    """Contagem de frases por classe (`sem_intencao` incluída), ordem estável.
+
+    Base das tabelas de cobertura (por segmento e por classe) — usada pelo
+    script de medição das sondas (`scripts/measure_suggest_probes.py`).
+    """
+    counts = {intent: 0 for intent in INTENT_ORDER}
+    counts[NO_INTENT] = 0
+    for phrase in phrases:
+        counts[classify_intent(phrase) or NO_INTENT] += 1
+    return counts
 
 
 def rank_intent_phrases(signals: Sequence[str], *, seed: int = QUERY_SEED) -> dict[str, list[str]]:

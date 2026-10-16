@@ -67,21 +67,33 @@ Cada um tem sua métrica. Nenhum é misturado ao `viral_score` dos vídeos.
    anúncio do Bing, vários com título repetido.
 2. **A amostra não sustenta avaliação:** são 27 páginas, porque a consulta é
    fixa.
-3. **As consultas por intenção já existem** nos ~145 `keyword_signals` do
-   Suggest por segmento.
+3. **As frases por intenção não existem ainda no vocabulário:** o Suggest,
+   semeado só com o nome do segmento, devolve ~145 `keyword_signals` por
+   segmento quase todos de produto — `resolver`/`tendencia` ficam sem frases.
+   Resolvido pela opção (a): **sondas de intenção** (`probe-v2`) alimentam o
+   Suggest antes de gerar o `q1` (ver "Protocolo de consultas").
 4. **Atualidade não é avaliável** com o `ddgs`, porque não há data.
 
 ## Cronograma
 
+> **Deslocamento registrado (16/10):** o deploy do worker foi adiado para
+> **21/10 depois das 19:20 UTC** (fim da janela de campanhas). Além disso, o
+> `q1` só é gerado **depois do primeiro ciclo de research com as sondas**
+> (`probe-v2`), que roda no worker (cron diário). O cronograma é recalculado a
+> partir da **primeira coleta efetiva** com o protocolo novo — não se "recupera"
+> o atraso reduzindo coletas nem anotando amostra incompleta.
+
 | Fase | Entrega | Quando |
 | --- | --- | --- |
-| F0 + F1 | Filtro com rastro, proveniência, protocolo de consultas `q1` aprovado | código em 17/10; deploy na noite de 17/10 |
-| — | Coleta com o protocolo `q1` | 18–19/10 (5 coletas = 1 ciclo completo de consultas) |
-| F2 | Amostra gerada depois do collect de 19/10 20:00; anotação pelo usuário | 19/10 (noite) e 20/10 |
-| F3 | Score `web-v1` e linha de base congelada, na CLI | 17–19/10, sobre dados gravados, **sem olhar a anotação** |
-| — | Pré-registro dos critérios da F4 (commit) | **antes** de gerar a amostra, em 19/10 |
-| F4 | Avaliação pareada e relatório | 21–22/10, junto do B3 |
-| F5 | Ativação, só se aprovado | depois do B3 |
+| F0 + F1 | Filtro com rastro, proveniência, protocolo `q1` aprovado | código até 21/10; deploy na noite de 21/10 (após 19:20 UTC) |
+| — | Ciclo de research com as sondas `probe-v2` | primeiro cron após o deploy |
+| — | Gerar o `q1` a partir dos sinais novos; revisão do usuário | após o research |
+| — | Coleta com o protocolo `q1` | `ceil(len(protocolo)/3)` coletas (5 quando as 4 classes estão completas = ~2,5 dias) |
+| F2 | Amostra depois do último collect do ciclo; anotação | após o ciclo completo |
+| F3 | Score `web-v1` e linha de base congelada, na CLI | sobre os dados gravados, **sem olhar a anotação** |
+| — | Pré-registro dos critérios da F4 (commit) | já publicado em `validacao-web.md` |
+| F4 | Avaliação pareada e relatório | após a anotação |
+| F5 | Ativação, só se aprovado | depois da F4 |
 | F6 | Potencial criativo por conteúdo | decisão depois da F4 |
 
 ## F0 — Filtro conservador e normalização, com rastro dos descartes
@@ -164,16 +176,34 @@ derivado da URL canônica e não ganha coluna.
 Fixo e versionado **antes** da coleta. Não se escolhem "as que parecem
 promissoras".
 
+**Fonte dos sinais — sondas de intenção (`probe-v2`):** o Suggest é semeado
+com as keywords do segmento **e** com sondas de intenção
+(`domain/suggest_probes.py`) sobre os **termos-cabeça** do segmento
+(`SegmentConfig.probe_terms`): `como fazer <termo>`, `<termo> nao`,
+`<termo> tendencia`, `<termo> mais vendido`, `<termo> preco`. Medido em 16/10:
+a sonda só rende no termo curto (`vela nao` → 10; `vela artesanal nao` → 0).
+Sem isso o autocompletar devolve só variações de produto e
+`resolver`/`tendencia` ficam sem frases (opção (a) da revisão de 16/10,
+registrada em [validacao-web.md](../manual/validacao-web.md) e com os números
+brutos em [evidencia-sondas-suggest.md](../manual/evidencia-sondas-suggest.md)).
+As sondas
+alimentam **só** o Suggest; os termos das redes sociais continuam sendo as
+keywords do segmento, e as frases continuam vindo do autocompletar real — nada
+é inventado.
+
 1. **Classificação por intenção** por léxico fechado e versionado
-   (`INTENT_LEXICON_VERSION = "intent-v1"`), sobre as frases do Suggest de
+   (`INTENT_LEXICON_VERSION = "intent-v2"`), sobre as frases do Suggest de
    cada segmento:
    - `aprender`: como, passo a passo, tutorial, receita, para iniciantes;
    - `resolver`: erro, não, por que, problema, afunda, rachou, manchada, derrete;
-   - `tendencia`: tendência, 2026, moda, novidade, ideias;
+   - `tendencia`: tendência, novidade, em alta, lançamento, mais vendidos —
+     `ideas/ideias/natal/moda` só **com** contexto de atualidade/sazonalidade;
    - `comercial`: preço, vender, lucro, dá dinheiro, embalagem, fornecedor,
      comprar.
-   Frase que casa mais de uma classe vai para a primeira, nessa ordem
-   documentada. Frase sem marcador vai para `sem_intencao` e não entra.
+   Marcadores podem ser **conjunções** de frases (ex.: `ideas` + `2026`): a
+   palavra ambígua sozinha não define a classe. Frase que casa mais de uma
+   classe vai para a primeira, nessa ordem documentada. Frase sem marcador vai
+   para `sem_intencao` e não entra.
 2. **Seleção estratificada e cega:** de cada classe, **3 frases sorteadas
    com seed fixa** (`seed = 20261017`). O sorteio não usa o peso do Suggest,
    para não favorecer as consultas "boas". Também entra 1 consulta `seed`
@@ -185,11 +215,14 @@ promissoras".
    inadequada; o veto e o motivo são registrados e a substituta é a próxima
    do sorteio). O arquivo vai para o commit e é carregado no banco por
    `cf segment load`.
-4. **Rodízio:** são 13 consultas por segmento (4 classes × 3 + 1 seed), e
-   cada coleta usa `WEB_QUERIES_PER_RUN` (default 3) em ordem cíclica
-   determinística. Com 2 coletas por dia, o ciclo completo leva cerca de dois
-   dias e meio (5 coletas), o que garante que **todas as intenções** sejam
-   coletadas antes da amostra.
+4. **Rodízio:** o protocolo tem `4 × 3 + 1 = 13` consultas quando as quatro
+   classes têm frases suficientes; com uma classe parcial o total cai, e o
+   ciclo completo passa a ser `ceil(len(protocolo)/3)` coletas. Cada coleta usa
+   `WEB_QUERIES_PER_RUN` (default 3) em ordem cíclica determinística. Com 2
+   coletas por dia, 13 consultas levam cerca de dois dias e meio (5 coletas), o
+   que garante que **todas as intenções** sejam coletadas antes da amostra. Um
+   segmento **parcial** (classe sem frases suficientes) é marcado como parcial
+   e exploratório — **não** conta como aprovação da F1.
 5. **Mudar consultas = nova versão** (`q2`). Hits de versões diferentes
    nunca se misturam numa mesma avaliação.
 
@@ -204,14 +237,20 @@ vazio legítimo; todas vazias continua "ambíguo". Nada além disso é
 inventado.
 
 **Testes:** léxico (cada classe, ordem de precedência, frase sem
-marcador); sorteio determinístico pela seed e independente do peso; classe
-com menos de 3 frases; rodízio cobre as 13 em `ceil(13/3)` coletas;
+marcador, marcador-conjunção, positivos e negativos); sondas de intenção
+(limitadas, determinísticas, classificáveis e **só** no Suggest); sorteio
+determinístico pela seed e independente do peso; classe com menos de 3 frases;
+rodízio cobre o protocolo em `ceil(len(protocolo)/3)` coletas;
 `provider='unknown'`; posição 1-based; integração da gravação dos hits,
-inclusive os descartados, em `cf-test-pg`; isolamento entre segmentos.
+inclusive os descartados, em `cf-test-pg`; isolamento entre segmentos; modo
+obrigatório (`WEB_QUERIES_REQUIRED=1`) falha com `missing_protocol` e não roda
+o legado.
 
 **Aceite da F1:** depois de um ciclo completo, cada segmento PT tem
 resultados de **todas** as classes com frases, e cada página tem a consulta,
-a posição, a URL original e a URL canônica.
+a posição, a URL original e a URL canônica. Segmento cuja classe segue sem
+frases mesmo após as sondas é marcado **parcial e exploratório** — não conta
+como aprovação da F1.
 
 ## F2 — Conjunto de avaliação
 
@@ -276,7 +315,7 @@ Cada um em [0, 1] ou `None` (não avaliado). O score é a média ponderada
 | Componente | Peso | Regra | `None` quando |
 | --- | --- | --- | --- |
 | `tema` | 0,40 | keywords do segmento em título+snippet, normalizadas (caixa, acento) e casadas por **todos os tokens** da keyword. Cada keyword conta **uma vez**. Satura em 2: `min(1, casadas/2)` | o segmento não tem keywords |
-| `intencao` | 0,25 | o título ou snippet tem um marcador da **mesma classe** da consulta (léxico `intent-v1`) | consulta `seed` ou sem classe |
+| `intencao` | 0,25 | o título ou snippet tem um marcador da **mesma classe** da consulta (léxico `intent-v2`) | consulta `seed` ou sem classe |
 | `metadados` | 0,15 | média de: título de 15 a 120 caracteres e não só o nome do domínio; snippet ≥ 60 caracteres; `canonical_ok` | nunca |
 | `atualidade` | 0,10 | faixas do `trend_decay` | sem data, ou seja, sempre com o `ddgs` hoje |
 | `posicao` | 0,10 | `1 − (p − 1)/N`, melhor `provider_result_position` da última coleta | sem hit |
@@ -319,7 +358,7 @@ segmentos; **não contaminação** (integração: `web-rank` não escreve em
 
 Em 19/10, **antes** de gerar a amostra, um commit fixa em
 `docs/manual/validacao-web.md` as definições abaixo, as versões (`q1`,
-`ads-v1`, `intent-v1`, `web-v1`, `base-fase-h`) e as seeds. Depois disso,
+`ads-v1`, `intent-v2`, `web-v1`, `base-fase-h`) e as seeds. Depois disso,
 mudar um critério exige registrar o motivo e a data, e o resultado é
 reportado pelos dois critérios.
 

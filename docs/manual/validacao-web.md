@@ -11,7 +11,8 @@ reportado pelos dois critérios.
 | Elemento | Versão | Onde |
 | --- | --- | --- |
 | Protocolo de consultas | `q1` (`web-queries-q1`) | `segments/web-queries/<slug>.q1.yaml` |
-| Léxico de intenção | `intent-v1` | `domain/web_queries.py` |
+| Léxico de intenção | `intent-v2` | `domain/web_queries.py` |
+| Sondas de intenção do Suggest | `probe-v2` | `domain/suggest_probes.py` |
 | Regras de anúncio | `ads-v1` | `domain/web_urls.py` |
 | Normalização de URL | `canon-v1` | `domain/web_urls.py` |
 | Score novo | `web-v1` | `domain/web_relevance.py` |
@@ -69,6 +70,45 @@ pareado (v1 − base, sobre a mesma amostra) continua válido para comparar as d
 funções; as metas absolutas de P@5/P@10 valem como **P@k sobre a amostra** (piso
 aproximado), não como a precisão exata do top 5/10 completo.
 
+### Adendo registrado — 2026-10-16: sondas de intenção no Suggest (opção (a))
+
+**Motivo:** o Suggest, semeado só com o nome do segmento, devolve variações de
+produto; `resolver` e `tendencia` ficavam praticamente sem frases (cobertura
+medida no banco real: 0 a 1 frase de tendência por segmento). A opção (a) passa
+a **sondar o autocompletar pela intenção**, com os termos-cabeça declarados por
+segmento (`SegmentConfig.probe_terms`) e os modelos `probe-v2`
+(`domain/suggest_probes.py`): `como fazer <termo>`, `<termo> nao`,
+`<termo> tendencia`, `<termo> mais vendido`, `<termo> preco`. As frases
+continuam vindo do autocompletar real: nada é inventado. Isso muda o
+**research** (a coleta de sinais que alimenta a seleção do `q1`), não os
+critérios — nenhum número pré-registrado muda.
+
+**Evidência (16/10, autocompletar real, sem escrever no banco; números brutos em
+[Evidência — sondas do Suggest](evidencia-sondas-suggest.md)):** a sonda só
+rende na **cabeça do termo**, não na cauda longa — `vela artesanal nao` e
+`vela artesanal tendencia` devolvem **0** sugestões, enquanto `vela nao` (10),
+`vela tendencia` (10), `pavio nao` (8), `sabonete mais vendido` (10) e
+`artesanato mais vendido` (10) devolvem frases classificáveis. Por isso os
+termos sondados são `probe_terms` (velas: `vela`/`velas`/`pavio`; sabonetes:
+`sabonete`/`sabonetes`/`saboaria`; resina: `resina`/`resina epoxi`/`artesanato`),
+não as keywords do segmento. Trocar o `client` do endpoint (firefox/chrome) não
+muda o resultado: o limite é o **dado** do nicho, não a consulta.
+
+!!! warning "Limitação: o estrato `tendencia` é induzido pela sonda"
+    A sonda de tendência leva o próprio marcador, então a frase resultante cai
+    na classe por construção. A consulta é uma busca real de usuário (o Google
+    só completa o que as pessoas buscam), mas o estrato `tendencia` do `q1` é
+    **induzido** pela sonda, não "descoberto" passivamente. Na leitura da F4,
+    tratar `tendencia` como piso exploratório — não como amostra natural do
+    vocabulário do segmento.
+
+!!! warning "Limitação: termos-cabeça são ambíguos em PT"
+    `resina` também é resina odontológica (`resina nao clareia`), `vela` também
+    é vela de ignição (`vela nao sai do motor`) e vela de gráfico
+    (`velas tendencia alcista`). Parte das frases do `resolver`/`tendencia`
+    fica fora do segmento. O `q1` é revisado pelo usuário, que **veta** a frase
+    inadequada (`cf web-queries --veto/--reason`); o veto é registrado no YAML.
+
 ## Indicadores (não são critérios até haver calibração)
 
 | Indicador | Cálculo | Referência |
@@ -115,6 +155,10 @@ evidência registrada) antes de qualquer ativação.
 
 ## Próximos passos
 
+- A coleta em produção roda com `WEB_QUERIES_REQUIRED=1`: segmento sem
+  protocolo `q1` válido faz o collect da web **falhar** com
+  `missing_protocol` (o legado de 1 consulta **não** roda), em vez de degradar
+  em silêncio.
 - A ativação no `worker` (F5) só ocorre com veredito **aprovado em ≥ 2 dos 3
   segmentos PT**, sem nenhum "não atingido" por cobertura, e é reversível por
   `WEB_SCORE_ENABLED=0`.

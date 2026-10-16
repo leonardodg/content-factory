@@ -28,6 +28,9 @@ class SegmentConfig(BaseModel):
     platforms: list[str]
     content_types: list[str] = Field(default_factory=list)
     keywords: list[str]
+    # termos-cabeca para sondar o Suggest pela intencao (opcao (a) da revisao
+    # 16/10). Vazio = sem sondas. Ver `domain/suggest_probes.py`.
+    probe_terms: list[str] = Field(default_factory=list)
     subnichos: dict[str, list[str]] = Field(default_factory=dict)
     audience: list[str] = Field(default_factory=list)  # vai p/ segments.config JSONB
     research: DepthConfig | None = None  # guard-rail do pipeline de pesquisa
