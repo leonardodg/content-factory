@@ -192,18 +192,24 @@ keywords do segmento, e as frases continuam vindo do autocompletar real — nada
 é inventado.
 
 1. **Classificação por intenção** por léxico fechado e versionado
-   (`INTENT_LEXICON_VERSION = "intent-v2"`), sobre as frases do Suggest de
-   cada segmento:
-   - `aprender`: como, passo a passo, tutorial, receita, para iniciantes;
-   - `resolver`: erro, não, por que, problema, afunda, rachou, manchada, derrete;
+   (`INTENT_LEXICON_VERSION = "intent-v3"`, só português), sobre as frases do
+   Suggest de cada segmento:
+   - `aprender`: como, passo a passo, receita, para iniciantes/iniciante(s);
+   - `resolver`: erro, por que, problema, afunda, rachou, manchada, anvisa,
+     legislação, tem que, tem cheiro, e `nao` **apenas** junto de um desfecho
+     ruim (`nao acende`, `nao endurece`, `nao seca`, `nao queima`, ...);
    - `tendencia`: tendência, novidade, em alta, lançamento, mais vendidos —
-     `ideas/ideias/natal/moda` só **com** contexto de atualidade/sazonalidade;
-   - `comercial`: preço, vender, lucro, dá dinheiro, embalagem, fornecedor,
-     comprar.
-   Marcadores podem ser **conjunções** de frases (ex.: `ideas` + `2026`): a
+     `ideias/natal/moda` só **com** contexto de atualidade/sazonalidade;
+   - `comercial`: preço, valor, vender, lucro, dá dinheiro, embalagem,
+     fornecedor, comprar.
+   Marcadores podem ser **conjunções** de frases (ex.: `ideias` + `2026`): a
    palavra ambígua sozinha não define a classe. Frase que casa mais de uma
    classe vai para a primeira, nessa ordem documentada. Frase sem marcador vai
    para `sem_intencao` e não entra.
+   Antes da classificação, um **filtro objetivo** (`filter-v1`, gravado no YAML
+   como `filter_version`) descarta frase em inglês/espanhol e frase com marca
+   industrial de produto acabado — motivo e efeito medido em
+   [validação web](../manual/validacao-web.md).
 2. **Seleção estratificada e cega:** de cada classe, **3 frases sorteadas
    com seed fixa** (`seed = 20261017`). O sorteio não usa o peso do Suggest,
    para não favorecer as consultas "boas". Também entra 1 consulta `seed`
@@ -315,7 +321,7 @@ Cada um em [0, 1] ou `None` (não avaliado). O score é a média ponderada
 | Componente | Peso | Regra | `None` quando |
 | --- | --- | --- | --- |
 | `tema` | 0,40 | keywords do segmento em título+snippet, normalizadas (caixa, acento) e casadas por **todos os tokens** da keyword. Cada keyword conta **uma vez**. Satura em 2: `min(1, casadas/2)` | o segmento não tem keywords |
-| `intencao` | 0,25 | o título ou snippet tem um marcador da **mesma classe** da consulta (léxico `intent-v2`) | consulta `seed` ou sem classe |
+| `intencao` | 0,25 | o título ou snippet tem um marcador da **mesma classe** da consulta (léxico `intent-v3`); marcador que depende de palavra genérica (`nao`) não conta na página | consulta `seed` ou sem classe |
 | `metadados` | 0,15 | média de: título de 15 a 120 caracteres e não só o nome do domínio; snippet ≥ 60 caracteres; `canonical_ok` | nunca |
 | `atualidade` | 0,10 | faixas do `trend_decay` | sem data, ou seja, sempre com o `ddgs` hoje |
 | `posicao` | 0,10 | `1 − (p − 1)/N`, melhor `provider_result_position` da última coleta | sem hit |
@@ -358,7 +364,7 @@ segmentos; **não contaminação** (integração: `web-rank` não escreve em
 
 Em 19/10, **antes** de gerar a amostra, um commit fixa em
 `docs/manual/validacao-web.md` as definições abaixo, as versões (`q1`,
-`ads-v1`, `intent-v2`, `web-v1`, `base-fase-h`) e as seeds. Depois disso,
+`ads-v1`, `intent-v3`, `filter-v1`, `web-v1`, `base-fase-h`) e as seeds. Depois disso,
 mudar um critério exige registrar o motivo e a data, e o resultado é
 reportado pelos dois critérios.
 

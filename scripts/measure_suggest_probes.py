@@ -18,16 +18,22 @@ from pathlib import Path
 
 from content_factory.app.segment import load_segment_file
 from content_factory.domain.suggest_probes import suggest_probes
-from content_factory.domain.web_queries import classify_intent, intent_coverage
+from content_factory.domain.web_queries import (
+    classify_intent,
+    eligible_phrases,
+    intent_coverage,
+)
 from content_factory.infra.collectors.web_suggest import WebSuggestProvider
 
 SLUGS = ("velas-artesanais", "sabonetes-artesanais", "resina-artesanal")
 
 
 def _report(label: str, phrases: list[str]) -> None:
+    eligible = eligible_phrases(phrases)
     print(f"  {label}: {len(phrases)} frases -> {intent_coverage(phrases)}")
+    print(f"     (elegiveis p/ o sorteio: {len(eligible)} -> {intent_coverage(eligible)})")
     for intent in ("resolver", "tendencia"):
-        for phrase in phrases:
+        for phrase in eligible:
             if classify_intent(phrase) == intent:
                 print(f"      [{intent}] {phrase}")
 

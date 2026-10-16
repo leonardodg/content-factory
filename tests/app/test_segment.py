@@ -6,7 +6,6 @@ from content_factory.app.segment import load_segment_file, upsert_segment
 from content_factory.domain.errors import DomainError, SegmentNotFound
 from content_factory.domain.models import Segment, SegmentConfig
 from content_factory.domain.suggest_probes import suggest_probes
-from content_factory.domain.web_queries import classify_intent
 
 
 class FakeSegmentRepository:
@@ -40,8 +39,13 @@ def test_pt_segments_declare_probe_terms(slug: str) -> None:
     """Opcao (a): o Suggest so rende no termo-cabeca (medido 16/10)."""
     cfg = load_segment_file(Path(f"segments/{slug}.yaml"))
     assert cfg.probe_terms, f"{slug} sem probe_terms: as sondas nao rodam"
-    intents = {classify_intent(probe) for probe in suggest_probes(cfg.probe_terms)}
-    assert intents == {"aprender", "resolver", "tendencia", "comercial"}
+    probes = suggest_probes(cfg.probe_terms)
+    # as quatro familias de sonda sao geradas para cada termo-cabeca
+    assert any(p.startswith("como fazer ") for p in probes)  # aprender
+    assert any(p.endswith(" nao") for p in probes)  # resolver
+    assert any(p.endswith(" tendencia") for p in probes)  # tendencia
+    assert any(p.endswith(" mais vendido") for p in probes)  # tendencia
+    assert any(p.endswith(" preco") for p in probes)  # comercial
 
 
 async def test_upsert_segment_persists_config_via_repository() -> None:

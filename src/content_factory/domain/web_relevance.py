@@ -32,8 +32,9 @@ _TITLE_MAX = 120
 _SNIPPET_MIN = 60
 
 # Marcadores do léxico de intenção que NÃO provam intenção no texto da página:
-# "não" aparece em quase todo texto em PT. Na FRASE do Suggest ("vela não
-# acende") ele ainda classifica a consulta (`web_queries.classify_intent`).
+# "não" aparece em quase todo texto em PT. Marcador que CONTÉM um destes é
+# ignorado na página (na FRASE do Suggest ele ainda classifica a consulta —
+# `web_queries.classify_intent`).
 _PAGE_GENERIC_MARKERS = frozenset({"nao"})
 
 # Pesos/rótulos CONGELADOS de `base-fase-h`: literais de propósito. A linha de
@@ -96,7 +97,7 @@ def _intent_component(page: WebPageInput) -> tuple[float | None, dict[str, Any]]
         return None, {"intent": intent or None, "marker": None}
     words = word_tokens(f"{page.title} {page.snippet}")
     for marker in web_queries.INTENT_LEXICON[intent]:
-        if all(normalize(part) in _PAGE_GENERIC_MARKERS for part in marker):
+        if any(part in _PAGE_GENERIC_MARKERS for part in marker):
             continue
         if web_queries.marker_matches(words, marker):
             return 1.0, {"intent": intent, "marker": " + ".join(marker)}

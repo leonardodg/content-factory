@@ -1,8 +1,9 @@
 """F1 — protocolo fixo e reproduzível de consultas web (`web-queries-q1`).
 
-Puro (sem I/O). Classifica as frases do Suggest por intenção com léxico
-fechado, sorteia 3 por classe com seed fixa (cego ao peso) + 1 consulta
-`seed` de controle, e roda em ordem cíclica determinística.
+Puro (sem I/O). Filtra as frases do Suggest (`filter-v1`: só PT, sem marca
+industrial), classifica por intenção com léxico fechado, sorteia 3 por classe
+com seed fixa (cego ao peso) + 1 consulta `seed` de controle, e roda em ordem
+cíclica determinística.
 """
 
 import random
@@ -13,7 +14,8 @@ from typing import cast
 
 from content_factory.domain.text import contains_phrase, normalize, word_tokens
 
-INTENT_LEXICON_VERSION = "intent-v2"
+INTENT_LEXICON_VERSION = "intent-v3"
+QUERY_FILTER_VERSION = "filter-v1"
 QUERY_PROTOCOL_VERSION = "q1"
 QUERY_SEED = 20261017
 WEB_QUERIES_PER_RUN = 3
@@ -25,49 +27,67 @@ INTENT_ORDER: tuple[str, ...] = ("aprender", "resolver", "tendencia", "comercial
 
 # Cada marcador é uma CONJUNÇÃO de frases: TODAS precisam aparecer no texto,
 # como palavra inteira. Marcador de 1 frase = indicador direto; de 2+ =
-# contextual, para palavras ambíguas (ex.: "ideas" só é tendência quando vem
+# contextual, para palavras ambíguas (ex.: "ideias" só é tendência quando vem
 # com contexto de atualidade/sazonalidade/popularidade). Ancorado no
-# vocabulário real do Suggest; mudar o léxico sobe a versão (`intent-v3`).
+# vocabulário real do Suggest; mudar o léxico sobe a versão (`intent-v4`).
 IntentMarker = tuple[str, ...]
+
+# `intent-v3`: o léxico é SÓ português (o experimento é em PT) e o "não" solto
+# deixou de ser marcador. Ver o registro em `docs/manual/evidencia-sondas-suggest.md`.
+
+# Falhas reais: "não" só é `resolver` junto de um desfecho ruim. Sem isto,
+# "ou não", "velas que não pingam" e "sabonete não perfumado" (atributo
+# desejável) entravam como problema.
+_NEGATIVE_OUTCOMES = (
+    "acende",
+    "acender",
+    "acesa",
+    "queima",
+    "queimou",
+    "queimando",
+    "endurece",
+    "endureceu",
+    "seca",
+    "secou",
+    "funciona",
+    "funcionou",
+    "encerado",
+    "faz espuma",
+    "da certo",
+)
 
 INTENT_LEXICON: dict[str, tuple[IntentMarker, ...]] = {
     "aprender": (
         ("como",),
         ("passo a passo",),
-        ("tutorial",),
         ("receita",),
-        ("recipe",),
-        ("recipes",),
         ("para iniciantes",),
-        ("for beginners",),
         ("iniciante",),
+        ("iniciantes",),
     ),
     "resolver": (
         ("por que",),
         ("para que serve",),
         ("o que fazer",),
+        ("como resolver",),
         ("vale a pena",),
         ("funciona",),
         ("erro",),
         ("problema",),
-        ("nao",),
-        ("afunda",),
-        ("rachou",),
-        ("manchada",),
-        ("derrete",),
         ("mesma coisa",),
         ("diferenca",),
-        ("vs",),
+        ("tem que",),
         ("tem cheiro",),
-        ("significado",),
+        ("duvida",),
+        ("faz mal",),
         ("anvisa",),
         ("legislacao",),
-        ("tem que ser",),
-        ("safe",),
-        ("too short",),
-        ("bad for",),
-        ("good or bad",),
-        ("benefits",),
+        ("afunda",),
+        ("rachou",),
+        ("rachado",),
+        ("manchada",),
+        ("manchado",),
+        *(("nao", outcome) for outcome in _NEGATIVE_OUTCOMES),
     ),
     "tendencia": (
         ("tendencia",),
@@ -78,8 +98,6 @@ INTENT_LEXICON: dict[str, tuple[IntentMarker, ...]] = {
         ("mais vendidos",),
         ("mais vendido",),
         # ambíguas: só com contexto de atualidade/sazonalidade
-        ("ideas", "2026"),
-        ("ideas", "natal"),
         ("ideias", "2026"),
         ("ideias", "natal"),
         ("natal", "2026"),
@@ -87,23 +105,128 @@ INTENT_LEXICON: dict[str, tuple[IntentMarker, ...]] = {
     ),
     "comercial": (
         ("preco",),
-        ("price",),
         ("valor",),
         ("comprar",),
         ("vender",),
-        ("sell",),
-        ("sale",),
         ("lucro",),
         ("da lucro",),
         ("da dinheiro",),
         ("embalagem",),
         ("fornecedor",),
         ("atacado",),
-        ("wholesale",),
         ("revenda",),
         ("loja",),
     ),
 }
+
+# --- `filter-v1`: filtros objetivos ANTES do sorteio ------------------------
+
+# Palavras funcionais que não existem em PT: a frase que as contém não é
+# portuguesa. Lista curta e conservadora (só o que é inequivocamente EN/ES);
+# `de`/`para`/`que`/`como`/`la` ficam de fora porque também são PT.
+FOREIGN_MARKERS: frozenset[str] = frozenset(
+    {
+        # inglês
+        "for",
+        "the",
+        "and",
+        "with",
+        "without",
+        "your",
+        "you",
+        "how",
+        "what",
+        "why",
+        "best",
+        "is",
+        "are",
+        "of",
+        "to",
+        "from",
+        "this",
+        "that",
+        "my",
+        "it",
+        "not",
+        "or",
+        "if",
+        "can",
+        "will",
+        "does",
+        "into",
+        "about",
+        "beginners",
+        "recipe",
+        "recipes",
+        "tutorial",
+        "guide",
+        "ideas",
+        "wholesale",
+        "sale",
+        "sell",
+        "price",
+        "safe",
+        "benefits",
+        "bad",
+        "short",
+        "too",
+        "free",
+        "download",
+        "making",
+        # conteúdo típico do nicho em inglês (pega frases sem palavra funcional,
+        # ex.: "cold process soap vs hot process soap")
+        "soap",
+        "candle",
+        "candles",
+        "wick",
+        "wax",
+        "handmade",
+        "melt",
+        "pour",
+        "lye",
+        "cold",
+        "hot",
+        "crafts",
+        "tray",
+        "molds",
+        "keychains",
+        # espanhol
+        "en",
+        "con",
+        "sin",
+        "los",
+        "las",
+        "del",
+        "el",
+        "y",
+        "son",
+        "una",
+        "uno",
+        "alcista",
+        "bajista",
+        "martillo",
+        "cambio",
+    }
+)
+
+# Marcas industriais de PRODUTO ACABADO: fora do nicho artesanal. Fornecedores
+# de matéria-prima do artesão (ex.: "nossa terra") NÃO entram.
+BLOCKED_BRANDS: frozenset[str] = frozenset(
+    {
+        "natura",
+        "boticario",
+        "phebo",
+        "granado",
+        "dove",
+        "avon",
+        "eudora",
+        "jequiti",
+        "ngk",
+        "voluspa",
+        "malone",
+        "bulhoes",
+    }
+)
 
 
 @dataclass(frozen=True)
@@ -122,6 +245,7 @@ class WebQueryProtocol:
     seed: int
     lexicon_version: str
     queries: list[PlannedQuery]
+    filter_version: str = QUERY_FILTER_VERSION
     missing: dict[str, int] = field(default_factory=dict[str, int])
     vetoes: dict[str, str] = field(default_factory=dict[str, str])
 
@@ -129,6 +253,21 @@ class WebQueryProtocol:
 def marker_matches(words: list[str], marker: IntentMarker) -> bool:
     """Todas as frases do marcador aparecem em `words` (conjunção, palavra inteira)."""
     return all(contains_phrase(words, phrase) for phrase in marker)
+
+
+def is_eligible(phrase: str) -> bool:
+    """Filtro objetivo `filter-v1`: frase em PT e sem marca industrial.
+
+    Aplicado ANTES do sorteio — frase filtrada não entra no protocolo nem
+    como substituta de uma vetada.
+    """
+    words = set(word_tokens(phrase))
+    return not (words & FOREIGN_MARKERS) and not (words & BLOCKED_BRANDS)
+
+
+def eligible_phrases(phrases: Sequence[str]) -> list[str]:
+    """As frases que passam no `filter-v1`, na ordem de entrada."""
+    return [phrase for phrase in phrases if is_eligible(phrase)]
 
 
 def classify_intent(phrase: str) -> str | None:
@@ -160,12 +299,15 @@ def intent_coverage(phrases: Sequence[str]) -> dict[str, int]:
 def rank_intent_phrases(signals: Sequence[str], *, seed: int = QUERY_SEED) -> dict[str, list[str]]:
     """Por classe, as frases embaralhadas com seed fixa (ordem do sorteio).
 
-    A ordem não olha o peso: entram só as frases, ordenadas por texto antes
-    do shuffle para o resultado ser independente da ordem de entrada.
+    Só entram frases aprovadas pelo `filter-v1` (`is_eligible`). A ordem não
+    olha o peso: entram só as frases, ordenadas por texto antes do shuffle
+    para o resultado ser independente da ordem de entrada.
     """
     pools: dict[str, list[str]] = {intent: [] for intent in INTENT_ORDER}
     seen: set[tuple[str, str]] = set()
     for phrase in signals:
+        if not is_eligible(phrase):
+            continue
         intent = classify_intent(phrase)
         if intent is None:
             continue
@@ -246,6 +388,7 @@ def protocol_to_dict(protocol: WebQueryProtocol) -> dict[str, object]:
         "version": protocol.version,
         "seed": protocol.seed,
         "lexicon_version": protocol.lexicon_version,
+        "filter_version": protocol.filter_version,
         "queries": [
             {"id": q.query_id, "query": q.query, "intent": q.intent} for q in protocol.queries
         ],
@@ -284,6 +427,7 @@ def protocol_from_dict(data: Mapping[str, object]) -> WebQueryProtocol:
         version=str(data.get("version", QUERY_PROTOCOL_VERSION)),
         seed=int(str(data.get("seed", QUERY_SEED))),
         lexicon_version=str(data.get("lexicon_version", INTENT_LEXICON_VERSION)),
+        filter_version=str(data.get("filter_version", QUERY_FILTER_VERSION)),
         queries=queries,
         missing=missing,
         vetoes=vetoes,

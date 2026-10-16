@@ -11,7 +11,8 @@ reportado pelos dois critérios.
 | Elemento | Versão | Onde |
 | --- | --- | --- |
 | Protocolo de consultas | `q1` (`web-queries-q1`) | `segments/web-queries/<slug>.q1.yaml` |
-| Léxico de intenção | `intent-v2` | `domain/web_queries.py` |
+| Léxico de intenção | `intent-v3` | `domain/web_queries.py` |
+| Filtro objetivo pré-sorteio | `filter-v1` | `domain/web_queries.py` |
 | Sondas de intenção do Suggest | `probe-v2` | `domain/suggest_probes.py` |
 | Regras de anúncio | `ads-v1` | `domain/web_urls.py` |
 | Normalização de URL | `canon-v1` | `domain/web_urls.py` |
@@ -108,6 +109,43 @@ muda o resultado: o limite é o **dado** do nicho, não a consulta.
     (`velas tendencia alcista`). Parte das frases do `resolver`/`tendencia`
     fica fora do segmento. O `q1` é revisado pelo usuário, que **veta** a frase
     inadequada (`cf web-queries --veto/--reason`); o veto é registrado no YAML.
+
+### Adendo registrado — 2026-10-16: `intent-v3` + filtro `filter-v1`
+
+**Motivo:** o QA do commit `4f56a0a` (sorteio cego com a seed `20261017` contra o
+autocompletar real) mostrou que as 4 classes fechavam nos 3 segmentos, mas de 4 a
+7 das 13 consultas saíam **fora do nicho ou em outro idioma**: frases em inglês
+(os marcadores `tutorial`/`for beginners`/`sale`/`price`/`wholesale` deixavam
+passar), marcas industriais (`sabonete mais vendido da natura`, `preco sabonete
+phebo`) e o `nao` solto (`pavio parafinado ou nao`, `velas que nao pingam` —
+atributo desejável, não problema). O veto resolvia em tese, mas a substituta
+vinha do mesmo conjunto contaminado.
+
+**O que muda (nenhum critério pré-registrado muda):**
+
+1. **Léxico `intent-v3`** (`domain/web_queries.py`): só português (o experimento é
+   em PT) e o `nao` deixou de ser marcador isolado — vale apenas junto de um
+   **desfecho ruim** (`nao acende`, `nao endurece`, `nao seca`, `nao queima`,
+   `nao faz espuma`, ...). Saíram `significado`, `vs`, `derrete` (casava "que não
+   derretem", atributo desejável) e todos os marcadores em inglês.
+2. **Filtro `filter-v1`** (pré-sorteio, versionado e gravado no YAML do protocolo
+   como `filter_version`): descarta frase com palavra funcional ou de conteúdo
+   típica de EN/ES (`for`, `the`, `en`, `con`, `soap`, `candle`, ...) e frase com
+   **marca industrial de produto acabado** (`natura`, `phebo`, `boticario`,
+   `granado`, `dove`, `ngk`, ...). Fornecedor de matéria-prima do artesão **não**
+   é bloqueado (ex.: `nossa terra`).
+
+**Efeito medido (mesma seed `20261017`, 16/10, sem escrever no banco):** as 4
+classes continuam fechando nos 3 segmentos (`missing` vazio) e as 13 consultas
+saem limpas — 0 candidatas a veto em sabonetes e resina; em velas restam 3
+resíduos de homonímia (`vela de aniversario`, `velas 7 dias`, `vela não queimou
+toda umbanda`). Cobertura elegível por classe e as 13 consultas por segmento em
+[Evidência — sondas do Suggest](evidencia-sondas-suggest.md).
+
+!!! note "Margem estreita em sabonetes/resolver"
+    Depois do filtro, `resolver` em sabonetes tem 4 frases elegíveis (3 entram no
+    `q1`): um veto abriria `missing`. A revisão do usuário decide se vale ampliar
+    a sonda antes do congelamento.
 
 ## Indicadores (não são critérios até haver calibração)
 

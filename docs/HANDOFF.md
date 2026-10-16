@@ -24,11 +24,14 @@ relatório **próprios** — nada muda em `viral_score`/`FORMULA_VERSION`/
   (migração `0010`, append-only) grava consulta exata, `query_id`,
   `query_intent`, `provider='unknown'`, `provider_result_position`,
   URL original + canônica, `collector_version=web-c2`, `rules_version`. O
-  protocolo `q1` (`domain/web_queries.py`, léxico `intent-v2`) classifica as
+  protocolo `q1` (`domain/web_queries.py`, léxico `intent-v3` + filtro
+  `filter-v1`) classifica as
   frases do Suggest por intenção (`aprender`/`resolver`/`tendencia`/`comercial`),
   sorteia 3 por classe com seed fixa (cego ao peso) + 1 `seed` de controle, e
   roda 3 por coleta em ordem cíclica determinística (`run_index_for`: 2
-  coletas/dia, sem estado). O Suggest é semeado com as keywords do segmento
+  coletas/dia, sem estado). Antes do sorteio, o `filter-v1` descarta frase em
+  inglês/espanhol e frase com marca industrial (`filter_version` no YAML). O
+  Suggest é semeado com as keywords do segmento
   **e** com sondas de intenção (`probe-v2`, `domain/suggest_probes.py`) sobre os
   **termos-cabeça** do segmento (`SegmentConfig.probe_terms`) — só o Suggest as
   recebe. O deploy precisa de `cf segment load` para subir os `probe_terms`
@@ -44,7 +47,7 @@ relatório **próprios** — nada muda em `viral_score`/`FORMULA_VERSION`/
   seleção, não score.
 - **F4 — pré-registro:** `manual/validacao-web.md` fixa critérios (P@5 ≥ 0,6;
   P@10 ≥ 0,5; ganho P@10 ≥ 0,1 com IC-95 inferior > 0; cobertura ≥ 90%), as
-  versões (`q1`/`ads-v1`/`intent-v2`/`probe-v2`/`web-v1`/`base-fase-h`) e as seeds.
+  versões (`q1`/`ads-v1`/`intent-v3`/`filter-v1`/`probe-v2`/`web-v1`/`base-fase-h`) e as seeds.
   `cf web-eval` compara os dois rankings sobre o MESMO conjunto `kept` (IC por
   bootstrap, veredito `aprovado`/`direcional`/`insuficiente`/`nao_atingido`).
 - **F5 — gated:** `WEB_SCORE_ENABLED` (default `0`) liga a gravação no
@@ -94,6 +97,14 @@ relatório **próprios** — nada muda em `viral_score`/`FORMULA_VERSION`/
   45/150 e 42/151, mas `tendencia` ainda fica 0/1/0 e `resolver` fino em resina
   — por isso as sondas. **Não inventar consultas**; segmento que seguir parcial
   é marcado parcial e exploratório e não conta como F1 aprovada.
+  **QA do `4f56a0a` (16/10):** com as sondas as 4 classes fecham nos 3
+  segmentos, mas de 4 a 7 das 13 consultas saíam fora do nicho ou em outro
+  idioma (marcadores EN no léxico, `nao` solto, marcas industriais). Corrigido
+  por **`intent-v3`** (só PT; `nao` exige desfecho ruim) + **`filter-v1`**
+  (idioma e marcas industriais, antes do sorteio, gravado como `filter_version`):
+  as 13 consultas saem limpas e as candidatas a veto caem de 15 para 4, todas
+  resíduo de homonímia. Ressalva: `resolver` em sabonetes fica com 4 frases
+  elegíveis — um veto abriria `missing`.
   **Sondas validadas contra o autocompletar real (16/10, read-only):** a cauda
   longa não rende (`vela artesanal nao` → 0), a cabeça rende (`vela nao` → 10,
   `vela tendencia` → 10, `pavio nao` → 8, `sabonete mais vendido` → 10,

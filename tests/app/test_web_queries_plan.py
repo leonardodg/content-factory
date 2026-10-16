@@ -19,9 +19,9 @@ SIGNALS = [
     "vela rachou",  # resolver
     "tendencia velas 2026",  # tendencia
     "preco da cera",  # comercial
-    "tutorial de vela",  # aprender
+    "vela artesanal passo a passo",  # aprender
     "por que a vela afunda",  # resolver
-    "moda em velas",  # tendencia — VETADO no intent-v2 (ambígua, isolada)
+    "moda em velas",  # tendencia — isolada não classifica (ambígua)
     "velas em alta",  # tendencia
     "lucro com velas",  # comercial
     "receita de vela",  # aprender

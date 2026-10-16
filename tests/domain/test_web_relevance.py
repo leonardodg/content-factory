@@ -127,6 +127,15 @@ def test_intent_none_for_seed_or_unknown_class() -> None:
     assert _ws(page(query_intent="")).components["intencao"] is None
 
 
+def test_intent_ignores_markers_that_rest_on_generic_words() -> None:
+    # "não" aparece em quase todo texto em PT: marcador que depende dele não é
+    # prova de intenção na PÁGINA (no `intent-v3` ele só vale na frase do
+    # Suggest, junto de um desfecho ruim).
+    s = _ws(page(query_intent="resolver", title="Vela que não acende", snippet="x" * 70))
+    assert s.components["intencao"] == 0.0
+    assert s.explanation["intencao"]["marker"] is None
+
+
 def test_metadata_never_none_and_empty_snippet_fails() -> None:
     s = _ws(page(snippet=""))
     assert s.components["metadados"] is not None

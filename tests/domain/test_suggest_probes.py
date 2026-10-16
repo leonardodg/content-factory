@@ -29,17 +29,22 @@ def test_probes_cover_the_four_intents_for_each_term() -> None:
     assert "pavio nao" in probes
 
 
-def test_probes_classify_as_their_own_intent() -> None:
-    """A sonda precisa carregar o vocabulario que o lexico usa na classe."""
-    expected = {
+def test_probe_families_align_with_the_lexicon() -> None:
+    """Cada família de sonda semeia o vocabulário que o léxico reconhece.
+
+    A sonda em si é um PREFIXO de busca (não precisa classificar); o que
+    precisa classificar é o que o autocompletar devolve. Aqui usamos um
+    exemplo real de cada família.
+    """
+    representative = {
         "como fazer vela": "aprender",
-        "vela nao": "resolver",
+        "vela nao acende": "resolver",  # "não" sozinho não basta no `intent-v3`
         "vela tendencia": "tendencia",
         "vela mais vendido": "tendencia",
         "vela preco": "comercial",
     }
-    for probe in suggest_probes(["vela"]):
-        assert classify_intent(probe) == expected[probe]
+    for phrase, intent in representative.items():
+        assert classify_intent(phrase) == intent
 
 
 def test_probes_are_deterministic_and_deduped() -> None:

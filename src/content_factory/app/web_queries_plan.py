@@ -11,6 +11,7 @@ import yaml
 
 from content_factory.domain.web_queries import (
     INTENT_LEXICON_VERSION,
+    QUERY_FILTER_VERSION,
     QUERY_PROTOCOL_VERSION,
     QUERY_SEED,
     WebQueryProtocol,
@@ -37,6 +38,7 @@ def build_protocol(
         seed=seed,
         lexicon_version=INTENT_LEXICON_VERSION,
         queries=queries,
+        filter_version=QUERY_FILTER_VERSION,
         missing=missing,
         vetoes=dict(vetoes or {}),
     )
