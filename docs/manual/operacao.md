@@ -154,6 +154,22 @@ Fuso fixo `America/Sao_Paulo` (`ZoneInfo` no `WorkerSettings`) — os horários
 não dependem do TZ da máquina. Os dois cron jobs têm `unique=True`: um
 disparo pendente não é enfileirado duas vezes.
 
+**Catch-up de horário perdido** (`catchup_job`, desde 2026-10-16): o arq
+calcula o próximo disparo a partir do startup e **não recupera** horário que
+passou com o worker parado (máquina desligada, Postgres/Redis fora). No
+startup, o worker enfileira o `catchup_job`, que compara o horário agendado
+mais recente de cada cron com a última run gravada (`collect_runs` para
+research/collect, `video_scores` para score) e roda os perdidos **em
+sequência**: research → collect → score. Regras:
+
+- só o horário mais recente conta: depois de dias parado, cada job roda uma vez;
+- se o próximo horário do mesmo job está a menos de 60 min, o cron cobre;
+- `_job_id` por hora: restarts seguidos na mesma hora não duplicam;
+- `CATCHUP_ON_STARTUP=0` desliga.
+
+No log: `catch-up: <job> perdeu o horário — rodando agora` e o envelope
+`{"ok", "missed", "ran"}`.
+
 **Envs do worker** (`COLLECT_PLATFORMS`/`LIMIT` são relidas a cada
 job, assim como `WORKER_MAX_SEGMENTS`; `COLLECT_CRON_HOURS` e
 `COLLECT_MAX_CONCURRENCY` valem do carregamento
@@ -162,10 +178,11 @@ do processo — trocar exige restart do worker):
 | Env | Default | Significado |
 |---|---|---|
 | `COLLECT_PLATFORMS` | vazio | vazio = plataformas declaradas do segmento |
-| `COLLECT_LIMIT` | `10` | limite de vídeos por plataforma na coleta |
+| `COLLECT_LIMIT` | `10` | limite de vídeos por plataforma na coleta (produção: `25` desde 2026-10-16; o `3` do teste E2E ficou esquecido no `app.env` até lá) |
 | `COLLECT_CRON_HOURS` | `08,20` | horas do collect em BRT; valor inválido cai no default |
 | `COLLECT_MAX_CONCURRENCY` | `2` | teto de `discover()` simultâneos por collect (Task 7); ponto de partida para benchmark, não limite seguro universal; valor inválido ou < 1 cai em `2`/`1` |
 | `WORKER_MAX_SEGMENTS` | `3` | teto de segmentos simultâneos por job (Task 11); lido a cada tick, trocar não exige restart; valor inválido ou < 1 cai em `3`/`1` |
+| `CATCHUP_ON_STARTUP` | `1` | `0` desliga o catch-up de horário perdido no startup |
 | `PLATFORM_MAX_CONCURRENCY` | `tiktok=1,web=1` | teto de discovers simultâneos **por plataforma no processo**, entre segmentos (`plataforma=limite,…`); a env é SOMADA ao default, nunca remove o teto do TikTok; entrada inválida ou < 1 é ignorada; vale do startup (exige restart) |
 
 Fixos no código (não são env):
@@ -284,6 +301,18 @@ manual no fim do período. O `research_job` no worker filtra
   em `logs worker`, [§3](#3-logs)) — é proposital, não erro de config.
 
 ## 7. Parada, restart e atualização
+
+!!! warning "Fechar o VS Code não pode parar a produção"
+    O Postgres e o Redis de produção são serviços do mesmo projeto compose do
+    Dev Container. Sem `shutdownAction`, o VS Code roda
+    `docker compose stop -t 0` ao fechar a janela, que para `postgres`,
+    `redis` e `cf-python` sem shutdown limpo. O worker, que fica em outro
+    profile, entra em loop de restart. Foi o que aconteceu em 2026-10-16 às
+    10:02 BRT. Desde então, o `devcontainer.json` tem
+    `"shutdownAction": "none"`. Se acontecer de novo (por exemplo, numa
+    cópia antiga do arquivo), religue só a infra:
+    `docker start content-factory-postgres-1 content-factory-redis-1`. O
+    worker volta sozinho e o catch-up roda o que tiver ficado para trás.
 
 Manter `--profile worker` nos comandos: o perfil é necessário quando o
 serviço **não** é nomeado (ex.: um `up -d` geral sem argumentos); comandos

@@ -13,7 +13,7 @@ existem para o teste trocar por fakes sem tocar no arq/banco (fronteira = mock).
 import logging
 import os
 from collections.abc import Awaitable, Callable
-from datetime import tzinfo
+from datetime import UTC, datetime, time, tzinfo
 from typing import Any, ClassVar
 from zoneinfo import ZoneInfo
 
@@ -22,9 +22,11 @@ from arq.cron import CronJob, cron
 from arq.typing import StartupShutdown
 from arq.worker import Function, func
 
+from content_factory.app.catchup import CronSchedule, missed_jobs
 from content_factory.app.collect import collect
 from content_factory.app.concurrency import bounded_gather
 from content_factory.app.ports import (
+    JobRunReader,
     ResearchCampaignRepository,
 )
 from content_factory.app.research_pipeline import run_research_cycle
@@ -43,6 +45,15 @@ from content_factory.infra.queue.composition import AppDeps, compose_app_deps
 from content_factory.infra.redact import redact
 
 logger = logging.getLogger(__name__)
+
+
+TIMEZONE = ZoneInfo("America/Sao_Paulo")
+# horários do cron (BRT) — lidos pelo cron E pelo catch-up, que não podem divergir
+RESEARCH_HOURS = {7}
+RESEARCH_MINUTE = 0
+COLLECT_MINUTE = 0
+SCORE_HOURS = {8, 21}
+SCORE_MINUTE = 30
 
 
 def parse_cron_hours(raw: str) -> set[int]:
@@ -248,6 +259,71 @@ async def run_research_job(ctx: dict[str, Any]) -> dict[str, Any]:
     return await _gather_segments(active, _max_segments_from_env(), _one, "research")
 
 
+def _now() -> datetime:
+    """Hook de teste: relógio do catch-up."""
+    return datetime.now(UTC)
+
+
+def _collect_hours() -> set[int]:
+    return parse_cron_hours(os.getenv("COLLECT_CRON_HOURS", "08,20"))
+
+
+def catchup_schedules() -> list[CronSchedule]:
+    """Os horários dos 3 crons, na ordem em que o catch-up os roda."""
+
+    def _times(hours: set[int], minute: int) -> tuple[time, ...]:
+        return tuple(time(h, minute) for h in sorted(hours))
+
+    return [
+        CronSchedule("research", _times(RESEARCH_HOURS, RESEARCH_MINUTE)),
+        CronSchedule("collect", _times(_collect_hours(), COLLECT_MINUTE)),
+        CronSchedule("score", _times(SCORE_HOURS, SCORE_MINUTE)),
+    ]
+
+
+async def run_catchup_job(ctx: dict[str, Any]) -> dict[str, Any]:
+    """Roda, em sequência, os crons cujo horário mais recente passou sem run.
+
+    O arq calcula o próximo disparo a partir do startup e nunca recupera
+    horário perdido (máquina desligada, Postgres/Redis fora). O `startup`
+    enfileira este job; a decisão é `app.catchup.missed_jobs`. Ordem
+    research → collect → score (o score usa o que o collect gravou). Exceção
+    de um job vira envelope de erro e o próximo roda mesmo assim.
+    """
+    campaigns: ResearchCampaignRepository = ctx["campaigns_deps"]
+    job_runs: JobRunReader = ctx["job_runs"]
+    active = await campaigns.active_segments()
+    if not active:
+        return {"ok": True, "missed": [], "ran": {}}
+    last = await job_runs.last_runs([seg.id for seg in active])
+    missed = missed_jobs(_now(), catchup_schedules(), last, TIMEZONE)
+    runners: dict[str, Callable[[dict[str, Any]], Awaitable[dict[str, Any]]]] = {
+        "research": run_research_job,
+        "collect": run_collect_job,
+        "score": run_score_job,
+    }
+    ran: dict[str, dict[str, Any]] = {}
+    for job in missed:
+        logger.warning("catch-up: %s perdeu o horário — rodando agora", job)
+        try:
+            ran[job] = await runners[job](ctx)
+        except Exception as exc:
+            logger.exception("catch-up: %s falhou", job)
+            ran[job] = exception_result(exc, redact)
+    return {"ok": all(bool(r["ok"]) for r in ran.values()), "missed": missed, "ran": ran}
+
+
+async def _enqueue_catchup(ctx: dict[str, Any]) -> None:
+    """Agenda o catch-up; `_job_id` por hora (UTC) deduplica restarts seguidos."""
+    if os.getenv("CATCHUP_ON_STARTUP", "1").strip() == "0":
+        return
+    pool = ctx.get("redis")
+    if pool is None:  # arq sempre injeta o pool; sem ele (uso fora do arq) não há fila
+        return
+    job_id = f"catchup:{_now().astimezone(UTC):%Y-%m-%dT%H}"
+    await pool.enqueue_job("catchup_job", _job_id=job_id)
+
+
 async def create_app_deps(settings: Settings) -> AppDeps:
     """Lê as envs de concorrência (só no startup: trocar exige restart) e compõe.
 
@@ -277,6 +353,8 @@ async def startup(ctx: dict[str, Any]) -> None:
     # reintroduziria a sessão compartilhada entre jobs sobrepostos.
     ctx["app_deps"] = deps
     ctx["campaigns_deps"] = deps.campaigns
+    ctx["job_runs"] = deps.job_runs
+    await _enqueue_catchup(ctx)
 
 
 async def shutdown(ctx: dict[str, Any]) -> None:
@@ -295,6 +373,8 @@ async def shutdown(ctx: dict[str, Any]) -> None:
 COLLECT_JOB_TIMEOUT_S = 1500
 RESEARCH_JOB_TIMEOUT_S = 1500
 SCORE_JOB_TIMEOUT_S = 300
+# catch-up roda os 3 em sequência no pior caso
+CATCHUP_JOB_TIMEOUT_S = RESEARCH_JOB_TIMEOUT_S + COLLECT_JOB_TIMEOUT_S + SCORE_JOB_TIMEOUT_S
 
 
 class WorkerSettings:
@@ -304,6 +384,7 @@ class WorkerSettings:
         func(run_collect_job, name="collect_job", timeout=COLLECT_JOB_TIMEOUT_S),
         func(run_score_job, name="score_job", timeout=SCORE_JOB_TIMEOUT_S),
         func(run_research_job, name="research_job", timeout=RESEARCH_JOB_TIMEOUT_S),
+        func(run_catchup_job, name="catchup_job", timeout=CATCHUP_JOB_TIMEOUT_S),
     ]
     # timeout repetido no cron(): cada cron é uma entrada própria no arq e
     # cairia no default de 300 s. max_tries=1 é o default do cron (sem retry
@@ -312,24 +393,24 @@ class WorkerSettings:
         cron(
             run_research_job,
             name="research_job",
-            hour={7},
-            minute=0,
+            hour=RESEARCH_HOURS,
+            minute=RESEARCH_MINUTE,
             unique=True,
             timeout=RESEARCH_JOB_TIMEOUT_S,
         ),
         cron(
             run_collect_job,
             name="collect_job",
-            hour=parse_cron_hours(os.getenv("COLLECT_CRON_HOURS", "08,20")),
-            minute=0,
+            hour=_collect_hours(),
+            minute=COLLECT_MINUTE,
             unique=True,
             timeout=COLLECT_JOB_TIMEOUT_S,
         ),
         cron(
             run_score_job,
             name="score_job",
-            hour={8, 21},
-            minute=30,
+            hour=SCORE_HOURS,
+            minute=SCORE_MINUTE,
             unique=True,
             timeout=SCORE_JOB_TIMEOUT_S,
         ),
@@ -342,7 +423,7 @@ class WorkerSettings:
     # IllegalStateChangeError sob o default max_jobs=10 do arq).
     max_jobs: ClassVar[int] = 3
     # cron em horário local do projeto (07:00 research, 08:00/20:00 collect BRT)
-    timezone: ClassVar[tzinfo] = ZoneInfo("America/Sao_Paulo")
+    timezone: ClassVar[tzinfo] = TIMEZONE
     on_startup: ClassVar[StartupShutdown] = startup
     # SEM on_job_end (Task 11, decisão REMOVER): o job_end antigo fazia
     # rollback na sessão global — com sessão por UoW isso perdeu o objeto

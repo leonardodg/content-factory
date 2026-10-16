@@ -27,10 +27,12 @@ from content_factory.infra.db.orm import (
 )
 from content_factory.infra.db.repositories import (
     CollectRunRepositoryImpl,
+    JobRunReaderImpl,
     KeywordSignalRepositoryImpl,
     OpsReportReaderImpl,
     ResearchCampaignRepositoryImpl,
     ScoreRepositoryImpl,
+    ScoreSampleRepositoryImpl,
     SegmentRepositoryImpl,
     TrendObservationRepositoryImpl,
     VideoRepositoryImpl,
@@ -1261,4 +1263,143 @@ async def test_ops_reader_coverage_can_be_restricted_to_window() -> None:
         assert (await reader.metric_coverage(seg.id))["youtube"].videos == 2
         window = await reader.metric_coverage(seg.id, since=datetime.now(UTC) - timedelta(hours=24))
         assert window["youtube"].videos == 1 and window["youtube"].with_views == 1
+    await engine.dispose()
+
+
+@requires_infra
+async def test_job_run_reader_last_runs_per_job_for_given_segments() -> None:
+    """T2 catch-up: última run de research/collect/score, só dos segmentos pedidos."""
+    engine = create_async_engine(os.environ["TEST_DATABASE_URL"])
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    async with factory() as s:
+        await s.rollback()
+        segs = SegmentRepositoryImpl(s)
+        seg = await segs.upsert(
+            SegmentConfig(
+                slug=f"teste-cu-{uuid4().hex[:8]}", name="CU", platforms=["web"], keywords=["k"]
+            )
+        )
+        other = await segs.upsert(
+            SegmentConfig(
+                slug=f"teste-cu-{uuid4().hex[:8]}", name="CU2", platforms=["web"], keywords=["k"]
+            )
+        )
+        reader = JobRunReaderImpl(s)
+        assert await reader.last_runs([seg.id]) == {
+            "research": None,
+            "collect": None,
+            "score": None,
+        }
+
+        now = datetime.now(UTC).replace(microsecond=0)
+        runs = CollectRunRepositoryImpl(s)
+        for collector, seg_id, hours in (
+            ("research:youtube", seg.id, 5),
+            ("research:trends", seg.id, 3),
+            ("youtube", seg.id, 2),
+            ("web", seg.id, 4),
+            ("youtube", other.id, 1),  # outro segmento não conta
+        ):
+            await runs.record(
+                CollectRun(
+                    collector=collector,
+                    segment_id=seg_id,
+                    status="ok",
+                    error_code=None,
+                    started_at=now - timedelta(hours=hours),
+                    finished_at=now - timedelta(hours=hours) + timedelta(seconds=3),
+                )
+            )
+        cand = candidate(1)
+        await VideoRepositoryImpl(s).upsert_candidates(seg.id, "test", [cand])
+        s.add(
+            VideoScoreRow(
+                video_id=await video_id_of(s, cand),
+                segment_id=seg.id,
+                computed_at=now - timedelta(minutes=30),
+                viral_score=1.0,
+                relevance=1.0,
+                recency=1.0,
+                trend_decay="low",
+            )
+        )
+        await s.commit()
+
+        last = await reader.last_runs([seg.id])
+        assert last["research"] == now - timedelta(hours=3)
+        assert last["collect"] == now - timedelta(hours=2)
+        assert last["score"] == now - timedelta(minutes=30)
+        assert (await reader.last_runs([]))["collect"] is None
+    await engine.dispose()
+
+
+@requires_infra
+async def test_upsert_persists_language_and_keeps_known_one() -> None:
+    """T3: `videos.language` vem do candidato; coleta sem idioma não apaga o conhecido."""
+    engine = create_async_engine(os.environ["TEST_DATABASE_URL"])
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    async with factory() as s:
+        await s.rollback()
+        seg = await SegmentRepositoryImpl(s).upsert(
+            SegmentConfig(
+                slug=f"teste-lang-{uuid4().hex[:8]}",
+                name="L",
+                platforms=["youtube"],
+                keywords=["k"],
+            )
+        )
+        videos = VideoRepositoryImpl(s)
+        cand = candidate(1).model_copy(update={"language": "pt-BR"})
+        await videos.upsert_candidates(seg.id, "test", [cand])
+        await videos.upsert_candidates(seg.id, "test", [cand.model_copy(update={"language": None})])
+        await s.commit()
+        row = (
+            await s.execute(
+                select(VideoRow).where(VideoRow.platform_video_id == cand.platform_video_id)
+            )
+        ).scalar_one()
+        assert row.language == "pt-BR"
+    await engine.dispose()
+
+
+@requires_infra
+async def test_top_scored_for_segment_filters_by_platform() -> None:
+    """T4: `cf score-sample --platform` — ranking de uma plataforma só."""
+    engine = create_async_engine(os.environ["TEST_DATABASE_URL"])
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    async with factory() as s:
+        await s.rollback()
+        seg = await SegmentRepositoryImpl(s).upsert(
+            SegmentConfig(
+                slug=f"teste-ss-{uuid4().hex[:8]}",
+                name="SS",
+                platforms=["youtube", "instagram"],
+                keywords=["k"],
+            )
+        )
+        yt = candidate(1)
+        reel = CandidateVideo(
+            platform="instagram",
+            platform_video_id=f"reel-{uuid4().hex[:12]}",
+            url="https://www.instagram.com/reel/x/",
+            creator_handle="",
+        )
+        await VideoRepositoryImpl(s).upsert_candidates(seg.id, "test", [yt, reel])
+        for cand, total in ((yt, 40.0), (reel, 55.0)):
+            s.add(
+                VideoScoreRow(
+                    video_id=await video_id_of(s, cand),
+                    segment_id=seg.id,
+                    viral_score=total,
+                    relevance=0.0,
+                    recency=100.0,
+                    trend_decay="low",
+                )
+            )
+        await s.commit()
+        repo = ScoreSampleRepositoryImpl(s)
+        both = await repo.top_scored_for_segment(seg.id, 10)
+        assert [r.platform for r in both] == ["instagram", "youtube"]
+        only_yt = await repo.top_scored_for_segment(seg.id, 10, platform="youtube")
+        assert [(r.platform, r.total) for r in only_yt] == [("youtube", 40.0)]
     await engine.dispose()

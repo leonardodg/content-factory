@@ -42,11 +42,12 @@ As proteções da seção 1 limitam o *sistema*; estas regras limitam *você*:
 3. **`--limit` gradual** — comece com 3–10; o default da CLI é 10 e 50 é o
    **teto** (`--limit` max), não o default. Suba devagar observando
    `collect_runs`.
-4. **YouTube: veja a cota antes de subir `COLLECT_LIMIT`** — cada descoberta
-   custa 102 unidades (100 do `search` + 1 de `videos` + 1 de `channels`) e a
-   cota padrão é 10.000/dia ≈ 98 descobertas (**≈** a janela do limiter).
-   Dobrar o `--limit` não cria cota: só esgota a janela diária duas vezes
-   mais rápido.
+4. **YouTube: a cota é por busca, não por vídeo.** Cada descoberta custa
+   102 unidades (100 do `search` + 1 de `videos` + 1 de `channels`), seja
+   qual for o `--limit` (até 50). A cota padrão é 10.000/dia, ou ≈ 98
+   descobertas (**≈** a janela do limiter). Subir o `COLLECT_LIMIT` de 3
+   para 25 não gasta mais cota. O que gasta é **buscar mais vezes**: mais
+   segmentos, mais horários de cron ou coletas manuais.
 5. **Não rode coleta manual durante o cron do worker** — o lock evita
    duplicata (a segunda vira `ja_em_execucao`), mas o resultado confuso na
    saída só polui a leitura. Horários do cron:

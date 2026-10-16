@@ -44,6 +44,28 @@ leitura. A partir de D+1 a fonte é `cf ops-report --segment <slug>
   uma amostra independente do nicho. No B3, comparar com uma amostra
   aleatória de 5 keywords do Suggest para ver se a seleção exclui termos de
   alto interesse.
+- **Manhã de 15/10 perdida:** a máquina desligou às 00:29 BRT e o worker
+  voltou às 10:12. Research, collect e score da manhã não rodaram, e o
+  research foi disparado à mão às 17:48. Desde 2026-10-16 o worker recupera
+  horário perdido no startup (`catchup_job`).
+- **Queda de 16/10 10:02–11:06 BRT:** fechar o VS Code parou o Postgres e o
+  Redis de produção (`compose stop -t 0` do Dev Container). Nenhum cron foi
+  perdido, porque os da manhã já tinham rodado. Corrigido com
+  `shutdownAction: none`.
+- **YouTube do research em en/es até 16/10:** o research buscava com as 5
+  frases longas do Suggest como frase exata. Mesmo com `pt`/`BR`/`relevance`,
+  a API completava os 25 resultados com vídeos em en/es (resina: 1/25 em
+  pt). Os vídeos do research de 15 e 16/10 ficam como **calibração**. A
+  partir do deploy da noite de 16/10, o research busca pelas keywords do
+  segmento e o coletor descarta vídeo declarado em outro idioma.
+- **Ranking do B3 por plataforma:** sem `views`, o Instagram fica só com
+  recency e relevância (pesos renormalizados), pontua ~50–56 e fica acima
+  do melhor YouTube (43–50). Os scores de plataformas diferentes não são
+  comparáveis, então o B3 mede cada critério **por plataforma**
+  (`cf score-sample --platform`), com a web fora (sem métricas).
+- **`COLLECT_LIMIT` = 3 até 16/10:** valor do teste E2E esquecido no
+  `app.env`. Com ele, o collect trazia 3 vídeos por fonte. Passa a 25 no
+  deploy da noite de 16/10, sem custo extra de cota do YouTube.
 - **Suficiência por fonte (aprovada pelo usuário em 2026-10-15):** além de
   `ok_rate`, o `cf ops-report` mostra `data_rate` (runs ok com `found > 0`).
   Limiares de `data_rate` na janela do experimento: YouTube ≥ 90%,
@@ -63,3 +85,4 @@ porque devolve vazio sem exceção nos dois casos (auditoria externa 4.3).
 | Dia | Collect 20:00 BRT (ok/failed/blocked) | Research do dia | Breakers | `ERROR` no log | Notas |
 | --- | --- | --- | --- | --- | --- |
 | D+0 (14/10) | youtube 3/0/0 · web 3/0/0 · instagram 3/0/0 · tiktok 0/3/0 (`auth_expired`) | tick manual 18:22 BRT: youtube, instagram e web_suggest ok (518 sinais); trends `upstream_changed` (HTTP 400), tiktok `auth_expired` | nenhum | 0 | YouTube `quota_used=102` por run; web `found=0` em `resina-artesanal` (A-2(b)); `found` 0–3 por run |
+| D+1 (15/10) | youtube 3/0/0 · web 3/0/0 · instagram 3/0/0 · tiktok 0/3/0 (`auth_expired`, token **vazio**) | 07:00 **perdido** (máquina desligada 00:29–10:12); tick manual 17:48 BRT: **trends ok, 260 pontos por segmento** (primeira vez); youtube 25/segmento (majoritariamente en/es, calibração); web_suggest ~145; instagram 6/5/0 (mídia própria); tiktok `auth_expired` | nenhum | 0 | `web_empty` 0/3; collect com `COLLECT_LIMIT=3`; score 21:30 ok |

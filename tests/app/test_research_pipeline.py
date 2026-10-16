@@ -711,9 +711,10 @@ async def test_research_guard_cuts_fanout_at_same_point() -> None:
     assert concurrent.counts["web_found"] == 2
     assert concurrent.counts == sequential.counts
     assert concurrent_calls == sequential_calls
-    # as duas redes recebem as MESMAS keywords filtradas (2 web + 2 trends)
+    # as duas redes recebem as MESMAS keywords: seed + os 2 sinais cortados
+    # pelo guard (web e trends repetem os 2; T3 deduplica)
     assert concurrent_calls["instagram"] == concurrent_calls["tiktok"]
-    assert len(concurrent_calls["instagram"][0]) == 4
+    assert len(concurrent_calls["instagram"][0]) == 3
 
 
 @pytest.mark.asyncio
@@ -983,7 +984,7 @@ async def test_trends_failure_does_not_abort_research() -> None:
     assert out.counts["web_failed"] == 0
     assert out.counts["source_errors"] == 1
     assert out.counts["social_inserted"] == 1  # a fase social rodou
-    assert calls == [["vela relacionada"]]  # com os sinais do Suggest
+    assert calls == [["vela", "vela relacionada"]]  # seed + sinais do Suggest
     assert out.ok is False and out.partial is True
     runs = _runs_by_collector(repos)
     assert runs["research:trends"].status == "failed"
@@ -1169,3 +1170,16 @@ async def test_trends_gets_valid_timeframe_and_top5_keywords_by_weight() -> None
     assert timeframe == TRENDS_TIMEFRAME == "today 12-m"
     assert TRENDS_MAX_KEYWORDS == 5
     assert keywords == ["kw1", "kw4", "kw6", "kw7", "kw2"]  # 0.9, 0.8, 0.7, 0.6, 0.5
+
+
+@pytest.mark.asyncio
+async def test_social_keywords_put_segment_seeds_first_without_duplicates() -> None:
+    """T3 (2026-10-16): coletores que cortam em 5 termos (YouTube/TikTok) buscam
+    pelas keywords do segmento; as frases longas do Suggest vêm depois. Antes,
+    as frases exatas traziam 1/25 vídeos em pt na resina."""
+    deps, _, _ = _make_deps()
+    social = deps.socials["instagram"]
+    await run_research_cycle("candles", DepthConfig(), deps)
+    assert isinstance(social, _FakeSocial)
+    # seed primeiro; "vela relacionada" vem do web E do trends, mas aparece 1 vez
+    assert social.calls == [["vela", "vela relacionada"]]

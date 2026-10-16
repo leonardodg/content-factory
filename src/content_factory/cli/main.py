@@ -270,7 +270,9 @@ def ping() -> None:
 # --- score-sample / score-correlation (Fase H, Task 8) ---
 
 
-async def _ascore_sample(segment_slug: str, limit: int, out: Path) -> int:
+async def _ascore_sample(
+    segment_slug: str, limit: int, out: Path, platform: str | None = None
+) -> int:
     from content_factory.app.score_sample import score_sample, write_score_csv
     from content_factory.config import get_settings
     from content_factory.infra.db.base import get_session_factory
@@ -283,7 +285,7 @@ async def _ascore_sample(segment_slug: str, limit: int, out: Path) -> int:
     async with factory() as session:
         seg = await SegmentRepositoryImpl(session).get_by_slug(segment_slug)
         repo = ScoreSampleRepositoryImpl(session)
-        rows = await score_sample(segment_id=seg.id, limit=limit, repo=repo)
+        rows = await score_sample(segment_id=seg.id, limit=limit, repo=repo, platform=platform)
     write_score_csv(rows, out)
     return len(rows)
 
@@ -293,10 +295,16 @@ def score_sample_cmd(
     segment: str = typer.Option(..., "--segment", help="slug do segmento"),
     limit: int = typer.Option(50, "--limit", min=1, max=500, help="máximo de vídeos"),
     out: str = typer.Option(..., "--out", help="caminho do CSV a gravar"),
+    platform: str | None = typer.Option(
+        None,
+        "--platform",
+        help="só uma plataforma (youtube, instagram…): scores de plataformas diferentes "
+        "não são comparáveis",
+    ),
 ) -> None:
     """Exporta o ranking atual em CSV para anotação manual (avaliacao_manual)."""
     try:
-        n = asyncio.run(_ascore_sample(segment, limit, Path(out)))
+        n = asyncio.run(_ascore_sample(segment, limit, Path(out), platform))
     except SegmentNotFound as exc:
         print(dumps(envelope_err("score-sample", "segment_not_found", redact(str(exc)))))
         raise typer.Exit(exit_code_for(ok=False)) from exc
@@ -306,7 +314,7 @@ def score_sample_cmd(
     except Exception as exc:
         print(dumps(envelope_err("score-sample", "internal_error", redact(str(exc)))))
         raise typer.Exit(exit_code_for(ok=False)) from exc
-    print(dumps(envelope_ok("score-sample", rows=n, out=out)))
+    print(dumps(envelope_ok("score-sample", rows=n, out=out, platform=platform)))
     raise typer.Exit(exit_code_for(ok=True))
 
 

@@ -56,6 +56,8 @@ class CandidateVideo(BaseModel):
     shares: int | None = None
     saves: int | None = None
     thumbnail_url: str | None = None
+    # idioma declarado pelo autor (ex.: "pt-BR"); None = não declarado
+    language: str | None = None
     raw: dict[str, Any] = Field(default_factory=dict)
 
 

@@ -5,6 +5,30 @@
 
 ## 🔄 EM ANDAMENTO
 
+_**Resiliência do worker e ranking por plataforma (2026-10-16).**_ Plano:
+`ai-plans/2026-10-16-worker-resiliencia-ranking.md`.
+
+- **Incidente 16/10 10:02 BRT:** fechar o VS Code rodou
+  `docker compose stop -t 0` (default `stopCompose` do Dev Container) e
+  parou o Postgres e o Redis de produção. O worker ficou 1 h em loop de
+  restart, e o Postgres precisou de recuperação de crash. Religados com
+  `docker start`. Correção: `"shutdownAction": "none"`.
+- **Catch-up de cron (`catchup_job`):** no startup o worker roda, em
+  sequência, os crons cujo horário mais recente passou sem run. É a
+  resposta à manhã perdida de 15/10.
+- **YouTube em PT:** o research busca pelas keywords do segmento (antes:
+  frases longas do Suggest, 1/25 em pt na resina). O coletor descarta vídeo
+  declarado em outro idioma, e `videos.language` passa a ser gravado.
+- **B3 por plataforma:** `cf score-sample --platform`. O Instagram sem views
+  não é comparável ao YouTube.
+- **`COLLECT_LIMIT` 3 → 25** no `app.env` (não rastreado), no deploy noturno.
+- **TikTok: o `TIKTOK_MS_TOKEN` está VAZIO** (len 0 nos dois arquivos de
+  segredo), não inválido. O coletor levanta `auth_expired` quando não há
+  token. O msToken é um cookie do tiktok.com e não exige conta de API.
+  Aguardando o usuário.
+- **Deploy:** só depois do score das 21:30 BRT, com a fila vazia. Na fumaça,
+  o log deve mostrar `catchup_job` com `missed: []`.
+
 _**Revisão sênior 2026-10-14 — DEPLOY E REATIVAÇÃO CONCLUÍDOS (2026-10-14).**
 Registro: [`REVISAO_2026-10-14.md`](REVISAO_2026-10-14.md) (com a auditoria
 pós-implementação e achados A-1…A-7); plano:
@@ -40,7 +64,8 @@ pós-implementação e achados A-1…A-7); plano:
   `quota_used=102` por run (**B2 validado com dado real**, antes era
   bloqueio de chave local).
 - **Achados abertos na fumaça:**
-  - `TIKTOK_MS_TOKEN` (secrets) inválido → `tiktok failed/auth_expired`
+  - `TIKTOK_MS_TOKEN` (secrets) **vazio** (corrigido em 16/10: não é
+    inválido) → `tiktok failed/auth_expired`
     nos 3 segmentos; não abre breaker (é credencial, não cota);
     **rotacionar o token é ação humana**;
   - web ainda degrada em alguns runs (Google 403 / Brave 429 → `found=0`);

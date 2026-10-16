@@ -11,6 +11,7 @@ from sqlalchemy.orm import aliased
 
 from content_factory.app.ports import (
     CollectRunRepository,
+    JobRunReader,
     KeywordSignalRepository,
     OpsReportReader,
     ResearchCampaignRepository,
@@ -122,6 +123,7 @@ class VideoRepositoryImpl(VideoRepository):
                         published_at=c.published_at,
                         duration_s=c.duration_s,
                         thumbnail_url=c.thumbnail_url,
+                        language=c.language,
                         raw=c.raw,
                     )
                     stmt = stmt.on_conflict_do_update(
@@ -147,6 +149,7 @@ class VideoRepositoryImpl(VideoRepository):
                             "thumbnail_url": func.coalesce(
                                 stmt.excluded.thumbnail_url, VideoRow.thumbnail_url
                             ),
+                            "language": func.coalesce(stmt.excluded.language, VideoRow.language),
                             "raw": stmt.excluded.raw,
                             "last_collected_at": stmt.excluded.last_collected_at,
                         },
@@ -370,6 +373,29 @@ _COVERAGE_SQL = text(
 )
 
 
+class JobRunReaderImpl(JobRunReader):
+    """Última run de cada job do cron, para o catch-up do worker (T2)."""
+
+    def __init__(self, session: AsyncSession) -> None:
+        self._s = session
+
+    async def last_runs(self, segment_ids: list[int]) -> dict[str, datetime | None]:
+        if not segment_ids:
+            return {"research": None, "collect": None, "score": None}
+        is_research = CollectRunRow.collector.like("research:%")
+        in_segments = CollectRunRow.segment_id.in_(segment_ids)
+        research = select(func.max(CollectRunRow.started_at)).where(in_segments, is_research)
+        collect = select(func.max(CollectRunRow.started_at)).where(in_segments, ~is_research)
+        scored = select(func.max(VideoScoreRow.computed_at)).where(
+            VideoScoreRow.segment_id.in_(segment_ids)
+        )
+        return {
+            "research": (await self._s.execute(research)).scalar_one(),
+            "collect": (await self._s.execute(collect)).scalar_one(),
+            "score": (await self._s.execute(scored)).scalar_one(),
+        }
+
+
 class OpsReportReaderImpl(OpsReportReader):
     """Leituras do `cf ops-report` (C2): cobertura de métricas e scores."""
 
@@ -505,7 +531,9 @@ class ScoreSampleRepositoryImpl:
     def __init__(self, session: AsyncSession) -> None:
         self._s = session
 
-    async def top_scored_for_segment(self, segment_id: int, limit: int) -> list[ScoreSampleRow]:
+    async def top_scored_for_segment(
+        self, segment_id: int, limit: int, platform: str | None = None
+    ) -> list[ScoreSampleRow]:
         # 1a passada: 1 linha por vídeo (DISTINCT ON — captura mais recente).
         # 2a passada: ordena pelo viral_score e aplica o LIMIT em SQL — evita
         # trazer todo o segmento pra memória só pra cortar em Python.
@@ -518,11 +546,13 @@ class ScoreSampleRepositoryImpl:
         )
         LatestScore = aliased(VideoScoreRow, latest)
         stmt = (
-            select(LatestScore, VideoRow.url)
+            select(LatestScore, VideoRow.url, VideoRow.platform)
             .join(VideoRow, VideoRow.id == LatestScore.video_id)
             .order_by(LatestScore.viral_score.desc())
             .limit(limit)
         )
+        if platform is not None:
+            stmt = stmt.where(VideoRow.platform == platform)
         rows = (await self._s.execute(stmt)).all()
         return [
             ScoreSampleRow(
@@ -535,8 +565,9 @@ class ScoreSampleRepositoryImpl:
                 relevance=score.relevance,
                 recency=score.recency,
                 metrics_available=list(score.metrics_available or []),
+                platform=video_platform,
             )
-            for score, url in rows
+            for score, url, video_platform in rows
         ]
 
 

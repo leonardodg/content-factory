@@ -17,6 +17,7 @@ from content_factory.app.collect import CollectDeps
 from content_factory.app.concurrency import PlatformSlots
 from content_factory.app.ports import (
     Collector,
+    JobRunReader,
     KeywordExpander,
     PlatformHealth,
     RateLimiter,
@@ -40,6 +41,19 @@ def _campaign_repo(session: AsyncSession) -> ResearchCampaignRepository:
     from content_factory.infra.db.repositories import ResearchCampaignRepositoryImpl
 
     return ResearchCampaignRepositoryImpl(session)
+
+
+@dataclass
+class _FreshSessionJobRuns:
+    """`JobRunReader` sobre a factory: 1 sessão de leitura por chamada (catch-up T2)."""
+
+    factory: async_sessionmaker[AsyncSession]
+
+    async def last_runs(self, segment_ids: list[int]) -> dict[str, datetime | None]:
+        from content_factory.infra.db.repositories import JobRunReaderImpl
+
+        async with self.factory() as session:
+            return await JobRunReaderImpl(session).last_runs(segment_ids)
 
 
 @dataclass
@@ -116,6 +130,7 @@ class AppDeps(SegmentDepsFactory):
 
     shared: SharedDeps
     campaigns: ResearchCampaignRepository
+    job_runs: JobRunReader
     session_factory: async_sessionmaker[AsyncSession]
     engine: AsyncEngine
     close: Callable[[], Awaitable[None]]
@@ -284,6 +299,7 @@ async def compose_app_deps(
                 max_concurrent_discoveries=max_concurrent_discoveries,
             ),
             campaigns=_FreshSessionCampaigns(factory),
+            job_runs=_FreshSessionJobRuns(factory),
             session_factory=factory,
             engine=engine,
             close=_close,

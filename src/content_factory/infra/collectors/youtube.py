@@ -213,7 +213,9 @@ class YoutubeCollector:
             str(c["id"]): int(c["statistics"].get("subscriberCount", 0))
             for c in channels.get("items", [])
         }
-        return [self._map(v, followers) for v in stats_by_id.values()]
+        videos = [self._map(v, followers) for v in stats_by_id.values()]
+        wanted = search.relevance_language if search is not None else None
+        return [v for v in videos if _language_matches(v.language, wanted)]
 
     def _map(self, v: dict[str, Any], followers: dict[str, int]) -> CandidateVideo:
         sn, st = v["snippet"], v.get("statistics", {})
@@ -234,8 +236,22 @@ class YoutubeCollector:
             shares=None,
             saves=None,  # a API não expõe (ADR-0003)
             thumbnail_url=sn.get("thumbnails", {}).get("default", {}).get("url"),
+            language=sn.get("defaultAudioLanguage") or sn.get("defaultLanguage") or None,
             raw=v,
         )
+
+
+def _language_matches(declared: str | None, wanted: str | None) -> bool:
+    """Filtro pós-busca do idioma (T3, 2026-10-16).
+
+    `relevanceLanguage` é só preferência na API: frases exatas sem resultado em
+    pt voltam completadas com vídeos em en/es. Descarta o vídeo cujo idioma
+    DECLARADO tem outro prefixo (pt-BR ≈ pt). Sem idioma declarado, mantém:
+    não há evidência para descartar.
+    """
+    if not wanted or not declared:
+        return True
+    return declared.split("-")[0].casefold() == wanted.split("-")[0].casefold()
 
 
 class SearchBoundYoutube:

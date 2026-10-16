@@ -496,7 +496,12 @@ def test_workersettings_registers_jobs_and_cron() -> None:
     validado de ponta a ponta na subida do container worker).
     """
     settings = w.WorkerSettings
-    assert {f.name for f in settings.functions} == {"collect_job", "score_job", "research_job"}
+    assert {f.name for f in settings.functions} == {
+        "collect_job",
+        "score_job",
+        "research_job",
+        "catchup_job",
+    }
     assert [cj.coroutine for cj in settings.cron_jobs] == [
         w.run_research_job,
         w.run_collect_job,
@@ -734,7 +739,7 @@ async def test_run_research_job_isolates_segment_exception(
 def test_workersettings_registers_research_job_and_cron() -> None:
     """Contrato: research_job em functions + cron 07:00 antes do collect."""
     settings = w.WorkerSettings
-    assert {f.name for f in settings.functions} == {"collect_job", "score_job", "research_job"}
+    assert {"collect_job", "score_job", "research_job"} <= {f.name for f in settings.functions}
     coroutines = [cj.coroutine for cj in settings.cron_jobs]
     assert coroutines == [w.run_research_job, w.run_collect_job, w.run_score_job]
     assert settings.cron_jobs[0].hour == {7}
@@ -827,6 +832,7 @@ async def test_startup_ok_without_collect_segment(
 
     class _Deps:
         campaigns = object()
+        job_runs = object()
 
         async def close(self) -> None:
             pass
@@ -837,7 +843,7 @@ async def test_startup_ok_without_collect_segment(
     monkeypatch.setattr(w, "create_app_deps", _fake_create)
     ctx: dict[str, object] = {}
     await w.startup(ctx)
-    assert set(ctx) == {"app_deps", "campaigns_deps"}
+    assert set(ctx) == {"app_deps", "campaigns_deps", "job_runs"}
     await w.shutdown(ctx)
 
 
@@ -1574,6 +1580,9 @@ def test_job_timeouts_are_explicit_and_below_lock_ttl() -> None:
     expected = {"collect_job": 1500, "research_job": 1500, "score_job": 300}
     funcs = {f.name: _seconds(f.timeout_s) for f in w.WorkerSettings.functions}
     crons = {c.name: _seconds(c.timeout_s) for c in w.WorkerSettings.cron_jobs}
+    # catch-up (T2) roda os 3 em sequência: soma dos timeouts. Passa do TTL
+    # sem problema — cada job interno pega e solta o PRÓPRIO lock por segmento.
+    assert funcs.pop("catchup_job") == sum(expected.values())
     assert funcs == expected
     assert crons == expected
     assert max(expected.values()) < DEFAULT_TTL_S

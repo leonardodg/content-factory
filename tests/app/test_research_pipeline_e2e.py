@@ -153,7 +153,8 @@ async def test_guard_limits_keywords_to_socials_with_real_collectors() -> None:
     """FanoutGuard corta keywords antes de chegarem nos 3 coletores reais.
 
     Cenário: 8 seeds → web devolve 10 sinais → fanout_per_stage["web"]=3
-    → socials recebem no máximo 3 keywords (não 8, não 10).
+    → socials recebem as 8 seeds admitidas + 3 sinais (não os 10). Seeds
+    primeiro (T3, 2026-10-16): YouTube/TikTok cortam em 5 termos.
     """
     repos = FakeRepos()
     web = _FakeWeb(n=10)
@@ -183,9 +184,19 @@ async def test_guard_limits_keywords_to_socials_with_real_collectors() -> None:
     assert out.ok is True
     # web devolveu 10, mas fanout_per_stage cortou para 3
     assert out.counts["web_found"] == 3
-    # IG recebeu exatamente as 3 keywords dos sinais (web + trends)
+    # IG recebeu as 8 seeds e depois os 3 sinais (web + trends, sem repetição)
     assert len(ig.received_keywords) == 1
-    assert len(ig.received_keywords[0]) == 3
+    assert len(ig.received_keywords[0]) == 8 + 3
+    assert ig.received_keywords[0][:8] == [
+        "vela",
+        "candle",
+        "soy",
+        "wax",
+        "diy",
+        "craft",
+        "handmade",
+        "aroma",
+    ]
     # F2: candidatos reais do YT/TikTok foram persistidos via upsert_candidates
     from tests.stubs import FakeVideos
 
@@ -249,4 +260,4 @@ async def test_guard_dedupe_prevents_duplicate_keywords_to_socials() -> None:
     assert out.ok is True
     # 3 seeds → guard.admit deduplica para 1 → web recebe 1 → 1 sinal
     assert out.counts["web_found"] == 1
-    assert len(ig.received_keywords[0]) == 1
+    assert ig.received_keywords[0] == ["Vela", "Vela derivada"]
