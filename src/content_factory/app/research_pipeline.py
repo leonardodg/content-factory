@@ -138,6 +138,20 @@ TRENDS_SOURCE = "trends"  # chave do limiter e sufixo da run `research:trends`
 # 2026-10-13→15). 12 meses devolve pontos semanais, que é a granularidade que
 # o provider grava (`period_granularity="week"`).
 TRENDS_TIMEFRAME = "today 12-m"
+
+
+def _dedupe(keywords: list[str]) -> list[str]:
+    """Remove repetidas (casefold), mantendo a primeira ocorrência e a ordem."""
+    seen: set[str] = set()
+    out: list[str] = []
+    for k in keywords:
+        key = k.casefold()
+        if key not in seen:
+            seen.add(key)
+            out.append(k)
+    return out
+
+
 TRENDS_MAX_KEYWORDS = 5  # limite do Google Trends por consulta
 
 
@@ -250,9 +264,11 @@ async def run_research_cycle(
         all_signals = web_signals + trend_signals
         counts["signals_saved"] = await deps.signals.upsert_many(segment.id, all_signals)
 
-        # sem nenhum sinal (fontes falharam ou vieram vazias), a fase social
-        # usa as seeds do segmento — senão as redes receberiam lista vazia
-        keywords_for_social = [s.keyword for s in all_signals] or seeds
+        # seeds do segmento PRIMEIRO, sinais depois (T3, 2026-10-16): YouTube e
+        # TikTok cortam em 5 termos, e as frases longas do Suggest como frase
+        # exata traziam quase só en/es (resina: 1/25 em pt; com as seeds, 19/25).
+        # Sem sinais (fontes falharam) sobram as seeds, como antes.
+        keywords_for_social = _dedupe([*seeds, *(s.keyword for s in all_signals)])
         # Fase de rede (Task 8 + Etapa 2 Task 12): bounded_gather, mesmo
         # padrão de collect(). Cada task captura Exception na PRÓPRIA
         # fronteira (_discover_social_one devolve SocialDiscoverResult) —

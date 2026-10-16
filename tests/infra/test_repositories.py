@@ -1330,3 +1330,32 @@ async def test_job_run_reader_last_runs_per_job_for_given_segments() -> None:
         assert last["score"] == now - timedelta(minutes=30)
         assert (await reader.last_runs([]))["collect"] is None
     await engine.dispose()
+
+
+@requires_infra
+async def test_upsert_persists_language_and_keeps_known_one() -> None:
+    """T3: `videos.language` vem do candidato; coleta sem idioma não apaga o conhecido."""
+    engine = create_async_engine(os.environ["TEST_DATABASE_URL"])
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    async with factory() as s:
+        await s.rollback()
+        seg = await SegmentRepositoryImpl(s).upsert(
+            SegmentConfig(
+                slug=f"teste-lang-{uuid4().hex[:8]}",
+                name="L",
+                platforms=["youtube"],
+                keywords=["k"],
+            )
+        )
+        videos = VideoRepositoryImpl(s)
+        cand = candidate(1).model_copy(update={"language": "pt-BR"})
+        await videos.upsert_candidates(seg.id, "test", [cand])
+        await videos.upsert_candidates(seg.id, "test", [cand.model_copy(update={"language": None})])
+        await s.commit()
+        row = (
+            await s.execute(
+                select(VideoRow).where(VideoRow.platform_video_id == cand.platform_video_id)
+            )
+        ).scalar_one()
+        assert row.language == "pt-BR"
+    await engine.dispose()

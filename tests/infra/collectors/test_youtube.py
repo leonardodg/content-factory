@@ -379,3 +379,76 @@ def test_search_order_rejects_unknown_value() -> None:
 
     with pytest.raises(pydantic.ValidationError):
         SearchConfig(order="date-desc")  # type: ignore[arg-type]
+
+
+def _lang_transport(langs: list[tuple[str, dict[str, str]]]) -> httpx.MockTransport:
+    """search devolve os ids; videos devolve snippet com os campos de idioma dados."""
+
+    def _route(request: httpx.Request) -> httpx.Response:
+        path = request.url.path
+        if path.endswith("/search"):
+            return httpx.Response(200, json={"items": [{"id": {"videoId": v}} for v, _ in langs]})
+        if path.endswith("/videos"):
+            items = [
+                {
+                    "id": vid,
+                    "snippet": {
+                        "title": vid,
+                        "channelId": "c1",
+                        "channelTitle": "canal",
+                        "publishedAt": "2026-10-15T10:00:00Z",
+                        **extra,
+                    },
+                    "statistics": {"viewCount": "10"},
+                    "contentDetails": {"duration": "PT1M"},
+                }
+                for vid, extra in langs
+            ]
+            return httpx.Response(200, json={"items": items})
+        return httpx.Response(200, json={"items": [{"id": "c1", "statistics": {}}]})
+
+    return httpx.MockTransport(_route)
+
+
+_MIXED: list[tuple[str, dict[str, str]]] = [
+    ("pt", {"defaultAudioLanguage": "pt-BR"}),
+    ("en", {"defaultAudioLanguage": "en-US"}),
+    ("es", {"defaultLanguage": "es"}),
+    ("pt_default_only", {"defaultLanguage": "pt"}),
+    ("none", {}),
+]
+
+
+@pytest.mark.asyncio
+async def test_language_mapped_from_audio_then_default_language() -> None:
+    c = YoutubeCollector(api_key="k", transport=_lang_transport(_MIXED))
+    out = {v.platform_video_id: v.language for v in await c.discover(SEG, limit=5)}
+    assert out == {
+        "pt": "pt-BR",
+        "en": "en-US",
+        "es": "es",
+        "pt_default_only": "pt",
+        "none": None,
+    }
+
+
+@pytest.mark.asyncio
+async def test_relevance_language_drops_videos_declared_in_other_language() -> None:
+    """T3: `relevanceLanguage` é só preferência na API; o declarado diferente sai.
+    Sem idioma declarado o vídeo fica (não há evidência para descartar)."""
+    from content_factory.domain.models import SearchConfig
+
+    seg = SEG.model_copy(update={"search": SearchConfig(relevance_language="pt")})
+    c = YoutubeCollector(api_key="k", transport=_lang_transport(_MIXED))
+    kept = {v.platform_video_id for v in await c.discover(seg, limit=5)}
+    assert kept == {"pt", "pt_default_only", "none"}
+    by_kw = await c.discover_by_keywords(
+        ["vela"], [], 1, locale=SearchConfig(relevance_language="pt-BR")
+    )
+    assert {v.platform_video_id for v in by_kw} == {"pt", "pt_default_only", "none"}
+
+
+@pytest.mark.asyncio
+async def test_without_relevance_language_nothing_is_dropped() -> None:
+    c = YoutubeCollector(api_key="k", transport=_lang_transport(_MIXED))
+    assert len(await c.discover(SEG, limit=5)) == 5

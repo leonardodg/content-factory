@@ -123,6 +123,7 @@ class VideoRepositoryImpl(VideoRepository):
                         published_at=c.published_at,
                         duration_s=c.duration_s,
                         thumbnail_url=c.thumbnail_url,
+                        language=c.language,
                         raw=c.raw,
                     )
                     stmt = stmt.on_conflict_do_update(
@@ -148,6 +149,7 @@ class VideoRepositoryImpl(VideoRepository):
                             "thumbnail_url": func.coalesce(
                                 stmt.excluded.thumbnail_url, VideoRow.thumbnail_url
                             ),
+                            "language": func.coalesce(stmt.excluded.language, VideoRow.language),
                             "raw": stmt.excluded.raw,
                             "last_collected_at": stmt.excluded.last_collected_at,
                         },
