@@ -5,6 +5,58 @@
 
 ## 🔄 EM ANDAMENTO
 
+_**Relevância web e potencial de conteúdo (2026-10-16, branch
+`docs/plano-web-relevancia`).**_ Plano:
+`ai-plans/2026-10-16-web-relevancia-potencial.md` (F0–F6). Dados, versão e
+relatório **próprios** — nada muda em `viral_score`/`FORMULA_VERSION`/
+`video_scores`/critérios do B3.
+
+- **F0 — filtro com rastro:** `domain/web_urls.py` (puro) descarta só com
+  sinal **verificável** (`ads-v1`: `bing.com/aclick|aclk`,
+  `duckduckgo.com/y.js`, `googleadservices.com`, `*.doubleclick.net`,
+  `google.com/aclk`). Parâmetro na URL, marketplace ou "oferta" no título
+  **não** descartam. `canonicalize` (`canon-v1`) tira só rastreio fechado
+  (`utm_*`, `fbclid`, `gclid`, `msclkid`, `mc_eid`, `srsltid`, `ref_src`),
+  preserva `?id=`/`?p=`/`?q=`. Marcação explícita de anúncio fica preparada e
+  **inativa** (o `ddgs` não expõe flag). Todo resultado gera hit, inclusive
+  descartado (`status`: `kept`/`discarded_ad`/`duplicate` + `discard_reason`).
+- **F1 — proveniência + protocolo `q1`:** tabela `web_search_hits`
+  (migração `0010`, append-only) grava consulta exata, `query_id`,
+  `query_intent`, `provider='unknown'`, `provider_result_position`,
+  URL original + canônica, `collector_version=web-c2`, `rules_version`. O
+  protocolo `q1` (`domain/web_queries.py`, léxico `intent-v1`) classifica as
+  frases do Suggest por intenção (`aprender`/`resolver`/`tendencia`/`comercial`),
+  sorteia 3 por classe com seed fixa (cego ao peso) + 1 `seed` de controle, e
+  roda 3 por coleta em ordem cíclica determinística (`run_index_for`: 2
+  coletas/dia, sem estado).
+- **F2 — amostra cega:** `cf web-sample` gera 50/segmento (15 topo + 25
+  aleatórios + até 10 descartados), CSV sem score/posição/estrato e linhas
+  embaralhadas; protocolo de anotação em `manual/anotacao-web.md`.
+- **F3 — score `web-v1` (só CLI):** `web_page_scores` (migração `0010`),
+  componentes `tema` .40 / `intencao` .25 / `metadados` .15 / `atualidade` .10
+  / `posicao` .10, média só dos avaliados (tudo `None` → score `None`), com
+  `explanation` por componente. Linha de base congelada `base-fase-h` (cópia
+  da regra atual) para a comparação pareada. `dedupe_titles`/`select_top` são
+  seleção, não score.
+- **F4 — pré-registro:** `manual/validacao-web.md` fixa critérios (P@5 ≥ 0,6;
+  P@10 ≥ 0,5; ganho P@10 ≥ 0,1 com IC-95 inferior > 0; cobertura ≥ 90%), as
+  versões (`q1`/`ads-v1`/`intent-v1`/`web-v1`/`base-fase-h`) e as seeds.
+  `cf web-eval` compara os dois rankings sobre o MESMO conjunto `kept` (IC por
+  bootstrap, veredito `aprovado`/`direcional`/`insuficiente`/`nao_atingido`).
+- **F5 — gated:** `WEB_SCORE_ENABLED` (default `0`) liga a gravação no
+  `score_job`; só ligar com veredito **aprovado** em ≥ 2 dos 3 segmentos PT.
+  Kill switch: voltar a `0` restaura o comportamento anterior. Sem aprovação,
+  F0/F1 valem sozinhas e o `web-v1` segue experimental, fora do worker.
+- **Comandos novos (só CLI):** `cf web-queries --propose` (+ `--veto/--reason`),
+  `cf web-rank` (`--compare/--explain/--k/--max-per-domain`),
+  `cf web-sample`, `cf web-eval`; `cf ops-report` passa a mostrar os descartes
+  por motivo.
+- **Pendente do usuário:** revisar e aprovar os
+  `segments/web-queries/<slug>.q1.yaml` (só veto com motivo) antes do deploy.
+- **Infra de teste:** Postgres `cf-test-pg` (`127.0.0.1:55432`) e Redis
+  `cf-test-redis` (`127.0.0.1:56379`); migração `0010` já aplicada no banco de
+  teste. Suíte completa: 549 passed (com `TEST_DATABASE_URL`/`TEST_REDIS_URL`).
+
 _**Resiliência do worker e ranking por plataforma (2026-10-16).**_ Plano:
 `ai-plans/2026-10-16-worker-resiliencia-ranking.md`.
 

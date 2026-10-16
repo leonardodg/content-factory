@@ -44,6 +44,8 @@ nav:
       - manual/chaves-api.md
       - manual/experimento-pausa-2026-10-14.md
       - manual/experimento-reativado.md
+      - manual/anotacao-web.md
+      - manual/validacao-web.md
   - Produto:
       - Ideia inicial (verbatim): produto/ideia-inicial.md
       - PRD: produto/prd.md
