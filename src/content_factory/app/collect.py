@@ -10,13 +10,16 @@ from content_factory.app.ports import (
     Collector,
     CollectRunRepository,
     Lock,
+    NoOpWebHitRepository,
     PlatformHealth,
     RateLimiter,
     SegmentRepository,
     VideoRepository,
+    WebHitRepository,
 )
 from content_factory.domain.errors import CollectorError
-from content_factory.domain.models import CandidateVideo, CollectRun, SegmentConfig
+from content_factory.domain.models import CandidateVideo, CollectRun, SegmentConfig, WebSearchHit
+from content_factory.domain.web_hits import discard_counts, partition_web
 
 logger = logging.getLogger(__name__)
 
@@ -52,6 +55,8 @@ class CollectDeps:
     # Breaker por plataforma (spec §7): só falha do discover do lado da
     # plataforma conta — regra em `app/platform_health.report_discover`.
     health: PlatformHealth = field(default_factory=NoPlatformHealth)
+    # Rastro dos resultados web (F1); default no-op mantém testes/uso avulso.
+    web_hits: WebHitRepository = field(default_factory=NoOpWebHitRepository)
 
 
 @dataclass
@@ -189,11 +194,19 @@ async def collect(
                 # explícito se a fronteira de _discover_one for violada)
                 if result.found is None:
                     raise RuntimeError(f"discover sem erro nem found: {result.platform}")
+                # F0/F1: na web, descartados (anúncio/duplicata) NÃO entram em
+                # `videos` — só geram rastro em `web_search_hits`.
+                candidates = result.found
+                hits: list[WebSearchHit] = []
+                if result.platform == "web":
+                    candidates, hits = partition_web(result.found)
                 try:
                     persist_start = deps.clock()
                     stats = await deps.videos.upsert_candidates(
-                        segment.id, result.platform, result.found
+                        segment.id, result.platform, candidates
                     )
+                    if hits:
+                        await deps.web_hits.record(segment.id, hits)
                 except CollectorError as exc:
                     run.status = "blocked" if exc.code == "blocked" else "failed"
                     run.error_code = exc.code
@@ -203,13 +216,21 @@ async def collect(
                 else:
                     run.persist_ms = _ms_between(persist_start, deps.clock())
                     run.status = "ok"
-                    run.found = len(result.found)
+                    discarded = len(result.found) - len(candidates)
+                    run.found = len(candidates)
                     run.inserted, run.updated = stats.inserted, stats.updated
-                    run.skipped = stats.skipped
-                    counts["found"] = int(counts["found"]) + len(result.found)
+                    # descartados pelo filtro somam em `skipped` (auditável)
+                    run.skipped = stats.skipped + discarded
+                    counts["found"] = int(counts["found"]) + len(candidates)
                     counts["inserted"] = int(counts["inserted"]) + stats.inserted
                     counts["updated"] = int(counts["updated"]) + stats.updated
-                    counts["skipped"] = int(counts["skipped"]) + stats.skipped
+                    counts["skipped"] = int(counts["skipped"]) + stats.skipped + discarded
+                    if discarded:
+                        counts["web_discarded"] = int(counts.get("web_discarded", 0)) + discarded
+                        for reason, n in discard_counts(hits).items():
+                            counts[f"web_discard:{reason}"] = (
+                                int(counts.get(f"web_discard:{reason}", 0)) + n
+                            )
             if result.gate_hits:
                 counts[f"{result.platform}_gate_hits"] = result.gate_hits
             run.finished_at = deps.clock()

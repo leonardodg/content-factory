@@ -107,13 +107,16 @@ def build_ops_report(
     since: datetime,
     until: datetime,
     coverage_window: Mapping[str, MetricCoverage] | None = None,
+    web_discards: Mapping[str, int] | None = None,
     tick_gap: timedelta = TICK_GAP,
 ) -> dict[str, Any]:
     """Relatório operacional de um segmento na janela `[since, until]`.
 
     Auditoria 3 (N-1): runs, ticks e scores são **da janela**; a cobertura
     sai com o escopo no nome — `segment_all_time` (todo o histórico) e
-    `window` (só vídeos com snapshot capturado na janela).
+    `window` (só vídeos com snapshot capturado na janela). `web_discards`
+    (F0) traz os descartes do filtro web por motivo, para medir falso
+    positivo de forma auditável.
     """
     by_collector: dict[str, list[CollectRun]] = {}
     for run in runs:
@@ -128,6 +131,7 @@ def build_ops_report(
             "of": web["runs"] if web else 0,
             "ambiguous": True,
         },
+        "web_discards": dict(web_discards or {}),
         "blocked_runs": sum(1 for r in runs if r.status == "blocked"),
         "ticks": _ticks(runs, tick_gap),
         "coverage": {

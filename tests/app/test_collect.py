@@ -32,6 +32,7 @@ from content_factory.domain.models import (
     SegmentConfig,
     UpsertStats,
     VideoSnapshot,
+    WebSearchHit,
 )
 
 
@@ -695,3 +696,84 @@ async def test_collect_infra_error_in_persistence_is_not_masked_by_run_record() 
     with pytest.raises(ConnectionError, match="conexão caiu"):
         await collect("candles", ["youtube"], limit=5, deps=deps)
     assert lock.released == ["collect:candles"]
+
+
+# --- web: partição mantidos x hits (F0/F1) ---
+
+
+def _web_candidate(
+    position: int, url: str, status: str, reason: str | None = None
+) -> CandidateVideo:
+    return CandidateVideo(
+        platform="web",
+        platform_video_id=str(position),
+        url=url,
+        creator_handle="",
+        title=f"page {position}",
+        description="body",
+        raw={
+            "web_status": status,
+            "web_query": "como fazer velas",
+            "query_id": "q1:aprender:00",
+            "query_intent": "aprender",
+            "provider": "unknown",
+            "provider_result_position": position,
+            "url_original": url,
+            "canonical_url": url,
+            "collector_version": "web-c2",
+            "rules_version": "ads-v1",
+            "discard_reason": reason,
+        },
+    )
+
+
+class _FakeWebCollector:
+    platform: ClassVar[str] = "web"
+
+    async def discover(self, segment: SegmentConfig, limit: int) -> list[CandidateVideo]:
+        _ = segment, limit
+        return [
+            _web_candidate(1, "https://site.example/ok", "kept"),
+            _web_candidate(2, "https://bing.com/aclick?x=1", "discarded_ad", "ad:bing_aclick"),
+            _web_candidate(3, "https://site.example/ok", "duplicate", "duplicate"),
+        ]
+
+
+class _RecordingWebHits:
+    def __init__(self) -> None:
+        self.recorded: list[WebSearchHit] = []
+
+    async def record(self, segment_id: int, hits: Sequence[WebSearchHit]) -> int:
+        _ = segment_id
+        self.recorded.extend(hits)
+        return len(hits)
+
+
+async def test_collect_web_keeps_videos_and_records_all_hits_with_reasons() -> None:
+    """F0/F1: descartados não entram em `videos`, mas geram rastro em `web_search_hits`."""
+    hits_repo = _RecordingWebHits()
+    videos = FakeVideos()
+    repos = FakeRepos()
+    deps = CollectDeps(
+        collectors=[_FakeWebCollector()],
+        videos=videos,
+        segments=repos.segments,
+        runs=repos.runs,
+        limiter=FakeLimiter(),
+        lock=FakeLock(),
+        web_hits=hits_repo,
+    )
+
+    out = await collect("candles", ["web"], limit=5, deps=deps)
+
+    assert out.ok is True
+    assert videos.upserts == [(1, "web", 1)]  # só a página `kept`
+    assert len(hits_repo.recorded) == 3  # todos os resultados geram hit
+    assert {h.status for h in hits_repo.recorded} == {"kept", "discarded_ad", "duplicate"}
+    # descartes somam em `skipped` e saem por motivo no envelope (ops-report)
+    assert out.counts["skipped"] == 2
+    assert out.counts["web_discarded"] == 2
+    assert out.counts["web_discard:ad:bing_aclick"] == 1
+    assert out.counts["web_discard:duplicate"] == 1
+    run = out.runs[0]
+    assert run.found == 1 and run.skipped == 2

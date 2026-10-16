@@ -17,9 +17,13 @@ from content_factory.app.ports import (
     SegmentRepository,
 )
 from content_factory.app.score import ScoreOutcome
+from content_factory.app.web_eval import WebEvalReport
+from content_factory.app.web_rank import WebRankOutcome
 from content_factory.cli.main import app, main
 from content_factory.domain.errors import CollectorError, SegmentNotFound
 from content_factory.domain.models import CollectRun, MetricCoverage, Segment, SegmentConfig
+from content_factory.domain.web_eval import Interval
+from content_factory.domain.web_relevance import WebScore
 from tests.conftest import requires_infra
 from tests.stubs import FakeCollector, FakeLimiter, FakeLock, FakeRepos
 
@@ -518,6 +522,10 @@ class _FakeOpsReader:
         _ = segment_id, since
         return 7
 
+    async def discard_stats(self, segment_id: int, since: datetime) -> dict[str, int]:
+        _ = segment_id, since
+        return {"ad:bing_aclick": 2, "duplicate": 1}
+
 
 def _fake_ops_deps(
     *, missing: bool = False
@@ -561,6 +569,7 @@ def test_ops_report_success_envelope(monkeypatch: pytest.MonkeyPatch) -> None:
     assert out["segment"] == "candles"
     report = out["report"]
     assert report["web_empty"] == {"runs": 1, "of": 1, "ambiguous": True}
+    assert report["web_discards"] == {"ad:bing_aclick": 2, "duplicate": 1}
     assert report["collectors"]["youtube"]["ok_rate"] == 1.0
     cov = report["coverage"]  # escopo explícito (auditoria 3, N-1)
     assert cov["segment_all_time"]["youtube"]["views_rate"] == 0.75
@@ -708,3 +717,120 @@ def test_collect_envelope_parity_cli_and_worker(
     monkeypatch.setattr(w, "_load_settings", lambda: cfg)
     job = asyncio.run(w.run_collect_job({"campaigns_deps": _Campaigns(), "app_deps": _AppDeps()}))
     assert job["segments"]["velas"] == cli
+
+
+# --- web commands (R #45) ---
+
+
+def test_web_queries_requires_propose() -> None:
+    result = runner.invoke(app, ["web-queries", "--segment", "velas"])
+    assert result.exit_code == 1
+    assert '"code": "usage_error"' in result.stdout
+
+
+def test_web_queries_propose_envelope(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    import json
+
+    async def _fake(
+        segment: str, directory: Path, vetoes: dict[str, str]
+    ) -> tuple[str, Path, dict[str, int]]:
+        _ = vetoes
+        return segment, directory / f"{segment}.q1.yaml", {"aprender": 1}
+
+    monkeypatch.setattr("content_factory.cli.main._apropose_web_queries", _fake)
+    result = runner.invoke(
+        app, ["web-queries", "--segment", "velas", "--propose", "--dir", str(tmp_path)]
+    )
+
+    assert result.exit_code == 0, result.stdout
+    out = json.loads(result.stdout)
+    assert out["command"] == "web-queries" and out["segment"] == "velas"
+    assert out["missing"] == {"aprender": 1}
+    assert out["path"].endswith("velas.q1.yaml")
+
+
+def test_web_rank_envelope_with_compare_and_explain(monkeypatch: pytest.MonkeyPatch) -> None:
+    import json
+
+    outcome = WebRankOutcome(
+        ok=True,
+        segment="velas",
+        scored=1,
+        score_version="web-v1",
+        top_v1=[
+            WebScore(
+                video_id=1,
+                title="a",
+                domain="a.example",
+                score=80.0,
+                components={"tema": 1.0},
+                explanation={"tema": {"matched": ["vela"]}},
+            )
+        ],
+        top_base=[WebScore(video_id=1, title="a", domain="a.example", score=50.0)],
+    )
+
+    async def _fake(segment: str, k: int, max_per_domain: int | None) -> WebRankOutcome:
+        _ = segment, k, max_per_domain
+        return outcome
+
+    monkeypatch.setattr("content_factory.cli.main._aweb_rank", _fake)
+    result = runner.invoke(app, ["web-rank", "--segment", "velas", "--compare", "--explain"])
+
+    assert result.exit_code == 0, result.stdout
+    out = json.loads(result.stdout)
+    assert out["command"] == "web-rank" and out["score_version"] == "web-v1"
+    assert out["scored"] == 1 and out["domains_v1"] == 1
+    assert out["top_v1"][0]["video_id"] == 1
+    assert "components" in out["top_v1"][0] and "explanation" in out["top_v1"][0]
+    assert out["top_base"][0]["video_id"] == 1
+
+
+def test_web_sample_envelope(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    import json
+
+    async def _fake(segment: str, seed: int, out: Path) -> int:
+        _ = segment, seed
+        out.write_text("item_id\n", encoding="utf-8")
+        return 3
+
+    monkeypatch.setattr("content_factory.cli.main._aweb_sample", _fake)
+    out_path = tmp_path / "sample.csv"
+    result = runner.invoke(app, ["web-sample", "--segment", "velas", "--out", str(out_path)])
+
+    assert result.exit_code == 0, result.stdout
+    out = json.loads(result.stdout)
+    assert out["command"] == "web-sample" and out["rows"] == 3
+    assert out_path.exists()
+
+
+def test_web_eval_envelope_without_ranking_by_default(monkeypatch: pytest.MonkeyPatch) -> None:
+    import json
+
+    report = WebEvalReport(
+        ok=True,
+        segment="velas",
+        kept_annotated=45,
+        p5=Interval(point=0.8, low=0.6, high=1.0, n=45),
+        p10=Interval(point=0.7, low=0.5, high=0.9, n=45),
+        gain_p10=Interval(point=0.2, low=0.05, high=0.4, n=45),
+        coverage=0.95,
+        verdict="aprovado",
+        correlation=0.6,
+        useful_top10=0.5,
+        ranking_v1=["https://a.example"],
+        ranking_base=["https://b.example"],
+    )
+
+    async def _fake(segment: str, csv_path: Path) -> WebEvalReport:
+        _ = segment, csv_path
+        return report
+
+    monkeypatch.setattr("content_factory.cli.main._aweb_eval", _fake)
+    result = runner.invoke(app, ["web-eval", "--segment", "velas", "--csv", "x.csv"])
+
+    assert result.exit_code == 0, result.stdout
+    out = json.loads(result.stdout)
+    assert out["command"] == "web-eval" and out["verdict"] == "aprovado"
+    assert out["p5"] == {"point": 0.8, "low": 0.6, "high": 1.0, "n": 45}
+    assert "ranking_v1" not in out  # rankings só com --explain

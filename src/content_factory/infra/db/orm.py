@@ -122,6 +122,55 @@ class VideoScoreRow(Base):
     production_score: Mapped[float | None] = mapped_column(Float)  # fase IA
 
 
+class WebSearchHitRow(Base):
+    """F1 — proveniência de cada resultado web, inclusive os descartados.
+
+    Append-only: uma linha por resultado devolvido pelo `ddgs`. `video_id` é
+    NULL quando descartado (não entra em `videos`); `status` diz por quê.
+    """
+
+    __tablename__ = "web_search_hits"
+    __table_args__ = (
+        Index("ix_web_search_hits_segment_collected_at", "segment_id", "collected_at"),
+    )
+    id: Mapped[int] = mapped_column(primary_key=True)
+    segment_id: Mapped[int] = mapped_column(ForeignKey("segments.id"))
+    video_id: Mapped[int | None] = mapped_column(ForeignKey("videos.id"))
+    collected_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    query: Mapped[str] = mapped_column(Text)
+    query_id: Mapped[str] = mapped_column(String(64))
+    query_intent: Mapped[str] = mapped_column(String(24))
+    provider: Mapped[str] = mapped_column(String(32), default="unknown")
+    provider_result_position: Mapped[int] = mapped_column(Integer)
+    url_original: Mapped[str] = mapped_column(Text)
+    canonical_url: Mapped[str] = mapped_column(Text)
+    status: Mapped[str] = mapped_column(String(16))
+    discard_reason: Mapped[str | None] = mapped_column(String(64))
+    collector_version: Mapped[str] = mapped_column(String(32))
+    rules_version: Mapped[str] = mapped_column(String(32))
+    title: Mapped[str] = mapped_column(Text, default="")
+    snippet: Mapped[str] = mapped_column(Text, default="")
+
+
+class WebPageScoreRow(Base):
+    """F3 — score `web-v1` por página, com componentes e explicação. Append-only."""
+
+    __tablename__ = "web_page_scores"
+    __table_args__ = (Index("ix_web_page_scores_segment_id", "segment_id"),)
+    id: Mapped[int] = mapped_column(primary_key=True)
+    video_id: Mapped[int] = mapped_column(ForeignKey("videos.id"), index=True)
+    segment_id: Mapped[int] = mapped_column(ForeignKey("segments.id"))
+    computed_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    score: Mapped[float | None] = mapped_column(Float)
+    score_version: Mapped[str] = mapped_column(String(16))
+    components: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict)
+    explanation: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict)
+
+
 class TranscriptRow(Base):
     __tablename__ = "transcripts"
     id: Mapped[int] = mapped_column(primary_key=True)

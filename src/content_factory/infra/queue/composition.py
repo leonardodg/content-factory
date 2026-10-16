@@ -151,6 +151,8 @@ class AppDeps(SegmentDepsFactory):
             SegmentRepositoryImpl,
             TrendObservationRepositoryImpl,
             VideoRepositoryImpl,
+            WebHitRepositoryImpl,
+            WebScoreRepositoryImpl,
         )
         from content_factory.infra.lock import RedisLock
 
@@ -172,6 +174,7 @@ class AppDeps(SegmentDepsFactory):
                     max_concurrent_discoveries=shared.max_concurrent_discoveries,
                     platform_slots=shared.platform_slots,
                     health=shared.health,
+                    web_hits=WebHitRepositoryImpl(session),
                 ),
                 score=ScoreDeps(
                     videos=videos,
@@ -194,6 +197,7 @@ class AppDeps(SegmentDepsFactory):
                     platform_slots=shared.platform_slots,
                     health=shared.health,
                 ),
+                web=WebScoreRepositoryImpl(session),
             )
 
 

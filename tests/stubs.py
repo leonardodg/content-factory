@@ -17,6 +17,7 @@ from content_factory.app.ports import (
     SegmentRepository,
     TrendObservationRepository,
     VideoRepository,
+    WebScoreRepository,
 )
 from content_factory.domain.errors import CollectorError
 from content_factory.domain.models import (
@@ -27,7 +28,10 @@ from content_factory.domain.models import (
     TrendPoint,
     UpsertStats,
     VideoSnapshot,
+    WebPageScoreRow,
+    WebSearchHit,
 )
+from content_factory.domain.web_relevance import WebPageInput
 
 
 def FakeCollector(platform: str, n: int = 3, fail: CollectorError | None = None) -> Collector:
@@ -243,6 +247,39 @@ def TrackedCollector(
                 tracker.exited.append(name)
 
     return Impl()
+
+
+class FakeWebScores(WebScoreRepository):
+    """`WebScoreRepository` em memória: páginas/hits fixos + scores gravados.
+
+    `pages_for_segment` devolve as páginas configuradas (a filtragem por
+    segmento é do repo real); `append_scores` só acumula para assert.
+    """
+
+    def __init__(
+        self,
+        pages: Sequence[WebPageInput] | None = None,
+        hits: Sequence[WebSearchHit] | None = None,
+    ) -> None:
+        self._pages = list(pages or [])
+        self._hits = list(hits or [])
+        self.appended: list[WebPageScoreRow] = []
+
+    async def pages_for_segment(self, segment_id: int, keywords: list[str]) -> list[WebPageInput]:
+        _ = segment_id, keywords
+        return list(self._pages)
+
+    async def append_scores(self, rows: Sequence[WebPageScoreRow]) -> int:
+        self.appended.extend(rows)
+        return len(rows)
+
+    async def latest_scores(self, segment_id: int) -> dict[int, float | None]:
+        _ = segment_id
+        return {}
+
+    async def hits_for_segment(self, segment_id: int) -> list[WebSearchHit]:
+        _ = segment_id
+        return list(self._hits)
 
 
 class FakeTrendObservations(TrendObservationRepository):

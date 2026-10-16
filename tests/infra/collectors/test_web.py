@@ -5,6 +5,7 @@ from ddgs.exceptions import DDGSException, RatelimitException, TimeoutException
 
 from content_factory.domain.errors import NetworkError, RateLimited, UpstreamChanged
 from content_factory.domain.models import SegmentConfig
+from content_factory.domain.web_urls import canonical_url
 from content_factory.infra.collectors import web as web_mod
 from content_factory.infra.collectors.web import WebCollector
 
@@ -52,16 +53,61 @@ class StubDDGSLongUrl:
 
 
 @pytest.mark.asyncio
-async def test_discover_platform_video_id_is_sha1_do_url(
+async def test_discover_platform_video_id_is_sha1_da_url_canonica(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Bug E2E T18: URL cheia estourava VARCHAR(64) e abortava o collect inteiro."""
+    """F0: identidade = sha1(URL canônica); a URL original vai em `videos.url`."""
     monkeypatch.setattr(web_mod, "DDGS", lambda: StubDDGSLongUrl())
     out = await WebCollector().discover(SEG, limit=5)
     assert out
     assert out[0].url == StubDDGSLongUrl.LONG_URL  # URL completa preservada
-    assert out[0].platform_video_id == hashlib.sha1(StubDDGSLongUrl.LONG_URL.encode()).hexdigest()
+    expected = hashlib.sha1(canonical_url(StubDDGSLongUrl.LONG_URL).encode()).hexdigest()
+    assert out[0].platform_video_id == expected
+    assert out[0].raw["canonical_url"] == canonical_url(StubDDGSLongUrl.LONG_URL)
+    assert out[0].raw["web_status"] == "kept"
     assert len(out[0].platform_video_id) <= 64
+
+
+class StubDDGSAds:
+    """Resultado com clique de anúncio do Bing + marketplace legítimo."""
+
+    def text(self, query: str, max_results: int = 10) -> list[dict[str, str]]:
+        _ = query, max_results
+        return [
+            {"title": "Anúncio", "href": "https://www.bing.com/aclick?ld=1", "body": "ad"},
+            {"title": "Kit de resina", "href": "https://loja.ex.com/kit?utm_source=x", "body": "x"},
+        ]
+
+
+@pytest.mark.asyncio
+async def test_discover_keeps_ad_trail_and_provenance(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(web_mod, "DDGS", lambda: StubDDGSAds())
+    out = await WebCollector().discover(SEG, limit=5)
+    assert len(out) == 2
+    ad, good = out
+    assert ad.raw["web_status"] == "discarded_ad"
+    assert ad.raw["discard_reason"] == "ad:bing_aclick"
+    assert good.raw["web_status"] == "kept"
+    assert good.raw["provider"] == "unknown"
+    assert good.raw["provider_result_position"] == 2
+    assert good.raw["rules_version"] == "ads-v1"
+
+
+class StubDDGSDuplicates:
+    def text(self, query: str, max_results: int = 10) -> list[dict[str, str]]:
+        _ = query, max_results
+        return [
+            {"title": "A", "href": "https://ex.com/p?utm_source=a", "body": "b"},
+            {"title": "A de novo", "href": "https://ex.com/p?utm_source=b", "body": "b"},
+        ]
+
+
+@pytest.mark.asyncio
+async def test_discover_marks_duplicate_canonical(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(web_mod, "DDGS", lambda: StubDDGSDuplicates())
+    out = await WebCollector().discover(SEG, limit=5)
+    statuses = [c.raw["web_status"] for c in out]
+    assert statuses == ["kept", "duplicate"]
 
 
 class BoomDDGS:
