@@ -319,7 +319,7 @@ class VideoRepositoryImpl(VideoRepository, RemediationRepository):
             .exists()
         )
         stmt = (
-            select(VideoRow.id, VideoRow.platform, VideoRow.platform_video_id)
+            select(VideoRow.id, VideoRow.platform, VideoRow.platform_video_id, VideoRow.language)
             .join(VideoSegmentRow, VideoSegmentRow.video_id == VideoRow.id)
             .where(
                 VideoSegmentRow.segment_id == segment_id,
@@ -333,8 +333,8 @@ class VideoRepositoryImpl(VideoRepository, RemediationRepository):
         )
         rows = (await self._s.execute(stmt)).all()
         return [
-            RemediationTarget(video_id=vid, platform=plat, platform_video_id=pid)
-            for vid, plat, pid in rows
+            RemediationTarget(video_id=vid, platform=plat, platform_video_id=pid, language=lang)
+            for vid, plat, pid, lang in rows
         ]
 
     async def record_metrics(

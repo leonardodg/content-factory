@@ -274,11 +274,17 @@ class SearchQueryRun(BaseModel):
 
 
 class RemediationTarget(BaseModel):
-    """R7: alvo de remedição — identificadores só, sem métrica."""
+    """R7: alvo de remedição — identificadores só, sem métrica.
+
+    `language` é o idioma DECLARADO do vídeo (`videos.language`), usado pela
+    remediação para aplicar a regra de idioma do segmento (R14/17-10): o alvo
+    que não casa (ex.: `pt-PT` com `accepted_language: pt-BR`) não é remedido.
+    """
 
     video_id: int
     platform: str
     platform_video_id: str
+    language: str | None = None
 
 
 class RefreshResult(BaseModel):

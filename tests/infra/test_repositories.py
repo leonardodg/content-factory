@@ -2086,6 +2086,42 @@ async def test_remediation_targets_exclui_removidos_e_medidos_ha_pouco() -> None
 
 
 @requires_infra
+async def test_remediation_targets_traz_o_idioma_do_video() -> None:
+    """R14/17-10: o alvo carrega `videos.language` — a remediação filtra por ele
+    com a MESMA regra da coleta (`pt-PT` deixa de ser remedido)."""
+    engine = create_async_engine(os.environ["TEST_DATABASE_URL"])
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    async with factory() as s:
+        await s.rollback()
+        seg = await SegmentRepositoryImpl(s).upsert(
+            SegmentConfig(
+                slug=f"teste-idioma-{uuid4().hex[:8]}",
+                name="Teste idioma",
+                platforms=["youtube"],
+                keywords=["k"],
+            )
+        )
+        repo = VideoRepositoryImpl(s)
+        cands = [
+            candidate(1).model_copy(update={"language": "pt-BR"}),
+            candidate(2).model_copy(update={"language": "pt-PT"}),
+            candidate(3),  # sem idioma declarado
+        ]
+        await repo.upsert_candidates(seg.id, "youtube", cands)
+        await s.flush()
+
+        targets = await repo.remediation_targets(
+            seg.id, since_days=7, limit=500, min_gap_hours=3, platforms=["youtube"]
+        )
+        assert {t.platform_video_id: t.language for t in targets} == {
+            cands[0].platform_video_id: "pt-BR",
+            cands[1].platform_video_id: "pt-PT",
+            cands[2].platform_video_id: None,
+        }
+    await engine.dispose()
+
+
+@requires_infra
 async def test_record_metrics_grava_snapshot_sem_tocar_metadados() -> None:
     """R7: a remedição grava só `video_metrics` (uma linha) e marca removido por id."""
     engine = create_async_engine(os.environ["TEST_DATABASE_URL"])
