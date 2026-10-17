@@ -14,10 +14,12 @@ from content_factory.domain.models import (
     CandidateVideo,
     CollectRun,
     KeywordSignal,
+    RemediationTarget,
     ScoreResult,
     SegmentConfig,
     SegmentTerm,
     TrendPoint,
+    VideoMetrics,
     WebPageScoreRow,
     WebSearchHit,
 )
@@ -2036,4 +2038,100 @@ async def test_search_query_repository_registra_busca_vazia() -> None:
         ).scalar_one()
         assert row.results == 0 and row.quota_used == 102 and row.error_code is None
         assert row.term == "vela de soja" and row.origin == "seed"
+    await engine.dispose()
+
+
+@requires_infra
+async def test_remediation_targets_exclui_removidos_e_medidos_ha_pouco() -> None:
+    """R7: alvo = descoberto nos últimos N dias, sem medição recente e não removido.
+
+    O vídeo medido AGORA (na mesma transação da coleta) precisa cair: `now()`
+    no Postgres é a hora da transação, então a medição que o collect acabou de
+    gravar tem `captured_at` igual e a remedição gravaria um snapshot duplicado.
+    """
+    engine = create_async_engine(os.environ["TEST_DATABASE_URL"])
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    async with factory() as s:
+        await s.rollback()
+        seg = await SegmentRepositoryImpl(s).upsert(
+            SegmentConfig(
+                slug=f"teste-rem-{uuid4().hex[:8]}",
+                name="Teste remediação",
+                platforms=["youtube"],
+                keywords=["k"],
+            )
+        )
+        repo = VideoRepositoryImpl(s)
+        cands = [candidate(1), candidate(2), candidate(3)]
+        await repo.upsert_candidates(seg.id, "youtube", cands)
+        ids = [await video_id_of(s, c) for c in cands]
+        now = datetime.now(UTC)
+        s.add_all(
+            [
+                # v2: medida há 5 h (> gap de 3 h) → entra
+                VideoMetricsRow(video_id=ids[1], captured_at=now - timedelta(hours=5), views=1),
+                # v3: medida agora (< gap) → sai
+                VideoMetricsRow(video_id=ids[2], captured_at=now, views=1),
+            ]
+        )
+        # v1: removido → sai
+        assert await repo.mark_removed([ids[0]]) == 1
+        await s.flush()
+
+        targets = await repo.remediation_targets(
+            seg.id, since_days=7, limit=500, min_gap_hours=3, platforms=["youtube"]
+        )
+        assert [t.platform_video_id for t in targets] == [cands[1].platform_video_id]
+    await engine.dispose()
+
+
+@requires_infra
+async def test_record_metrics_grava_snapshot_sem_tocar_metadados() -> None:
+    """R7: a remedição grava só `video_metrics` (uma linha) e marca removido por id."""
+    engine = create_async_engine(os.environ["TEST_DATABASE_URL"])
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    async with factory() as s:
+        await s.rollback()
+        seg = await SegmentRepositoryImpl(s).upsert(
+            SegmentConfig(
+                slug=f"teste-rec-{uuid4().hex[:8]}",
+                name="Teste record",
+                platforms=["youtube"],
+                keywords=["k"],
+            )
+        )
+        repo = VideoRepositoryImpl(s)
+        c = candidate(1)
+        await repo.upsert_candidates(seg.id, "youtube", [c])
+        vid = await video_id_of(s, c)
+        title_before = (
+            await s.execute(select(VideoRow.title).where(VideoRow.id == vid))
+        ).scalar_one()
+
+        await repo.record_metrics(
+            RemediationTarget(
+                video_id=vid, platform="youtube", platform_video_id=c.platform_video_id
+            ),
+            VideoMetrics(views=10, likes=2),
+            500,
+        )
+        await s.flush()
+        row = (
+            await s.execute(select(VideoMetricsRow).where(VideoMetricsRow.video_id == vid))
+        ).scalar_one()
+        assert (row.views, row.likes, row.followers_at_capture) == (10, 2, 500)
+        # metadados intactos (a remedição não passa por `upsert_candidates`)
+        after = (await s.execute(select(VideoRow.title).where(VideoRow.id == vid))).scalar_one()
+        assert after == title_before
+        removed_before = (
+            await s.execute(select(VideoRow.removed_at).where(VideoRow.id == vid))
+        ).scalar_one()
+        assert removed_before is None
+
+        assert await repo.mark_removed([vid]) == 1
+        removed_after = (
+            await s.execute(select(VideoRow.removed_at).where(VideoRow.id == vid))
+        ).scalar_one()
+        assert removed_after is not None
+        assert await repo.mark_removed([]) == 0  # lista vazia não abre UPDATE
     await engine.dispose()

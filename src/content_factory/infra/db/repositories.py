@@ -17,6 +17,7 @@ from content_factory.app.ports import (
     JobRunReader,
     KeywordSignalRepository,
     OpsReportReader,
+    RemediationRepository,
     ResearchCampaignRepository,
     ScoreRepository,
     ScoreUpsertRow,
@@ -37,6 +38,7 @@ from content_factory.domain.models import (
     Discovery,
     KeywordSignal,
     MetricCoverage,
+    RemediationTarget,
     ResearchCampaign,
     ScoreResult,
     SearchQueryRun,
@@ -120,7 +122,7 @@ def _snapshot(
     )
 
 
-class VideoRepositoryImpl(VideoRepository):
+class VideoRepositoryImpl(VideoRepository, RemediationRepository):
     def __init__(self, session: AsyncSession) -> None:
         self._s = session
 
@@ -292,6 +294,78 @@ class VideoRepositoryImpl(VideoRepository):
         previous_by_video = {row.video_id: row for row in prev_rows}
 
         return [_snapshot(video, m, previous_by_video.get(video.id)) for video, m in rows]
+
+    async def remediation_targets(
+        self,
+        segment_id: int,
+        since_days: int,
+        limit: int,
+        min_gap_hours: int,
+        platforms: Sequence[str],
+    ) -> list[RemediationTarget]:
+        # R7: remedir só vídeos recentes do segmento, sem medição há pouco e
+        # que não estejam marcados como removidos. `platforms` no SQL evita
+        # gastar o `limit` com alvos do Instagram/TikTok/web (só o YouTube
+        # implementa `refresh`).
+        #
+        # func.now() (hora da transação), não datetime.now(): a medição que a
+        # coleta gravou NESTA transação tem captured_at = now() e precisa cair.
+        recent = (
+            select(VideoMetricsRow.id)
+            .where(
+                VideoMetricsRow.video_id == VideoRow.id,
+                VideoMetricsRow.captured_at > func.now() - timedelta(hours=min_gap_hours),
+            )
+            .exists()
+        )
+        stmt = (
+            select(VideoRow.id, VideoRow.platform, VideoRow.platform_video_id)
+            .join(VideoSegmentRow, VideoSegmentRow.video_id == VideoRow.id)
+            .where(
+                VideoSegmentRow.segment_id == segment_id,
+                VideoSegmentRow.discovered_at >= func.now() - timedelta(days=since_days),
+                VideoRow.removed_at.is_(None),
+                VideoRow.platform.in_(list(platforms)),
+                ~recent,
+            )
+            .order_by(VideoSegmentRow.discovered_at.desc())
+            .limit(limit)
+        )
+        rows = (await self._s.execute(stmt)).all()
+        return [
+            RemediationTarget(video_id=vid, platform=plat, platform_video_id=pid)
+            for vid, plat, pid in rows
+        ]
+
+    async def record_metrics(
+        self,
+        target: RemediationTarget,
+        metrics: VideoMetrics,
+        followers_at_capture: int | None,
+    ) -> None:
+        # Só adiciona à sessão: flush/commit são da UoW (mesmo padrão de
+        # VideoMetricsRow no upsert_candidates). Sem savepoint por vídeo — a
+        # linha é só números, sem FK nova.
+        self._s.add(
+            VideoMetricsRow(
+                video_id=target.video_id,
+                views=metrics.views,
+                likes=metrics.likes,
+                comments=metrics.comments,
+                shares=metrics.shares,
+                saves=metrics.saves,
+                followers_at_capture=followers_at_capture,
+            )
+        )
+
+    async def mark_removed(self, video_ids: Sequence[int]) -> int:
+        if not video_ids:
+            return 0
+        stmt = (
+            update(VideoRow).where(VideoRow.id.in_(video_ids)).values(removed_at=datetime.now(UTC))
+        )
+        result = cast("CursorResult[Any]", await self._s.execute(stmt))
+        return int(result.rowcount)
 
 
 class SegmentRepositoryImpl(SegmentRepository):
