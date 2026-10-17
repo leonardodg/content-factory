@@ -98,3 +98,49 @@ def test_chromium_do_worker_e_o_da_versao_travada_do_playwright() -> None:
     worker = "\n".join(ln for ln in stage.splitlines() if not ln.lstrip().startswith("#"))
     assert "pip install --system playwright" not in worker
     assert "/app/.venv/bin/playwright install" in worker
+
+
+# --- revisão externa (P1): smoke REAL da imagem no CI -----------------------
+
+IMAGE_PROBE = REPO_ROOT / "scripts" / "check_worker_image.py"
+IMAGE_SMOKE = REPO_ROOT / "scripts" / "smoke_worker_image.sh"
+CI = REPO_ROOT / ".github" / "workflows" / "ci.yml"
+
+
+def test_probe_da_imagem_aceita_os_segmentos_do_repositorio() -> None:
+    """O probe roda na imagem; aqui a parte que não depende do Chromium."""
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location("check_worker_image", IMAGE_PROBE)
+    assert spec is not None and spec.loader is not None
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    assert mod.check_segments(REPO_ROOT / "segments") == []
+
+
+def test_probe_da_imagem_reprova_segmento_quebrado(tmp_path: Path) -> None:
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location("check_worker_image", IMAGE_PROBE)
+    assert spec is not None and spec.loader is not None
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    (tmp_path / "velas-artesanais.yaml").write_text("slug: [quebrado\n", encoding="utf-8")
+    problems = mod.check_segments(tmp_path)
+    assert problems and any("velas-artesanais" in p for p in problems)
+
+
+def test_ci_constroi_a_imagem_e_roda_os_smokes() -> None:
+    ci = CI.read_text(encoding="utf-8")
+    assert "--target worker" in ci
+    assert "scripts/smoke_worker_image.sh" in ci
+    # o smoke estrito do q1 roda sempre que houver protocolo no repositório
+    assert "scripts/smoke_worker_segments.sh" in ci
+    assert "segments/web-queries/*.q1.yaml" in ci
+
+
+def test_smoke_da_imagem_injeta_o_probe_com_i_e_uv_run() -> None:
+    """Mesmas armadilhas do smoke q1: sem `-i` o probe não chega ao python."""
+    smoke = IMAGE_SMOKE.read_text(encoding="utf-8")
+    assert "docker run --rm -i" in smoke and "--entrypoint uv" in smoke
+    assert "python - <" in smoke  # probe pelo stdin, no python do venv da imagem

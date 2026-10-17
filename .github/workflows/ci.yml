@@ -40,3 +40,15 @@ jobs:
       - run: uv run bandit -q -c pyproject.toml -r src/
       - run: uv run pip-audit
       - run: uv run python scripts/check_privacy.py
+
+  worker-image:
+    # Revisão externa (P1): constrói a imagem REAL do worker e roda o smoke
+    # dentro dela — segmentos, imports e Chromium da versão travada. O smoke
+    # estrito dos protocolos q1 roda quando houver q1 no repositório.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - run: docker build -f .devcontainer/Dockerfile --target worker -t content-factory-worker:ci .
+      - run: scripts/smoke_worker_image.sh content-factory-worker:ci
+      - if: hashFiles('segments/web-queries/*.q1.yaml') != ''
+        run: scripts/smoke_worker_segments.sh content-factory-worker:ci
