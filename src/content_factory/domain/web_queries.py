@@ -394,9 +394,17 @@ def plan_web_queries(
     return [protocol[(start + i) % total] for i in range(min(n, total))]
 
 
-def run_index_for(now: datetime) -> int:
-    """Índice do run pela data/hora: 2 coletas/dia (manhã e noite)."""
-    return now.date().toordinal() * 2 + (0 if now.hour < 12 else 1)
+WEB_COLLECTIONS_PER_DAY = 4  # coleta 02/08/14/20 BRT (R12, Bloco 3)
+
+
+def run_index_for(now: datetime, collections_per_day: int = WEB_COLLECTIONS_PER_DAY) -> int:
+    """Índice do run pela data/hora: um slot por coleta do dia.
+
+    Com 2 slots (hora < 12) e coleta 4x/dia, os pares 05/11 e 17/23 UTC
+    repetiam as MESMAS consultas — metade da rotação perdida.
+    """
+    slot = min(now.hour * collections_per_day // 24, collections_per_day - 1)
+    return now.date().toordinal() * collections_per_day + slot
 
 
 def protocol_to_dict(protocol: WebQueryProtocol) -> dict[str, object]:

@@ -111,14 +111,6 @@ def test_plan_web_queries_empty_protocol() -> None:
     assert plan_web_queries([], 0, 3) == []
 
 
-def test_run_index_for_is_2_per_day() -> None:
-    morning = run_index_for(datetime(2026, 10, 18, 8, 0, tzinfo=UTC))
-    evening = run_index_for(datetime(2026, 10, 18, 20, 0, tzinfo=UTC))
-    next_day = run_index_for(datetime(2026, 10, 19, 8, 0, tzinfo=UTC))
-    assert evening - morning == 1
-    assert next_day - evening == 1
-
-
 def test_protocol_roundtrip() -> None:
     protocols, missing = select_queries([f"como {i}" for i in range(4)], ["vela"])
     proto = protocol_from_dict(
@@ -385,3 +377,12 @@ def test_filter_v2_tutorial_e_portugues(phrase: str, eligible: bool) -> None:
 
 def test_versoes_intent_v4_filter_v2() -> None:
     assert (INTENT_LEXICON_VERSION, QUERY_FILTER_VERSION) == ("intent-v4", "filter-v2")
+
+
+def test_run_index_web_tem_4_slots_por_dia() -> None:
+    """Bloco 3 passou a coleta para 02/08/14/20 BRT (05/11/17/23 UTC); com 2
+    slots/dia (hora < 12) os pares 05/11 e 17/23 repetiam as MESMAS consultas."""
+
+    idx = [run_index_for(datetime(2026, 10, 20, h, tzinfo=UTC)) for h in (5, 11, 17, 23)]
+    assert len(set(idx)) == 4
+    assert run_index_for(datetime(2026, 10, 21, 5, tzinfo=UTC)) - idx[0] == 4
