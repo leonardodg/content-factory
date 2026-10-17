@@ -614,3 +614,37 @@ async def test_refresh_quebra_em_lotes_de_50_e_conta_cota() -> None:
     assert out.missing_ids == []
     assert sum(1 for p in calls if p.endswith("/videos")) == 2  # 50 + 1
     assert counters.quota_used == 4  # 2 lotes x (videos + channels)
+
+
+@pytest.mark.asyncio
+async def test_accepted_language_pt_br_descarta_pt_pt() -> None:
+    """Público do teste é o Brasil: `accepted_language="pt-BR"` descarta o
+    vídeo declarado `pt-PT` (12 de 27 na coleta real de 16/10). `pt` sem
+    região e sem idioma declarado ficam: não há evidência de que não é BR."""
+    from content_factory.domain.models import SearchConfig
+
+    langs = [*_MIXED, ("pt_pt", {"defaultAudioLanguage": "pt-PT"})]
+    seg = SEG.model_copy(
+        update={"search": SearchConfig(relevance_language="pt", accepted_language="pt-BR")}
+    )
+    c = YoutubeCollector(api_key="k", transport=_lang_transport(langs))
+    kept = {v.platform_video_id for v in await c.discover(seg, limit=6)}
+    assert kept == {"pt", "pt_default_only", "none"}
+
+
+@pytest.mark.asyncio
+async def test_sem_accepted_language_pt_pt_continua_pelo_prefixo() -> None:
+    """Sem `accepted_language`, vale o prefixo do `relevance_language` (T3)."""
+    from content_factory.domain.models import SearchConfig
+
+    langs = [*_MIXED, ("pt_pt", {"defaultAudioLanguage": "pt-PT"})]
+    seg = SEG.model_copy(update={"search": SearchConfig(relevance_language="pt")})
+    c = YoutubeCollector(api_key="k", transport=_lang_transport(langs))
+    kept = {v.platform_video_id for v in await c.discover(seg, limit=6)}
+    assert kept == {"pt", "pt_default_only", "none", "pt_pt"}
+
+
+def test_accepted_language_conta_como_config_de_busca() -> None:
+    from content_factory.domain.models import SearchConfig
+
+    assert not SearchConfig(accepted_language="pt-BR").is_empty()

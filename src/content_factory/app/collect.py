@@ -214,7 +214,19 @@ async def _search_queries(
             try:
                 await deps.limiter.acquire(searcher.platform)
                 found = await searcher.search_term(segment, query, limit)
-            except CollectorError as exc:
+            except Exception as exc:
+                # Fora do contrato (bug no parser etc.) vira `internal_error`
+                # AQUI, com a busca no log e o que já veio preservado para o
+                # dedupe — antes escapava para `_discover_one` e os candidatos
+                # iam ao upsert SEM dedupe (revisão QA do bloco 2).
+                if isinstance(exc, CollectorError):
+                    err = exc
+                else:
+                    logger.exception(
+                        "busca fora do contrato: %s/%s", segment.slug, searcher.platform
+                    )
+                    err = CollectorError("internal_error", searcher.platform, str(exc))
+                    err.__cause__ = exc
                 quota += counters.quota_used
                 runs.append(
                     _query_run(
@@ -224,10 +236,10 @@ async def _search_queries(
                         counters.quota_used,
                         started,
                         deps.clock(),
-                        exc.code,
+                        err.code,
                     )
                 )
-                return quota, exc
+                return quota, err
         quota += counters.quota_used
         discoveries += found
         runs.append(
@@ -422,8 +434,9 @@ async def collect(
                     counts["skipped"] = int(counts["skipped"]) + stats.skipped + discarded
                     counts["discoveries"] = int(counts["discoveries"]) + written
                     counts["searches"] = int(counts["searches"]) + len(result.query_runs)
+                    # vazia = respondeu sem resultado; busca que falhou não conta
                     counts["searches_empty"] = int(counts["searches_empty"]) + sum(
-                        1 for r in result.query_runs if r.results == 0
+                        1 for r in result.query_runs if r.results == 0 and r.error_code is None
                     )
                     counts["unattributed"] = int(counts["unattributed"]) + sum(
                         1 for d in result.discoveries if d.origin == "unattributed"

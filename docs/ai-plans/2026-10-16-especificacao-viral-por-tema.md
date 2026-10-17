@@ -170,7 +170,8 @@ origem e scores; nenhum termo excluído sem motivo.
 - Rodízio determinístico e sem estado (mesmo padrão de `run_index_for`, ajustado
   para 4 coletas por dia).
 - `COLLECT_LIMIT=25`. Idioma e região do segmento (`pt`/`BR`, `order=relevance`),
-  com o filtro `_language_matches`.
+  com o filtro `_language_matches` restrito a **pt-BR** (`accepted_language`:
+  `pt-PT` sai; `pt` sem região e sem idioma declarado ficam — decisão de 17/10).
 - Orçamento configurável por env (`SEARCHES_PER_COLLECT_<PLATAFORMA>`, padrão 4
   no YouTube).
 - A web segue o seu próprio protocolo (`q1`/legado); não entra neste plano.
@@ -324,7 +325,7 @@ scores no primeiro dia.
 ### R14. Idioma
 
 `videos.language` preenchido onde a plataforma informa; filtro de português
-do YouTube (`_language_matches`) mantido; o filtro R1 aplica-se também aos
+do YouTube (`_language_matches`, restrito a pt-BR) mantido; o filtro R1 aplica-se também aos
 títulos no ranking (`viral-v2`).
 
 ## 5. Orçamento de cota (YouTube, limite 10.000 unidades por dia)

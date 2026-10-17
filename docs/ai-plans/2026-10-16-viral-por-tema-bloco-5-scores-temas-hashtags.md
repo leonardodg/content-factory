@@ -38,7 +38,7 @@ Especificação §4 R9, R10, R11; §6 (regra de decisão, "top temas", n mínimo
 |---|---|
 | Pesos do `viral-v2`: velocidade 0,35, engajamento 0,25, relativo ao canal 0,25, alcance 0,15. Percentil dentro de `(plataforma, segmento)`; n mínimo 5 por grupo; componente ausente renormaliza | Hipótese pré-registrada (não muda durante o teste). |
 | **Velocidade** = Δviews/Δhoras entre a última medição até o corte e a anterior **com pelo menos 1 h de intervalo** | Evita o par da mesma transação (ver Bloco 3) e o ruído de remedições próximas. |
-| **Relevância vira filtro, e o filtro é sobre título + tags** (âncora), com idioma via `videos.language` (prefixo `pt` ou ausente) | A 1ª versão aplicava `filter_term` em título + **descrição**. Medido: uma descrição PT com "Follow me ... for more" caía por idioma. Descrições do YouTube têm inglês de rodapé o tempo todo. |
+| **Relevância vira filtro, e o filtro é sobre título + tags** (âncora), com idioma via `videos.language` (`pt-BR`, `pt` sem região ou ausente; `pt-PT` sai — mesma regra do `_language_matches` com `accepted_language`) | A 1ª versão aplicava `filter_term` em título + **descrição**. Medido: uma descrição PT com "Follow me ... for more" caía por idioma. Descrições do YouTube têm inglês de rodapé o tempo todo. |
 | **Recência vira janela**: `published_at` dentro de `as_of − 30 d` | Spec R9. |
 | **Unidade = vídeo único por chave** | O mesmo vídeo achado pelo mesmo termo em 16 coletas contava 16 vezes (pseudorreplicação). |
 | **Regra por origem = a do pré-registro** (diferença de medianas X − `seed`, IC 95% bootstrap, n ≥ 30; `better`/`worse`/`directional`/`insufficient`) | A 1ª versão comparava cada grupo com o limiar do top 10% (`leader`/`trailing`), que **não é** a regra pré-registrada. |
@@ -811,7 +811,7 @@ Use `text()` com bind params (nunca f-string). `tags` = `raw.snippet.tags` lido 
 **Interfaces:**
 - Consumes: `PopulationRow`, `Segment`, `contains_phrase`/`word_tokens`, `filter_hashtag`, `scoring.engagement_rate` (mesma fórmula do `fase-h`), `ViralInput`.
 - Produces:
-  - `def is_relevant(row: PopulationRow, segment: Segment) -> bool`: idioma (`language` com prefixo `pt` ou `None`), sem bloqueio no título, e âncora no **título** (palavra inteira) **ou** em alguma tag (`filter_hashtag`). A descrição **não** entra.
+  - `def is_relevant(row: PopulationRow, segment: Segment) -> bool`: idioma (`_language_matches(language, segment.search.accepted_language or "pt")`: `pt-BR`, `pt` ou `None`; `pt-PT` fora), sem bloqueio no título, e âncora no **título** (palavra inteira) **ou** em alguma tag (`filter_hashtag`). A descrição **não** entra.
   - `def to_viral_input(row: PopulationRow, segment_id: int) -> ViralInput`: velocidade = `(views − prev_views) / horas` quando houver par (≥ 1 h, `None` caso contrário; negativo vira 0); engajamento = `engagement_rate(VideoMetrics(...))`.
   - `def build_population(rows, segment) -> tuple[list[ViralInput], int]`: `(entradas relevantes, descartadas por relevância)`.
 

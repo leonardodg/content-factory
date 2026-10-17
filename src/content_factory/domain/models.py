@@ -16,9 +16,16 @@ class SearchConfig(BaseModel):
     relevance_language: str | None = None
     region_code: str | None = None
     order: Literal["viewCount", "relevance", "date", "rating"] | None = None
+    # Filtro pós-busca com REGIÃO (ex.: "pt-BR"). A API só aceita idioma de 2
+    # letras em `relevanceLanguage`; sem este campo vale o prefixo do
+    # `relevance_language`. Decisão do usuário (17/10): público é o Brasil,
+    # pt-PT sai (12 de 27 vídeos na coleta real de 16/10 eram pt-PT).
+    accepted_language: str | None = None
 
     def is_empty(self) -> bool:
-        return not (self.relevance_language or self.region_code or self.order)
+        return not (
+            self.relevance_language or self.region_code or self.order or self.accepted_language
+        )
 
 
 class SegmentConfig(BaseModel):

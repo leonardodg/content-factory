@@ -119,3 +119,11 @@ def test_yamls_nao_bloqueiam_o_nicho() -> None:
         cfg = _filter_cfg(slug)
         for termo in termos:
             assert filter_term(termo, cfg).accepted, (slug, termo)
+
+
+def test_segmentos_pt_aceitam_so_pt_br() -> None:
+    """Público do teste é o Brasil (decisão do usuário, 17/10): pt-PT sai."""
+    for slug in ("velas-artesanais", "sabonetes-artesanais", "resina-artesanal"):
+        cfg = load_segment_file(_REPO / "segments" / f"{slug}.yaml")
+        assert cfg.search is not None and cfg.search.accepted_language == "pt-BR", slug
+        assert cfg.search.relevance_language == "pt", slug  # a API só aceita 2 letras

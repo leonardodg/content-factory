@@ -80,7 +80,7 @@ def FakeTermSearcher(
     *,
     quota_per_call: int = 0,
     fail_on: str | None = None,
-    error: CollectorError | None = None,
+    error: Exception | None = None,
 ) -> TermSearcher:
     """`TermSearcher` determinístico: `{termo: [ids de vídeo]}` (R6).
 
