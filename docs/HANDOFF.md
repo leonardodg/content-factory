@@ -15,7 +15,7 @@ Especificação `ai-plans/2026-10-16-especificacao-viral-por-tema.md`; planos
   + cron 4×/dia, #52 + #53) na `main`; 4 (vagas por origem + Trends com
   âncora, migração `0014`) no PR do bloco 4. Pré-registro commitado.
 - **Deploy da Fase A** (orquestrador, janela sem cron, fila vazia): backup;
-  encerrar campanhas 856–858; imagem nova; migrações `0011`–`0014`; `cf
+  encerrar as campanhas 155–157 (segmentos 856–858); imagem nova; migrações `0010`–`0014`; `cf
   segment load` dos 3 segmentos; envs do pré-registro; campanhas de 4 dias;
   fumaça research → collect → score; adendo com a data de início no
   pré-registro.

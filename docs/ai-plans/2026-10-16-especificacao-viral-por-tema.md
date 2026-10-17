@@ -355,7 +355,7 @@ Margem confortável. Teto por env para não ultrapassar 8.000 por dia.
 - critério de "top temas": `engagement_score` com `n >= 5`.
 
 **Execução:**
-- Encerrar as campanhas 856–858 (o teste antigo foi congelado em 16/10 15:40
+- Encerrar as campanhas 155–157 (segmentos 856–858; o teste antigo foi congelado em 16/10 15:40
   BRT; backup em `~/content-factory-backups/2026-10-16-teste7d-codigo-antigo/`).
 - Deploy da **Fase A** com a fila vazia, migrações `0011`–`0014`, `cf segment
   load` (sobe `probe_terms`, `anchor_terms`, `blocked_terms`, `trends_anchor`),

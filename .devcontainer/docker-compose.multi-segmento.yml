@@ -1,20 +1,14 @@
-# Worker único multi-segmento — SUBSTITUI docker-compose.experimento-7dias.yml.
+# Worker único multi-segmento (produção).
 #
-# NÃO APLICAR ANTES DE 2026-10-19 (fim do experimento de 7 dias).
-# Até lá, os 3 containers do experimento rodam a imagem PRÉ-merge
-# (ainda lê COLLECT_SEGMENT) — ver docs/HANDOFF.md e Task 1 (guard de
-# arranque: com COLLECT_SEGMENT definido, o worker novo falha no startup
-# em vez de triplicar a coleta).
-#
-# Troca (só após 2026-10-19, com dados do experimento já exportados):
-#   docker compose -f .devcontainer/docker-compose.yml \
-#     -f .devcontainer/docker-compose.experimento-7dias.yml \
-#     --profile experimento stop worker-velas worker-sabonetes worker-resina
+# Subir/atualizar (runbook: docs/ai-plans/2026-10-17-deploy-viral-por-tema.md):
 #   docker compose -f .devcontainer/docker-compose.yml \
 #     -f .devcontainer/docker-compose.multi-segmento.yml \
 #     --profile worker-multi up -d --build worker
-# Conferir: guard da Task 1 não dispara (sem COLLECT_SEGMENT), os 3 crons
-# registram e active_segments() devolve os 3 segmentos.
+#
+# As envs do teste viral-por-tema ficam AQUI, explícitas e versionadas (não
+# são segredo): o `defaults.env` não é montado em nenhum serviço, e o
+# `environment:` vence o `app.env`. Valores = pré-registro
+# (docs/manual/pre-registro-viral-por-tema.md).
 services:
   worker:
     extends:
@@ -24,5 +18,21 @@ services:
     environment:
       DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-contentfactory}:${POSTGRES_PASSWORD:-localdev}@postgres:5432/${POSTGRES_DB:-contentfactory}
       REDIS_URL: redis://redis:6379/0
-      COLLECT_PLATFORMS: ""  # vazio = usa segment.platforms (inclui tiktok)
+      # Teste viral-por-tema (pré-registro): YouTube é a comparação; web segue
+      # o experimento q1 próprio. TikTok fora (bloqueado/sem API oficial para
+      # empresa); Instagram fora (só mídia própria, sem descoberta).
+      COLLECT_PLATFORMS: "youtube,web"
+      COLLECT_LIMIT: "25"
+      COLLECT_CRON_HOURS: "02,08,14,20"
+      SCORE_CRON_HOURS: "02,08,14,20"
+      SEARCHES_PER_COLLECT_YOUTUBE: "4"
+      TRENDS_TERMS_PER_DAY: "16"
+      RESEARCH_SOCIAL_PLATFORMS: "none"
+      REMEDIATION_WINDOW_DAYS: "7"
+      REMEDIATION_LIMIT: "500"
+      REMEDIATION_MIN_GAP_HOURS: "3"
+      # Fase B: liga com o deploy do bloco 5 (adendo no pré-registro)
+      VIRAL_V2_ENABLED: "0"
+      VIRAL_V2_WINDOW_DAYS: "30"
+      VIRAL_V2_MIN_POPULATION: "5"
     profiles: ["worker-multi"]

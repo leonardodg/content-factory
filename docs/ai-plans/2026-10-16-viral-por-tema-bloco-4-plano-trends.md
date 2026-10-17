@@ -821,11 +821,11 @@ SELECT count(DISTINCT term) FROM term_trend_days WHERE day = current_date;
 
 - [ ] **Step 3: Deploy da Fase A** (orquestrador; janela sem cron e com a fila vazia):
   1. Backup do banco.
-  2. Encerrar as campanhas 856–858.
+  2. Encerrar as campanhas 155–157 (segmentos 856–858).
   3. Imagem nova e migrações `0011`–`0014`.
   4. `cf segment load` dos 3 segmentos (sobe `probe_terms`, `anchor_terms`, `blocked_terms` e `trends_anchor`).
   5. Envs do pré-registro.
-  6. Abrir as campanhas de **4 dias**.
+  6. Abrir as campanhas (`cf research start --weeks 1`; a CLI só aceita semanas) e encerrá-las no D+4 com `cf research stop` — o corte do teste é o `--as-of`.
   7. Fumaça: `research`, depois `collect`, depois `score`.
 
 - [ ] **Step 4: Commit de encerramento** — `git commit -am "docs(plans): Fase A concluída — R5/R3 verificados" || true`
