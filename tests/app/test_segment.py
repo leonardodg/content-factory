@@ -54,3 +54,13 @@ async def test_upsert_segment_persists_config_via_repository() -> None:
     assert seg.id == 1
     assert repo.saved[0].slug == "candles"
     assert "artesanato" in repo.saved[0].audience
+
+
+_REPO = Path(__file__).resolve().parents[2]
+
+
+def test_segmentos_pt_tem_ancoras_e_bloqueios() -> None:
+    for slug in ("velas-artesanais", "sabonetes-artesanais", "resina-artesanal"):
+        cfg = load_segment_file(_REPO / "segments" / f"{slug}.yaml")
+        assert cfg.anchor_terms, slug
+        assert cfg.blocked_terms, slug
