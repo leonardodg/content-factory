@@ -51,10 +51,22 @@ class StubClient:
 
 
 class StubSearch:
+    """Interface da TikTokApi v7: `search.search_type(termo, "item", count=)`.
+
+    A v6 tinha `search.videos(termo, count=)`, que NÃO existe na v7 — o fake
+    antigo escondia o defeito (QA 17/10). A forma é conferida contra a
+    biblioteca instalada em `test_fakes_seguem_a_interface_real_da_tiktokapi`.
+    """
+
     def __init__(self, payload: list[dict[str, Any]]) -> None:
         self._payload = payload
 
-    def videos(self, query: str, count: int = 30, **kw: object) -> Any:
+    def search_type(
+        self, search_term: str, obj_type: str, count: int = 10, cursor: int = 0, **kw: object
+    ) -> Any:
+        if obj_type != "item":
+            raise AssertionError(f"busca de vídeos usa obj_type='item', não {obj_type!r}")
+
         async def _run() -> list[dict[str, Any]]:
             return self._payload
 
@@ -73,15 +85,19 @@ async def test_discover_maps_fixture() -> None:
 
 @pytest.mark.asyncio
 async def test_discover_by_keywords_uses_search_endpoint() -> None:
-    """discover_by_keywords usa client.search.videos (mesma sessão, mesmo backoff)."""
+    """discover_by_keywords usa client.search.search_type(..., "item") (v7)."""
     queries: list[str] = []
+    obj_types: list[str] = []
 
     class SpySearch:
         def __init__(self, payload: list[dict[str, Any]]) -> None:
             self._payload = payload
 
-        def videos(self, query: str, count: int = 30, **kw: object) -> Any:
-            queries.append(query)
+        def search_type(
+            self, search_term: str, obj_type: str, count: int = 10, cursor: int = 0, **kw: object
+        ) -> Any:
+            queries.append(search_term)
+            obj_types.append(obj_type)
 
             async def _run() -> list[dict[str, Any]]:
                 return self._payload
@@ -107,6 +123,7 @@ async def test_discover_by_keywords_uses_search_endpoint() -> None:
     assert len(queries) == 1
     assert "candle making" in queries[0]
     assert "#velas" in queries[0]
+    assert obj_types == ["item"]  # vídeos, não usuários
 
 
 @pytest.mark.asyncio
@@ -208,3 +225,19 @@ async def test_sessao_aberta_fecha_mesmo_com_erro_no_meio(
     assert ei.value.code == "blocked"
     assert api.closed == 1
     assert api.stopped == 1
+
+
+def test_fakes_seguem_a_interface_real_da_tiktokapi() -> None:
+    """Contrato com a biblioteca INSTALADA: o fake da busca imita a assinatura
+    real. Se a TikTokApi mudar de novo (v6 → v7 tirou `search.videos`), este
+    teste quebra em vez de o coletor quebrar só em produção."""
+    import inspect
+
+    from TikTokApi.api.search import Search  # type: ignore[import-untyped]
+
+    search_cls: Any = Search  # biblioteca sem stubs de tipo
+    assert not hasattr(search_cls, "videos")
+    params = list(inspect.signature(search_cls.search_type).parameters)
+    assert params[:3] == ["search_term", "obj_type", "count"]
+    fake = list(inspect.signature(StubSearch.search_type).parameters)
+    assert fake[1:4] == params[:3]  # fake[0] é `self`
