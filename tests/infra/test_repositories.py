@@ -2417,3 +2417,129 @@ async def test_viral_v2_e_relatorio_gravam_sem_tocar_video_scores() -> None:
         assert await s.scalar(select(func.count()).select_from(VideoScoreRow)) == before
         await s.rollback()
     await engine.dispose()
+
+
+@requires_infra
+async def test_leituras_do_ops_report_do_teste_viral() -> None:
+    """Bloco 6 (R13/R14): rendimento por origem (inclusive busca vazia e com
+    erro), cota da remedição, vídeos por origem, cobertura da remedição só dos
+    ALVOS, pool, descartes do filtro e cobertura de idioma."""
+    from datetime import timedelta
+
+    from content_factory.domain.models import Discovery, SearchQueryRun
+    from content_factory.infra.db.repositories import (
+        DiscoveryRepositoryImpl,
+        SearchQueryRepositoryImpl,
+    )
+
+    engine = create_async_engine(os.environ["TEST_DATABASE_URL"])
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    now = datetime.now(UTC)
+    since = now - timedelta(hours=1)
+    async with factory() as s:
+        await s.rollback()
+        seg = await SegmentRepositoryImpl(s).upsert(
+            SegmentConfig(
+                slug=f"teste-ops6-{uuid4().hex[:8]}",
+                name="Ops6",
+                platforms=["youtube"],
+                keywords=["k"],
+            )
+        )
+        cands = [
+            candidate(1).model_copy(update={"language": "pt-BR", "views": 10}),
+            candidate(2).model_copy(update={"views": 20}),  # sem idioma declarado
+        ]
+        await VideoRepositoryImpl(s).upsert_candidates(seg.id, "youtube", cands)
+        log = SearchQueryRepositoryImpl(s)
+
+        def run(origin: str, results: int, kept: int, error: str | None) -> SearchQueryRun:
+            return SearchQueryRun(
+                platform="youtube",
+                query_id=f"q-{origin}-{results}-{error}",
+                term="t",
+                origin=origin,
+                results=results,
+                kept=kept,
+                quota_used=102,
+                error_code=error,
+                started_at=now,
+                finished_at=now,
+            )
+
+        await log.record_many(
+            seg.id, [run("seed", 2, 2, None), run("seed", 0, 0, None), run("suggest", 0, 0, "x")]
+        )
+        disc = DiscoveryRepositoryImpl(s)
+        for cand, origin in ((cands[0], "seed"), (cands[1], "suggest")):
+            await disc.record(
+                seg.id,
+                [
+                    Discovery(
+                        candidate=cand,
+                        term="t",
+                        origin=origin,
+                        query_id="q",
+                        result_position=1,
+                        run_kind="collect",
+                    )
+                ],
+            )
+        s.add(
+            CollectRunRow(
+                collector="remediate:youtube",
+                segment_id=seg.id,
+                status="ok",
+                quota_used=2,
+                started_at=now,
+                finished_at=now,
+            )
+        )
+        await SegmentTermRepositoryImpl(s).upsert_many(
+            seg.id,
+            [
+                SegmentTerm(segment_id=seg.id, term="vela", origin="suggest", kw_rank=0.5),
+                SegmentTerm(
+                    segment_id=seg.id,
+                    term="candle",
+                    origin="suggest",
+                    status="excluded",
+                    exclude_reason="lang",
+                ),
+            ],
+        )
+        await s.flush()
+        reader = OpsReportReaderImpl(s)
+        assert await reader.search_yield(seg.id, since) == {
+            "youtube:seed": {
+                "searches": 2,
+                "empty": 1,
+                "failed": 0,
+                "quota": 204,
+                "results": 2,
+                "kept": 2,
+            },
+            "youtube:suggest": {
+                "searches": 1,
+                "empty": 0,
+                "failed": 1,
+                "quota": 102,
+                "results": 0,
+                "kept": 0,
+            },
+        }
+        assert await reader.remediation_quota(seg.id, since) == 2
+        assert await reader.discoveries_by_origin(seg.id, since) == {"seed": 1, "suggest": 1}
+        # os 2 vídeos foram descobertos e medidos agora (snapshot do upsert)
+        assert await reader.remediation_coverage(seg.id, since) == {
+            "targets": 2,
+            "remeasured": 2,
+            "removed": 0,
+        }
+        assert await reader.pool_by_origin(seg.id) == {"suggest": {"active": 1, "excluded": 1}}
+        assert await reader.filter_discards(seg.id) == {"lang": 1}
+        assert await reader.language_coverage(seg.id) == {
+            "youtube": {"videos": 2, "with_language": 1}
+        }
+        await s.rollback()
+    await engine.dispose()

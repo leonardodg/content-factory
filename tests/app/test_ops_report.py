@@ -140,3 +140,57 @@ def test_data_sufficiency_is_separate_from_ok_rate() -> None:
     assert trends["data_runs"] == 1
     assert trends["data_rate"] == 0.25
     assert trends["found_avg_ok"] == round(10 / 3, 2)
+
+
+# --- Bloco 6 (R13/R14): seções do teste viral-por-tema ---
+
+_SINCE = datetime(2026, 10, 20, tzinfo=UTC)
+_UNTIL = _SINCE + timedelta(days=1)
+
+
+def test_ops_report_traz_as_secoes_do_teste_viral() -> None:
+    rep = build_ops_report(
+        runs=[],
+        coverage={},
+        scored=0,
+        since=_SINCE,
+        until=_UNTIL,
+        search_yield={
+            "youtube:seed": {
+                "searches": 4,
+                "empty": 1,
+                "failed": 0,
+                "quota": 408,
+                "results": 30,
+                "kept": 28,
+            },
+            "youtube:suggest": {
+                "searches": 8,
+                "empty": 0,
+                "failed": 1,
+                "quota": 816,
+                "results": 80,
+                "kept": 60,
+            },
+        },
+        remediation_quota=12,
+        discoveries_by_origin={"seed": 10, "suggest": 25},
+        remediation={"targets": 100, "remeasured": 95, "removed": 3},
+        pool={"seed": {"active": 3, "excluded": 0}, "suggest": {"active": 20, "excluded": 5}},
+        filter_discards={"lang": 4, "no_anchor": 1},
+        language={"youtube": {"videos": 50, "with_language": 40}},
+    )
+    assert rep["search_quota"]["searches_total"] == 12
+    assert rep["search_quota"]["quota_total"] == 408 + 816 + 12
+    assert rep["search_quota"]["by_origin"]["youtube:seed"]["videos_per_search"] == 7.0
+    assert rep["discovery_origins"]["suggest"] == 25
+    assert rep["remediation"]["coverage"] == 0.95
+    assert rep["term_pool"]["suggest"]["excluded"] == 5
+    assert rep["filter_discards"] == {"lang": 4, "no_anchor": 1}
+    assert rep["language"]["youtube"]["rate"] == 0.8
+
+
+def test_ops_report_sem_dados_novos_continua_valido() -> None:
+    rep = build_ops_report(runs=[], coverage={}, scored=0, since=_SINCE, until=_UNTIL)
+    assert rep["remediation"]["coverage"] is None
+    assert rep["term_pool"] == {} and rep["filter_discards"] == {}

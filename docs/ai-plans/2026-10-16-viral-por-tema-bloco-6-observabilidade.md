@@ -376,3 +376,18 @@ git commit -am "docs(plans): bloco 6 e épico viral-por-tema concluídos — R13
 - Cada bloco: TDD, `make gates`, revisão e teste real do QA antes de seguir.
 - Deploy sempre numa janela sem cron e com a fila vazia, com backup do banco antes.
 - O corte final (D+4) é `cf term-report --as-of <início + 96 h>` nos 3 segmentos.
+
+
+## Resultado (2026-10-17)
+
+- Tasks 1–3 feitas com TDD (RED visto em todas). Task 4 (R14) já coberta por
+  testes existentes: gravação de `videos.language` sem apagar o conhecido,
+  mapeamento do YouTube, filtro pt-BR (`accepted_language`) e remedição por
+  idioma — não duplicados.
+- Desvio: `remediation_coverage` conta como remedidos só os **alvos** medidos
+  na janela (o plano contava qualquer vídeo medido; a cobertura podia passar
+  de 100%).
+- Teste real (banco descartável, sabonetes, Suggest/Trends/YouTube reais):
+  4 buscas (408 unidades); `videos_per_search` seed 2,0 / suggest 11,0 /
+  trends 7,0; 31 alvos com cobertura 1,0; pool 141 ativos / 77 excluídos
+  (60 `lang`, 17 `blocked`); idioma declarado em 31/31.

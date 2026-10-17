@@ -899,6 +899,14 @@ async def _aops_report(segment_slug: str, hours: int) -> dict[str, Any]:
             until=until,
             coverage_window=await reader.metric_coverage(seg.id, since=since),
             web_discards=await reader.discard_stats(seg.id, since),
+            # Bloco 6 (R13/R14): teste viral-por-tema
+            search_yield=await reader.search_yield(seg.id, since),
+            remediation_quota=await reader.remediation_quota(seg.id, since),
+            discoveries_by_origin=await reader.discoveries_by_origin(seg.id, since),
+            remediation=await reader.remediation_coverage(seg.id, since),
+            pool=await reader.pool_by_origin(seg.id),
+            filter_discards=await reader.filter_discards(seg.id),
+            language=await reader.language_coverage(seg.id),
         )
 
 
