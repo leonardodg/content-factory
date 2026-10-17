@@ -18,6 +18,35 @@ DEFAULT_BREAKER_THRESHOLD = 5
 DEFAULT_BREAKER_COOLDOWN_S = 3 * 24 * 3600
 
 
+def _granularity(index: Any) -> str:
+    """Deduz a granularidade real da série do passo entre os pontos.
+
+    `today 3-m` devolve pontos DIÁRIOS: gravar "week" fixo fazia a média de
+    7 dias e a inclinação caírem num único ponto. Passo < 1 d → "hour",
+    1 d → "day", 7 d → "week", qualquer outro → "month". Índice com menos de
+    2 pontos não tem passo: mantém "week" (comportamento anterior).
+    """
+    steps: list[float] = []
+    previous: Any = None
+    for ts in index:
+        if previous is not None:
+            delta = ts - previous
+            seconds = float(delta.total_seconds()) if hasattr(delta, "total_seconds") else 0.0
+            if seconds > 0:
+                steps.append(seconds)
+        previous = ts
+    if not steps:
+        return "week"
+    days = min(steps) / 86400
+    if days < 1:
+        return "hour"
+    if days < 2:
+        return "day"
+    if days < 14:
+        return "week"
+    return "month"
+
+
 class TrendsGoogleProvider:
     """TrendsProvider via pytrends — não-oficial, risco documentado em ADR-0004.
 
@@ -100,6 +129,7 @@ class TrendsGoogleProvider:
         """
         out: list[TrendPoint] = []
         partial: Any = df["isPartial"] if "isPartial" in df.columns else None
+        granularity = _granularity(df.index)
         for kw in keywords:
             if kw not in df.columns:
                 continue
@@ -116,7 +146,7 @@ class TrendsGoogleProvider:
                     TrendPoint(
                         keyword=kw,
                         period_start=period,
-                        period_granularity="week",
+                        period_granularity=granularity,
                         interest=interest,
                     )
                 )

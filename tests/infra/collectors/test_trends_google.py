@@ -135,6 +135,35 @@ async def test_circuit_breaker_resets_on_success() -> None:
 
 
 @pytest.mark.asyncio
+async def test_granularidade_real_da_serie_diaria() -> None:
+    """R3: com `today 3-m` o Trends devolve pontos DIÁRIOS; gravar "week" fixo
+    fazia a janela de 7 dias virar 1 ponto. A granularidade vem do passo."""
+    df = pd.DataFrame(
+        {"vela": [30, 40, 50], "isPartial": [False, False, False]},
+        index=pd.date_range("2026-10-01", periods=3, freq="D", tz="UTC"),  # type: ignore[reportUnknownMemberType]
+    )
+    out = await _provider(_FakePytrends(df)).interest_over_time(["vela"], "today 3-m")
+    assert [p.period_granularity for p in out] == ["day", "day", "day"]
+
+
+@pytest.mark.asyncio
+async def test_granularidade_mensal_e_ponto_unico() -> None:
+    """Passo irregular → "month"; 1 ponto só → "week" (comportamento anterior)."""
+    monthly = pd.DataFrame(
+        {"vela": [10, 20], "isPartial": [False, False]},
+        index=pd.to_datetime(["2026-08-01", "2026-09-01"], utc=True),  # type: ignore[reportUnknownMemberType]
+    )
+    out = await _provider(_FakePytrends(monthly)).interest_over_time(["vela"], "today 12-m")
+    assert {p.period_granularity for p in out} == {"month"}
+    single = pd.DataFrame(
+        {"vela": [10], "isPartial": [False]},
+        index=pd.to_datetime(["2026-10-01"], utc=True),  # type: ignore[reportUnknownMemberType]
+    )
+    one = await _provider(_FakePytrends(single)).interest_over_time(["vela"], "today 5-y")
+    assert [p.period_granularity for p in one] == ["week"]
+
+
+@pytest.mark.asyncio
 async def test_partial_week_is_excluded() -> None:
     """Auditoria 3, N-2: a semana corrente vem com `isPartial=True` (confirmado no
     Google real, 2026-10-15) e não é comparável às semanas fechadas — sai da série."""
