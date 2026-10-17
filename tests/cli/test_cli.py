@@ -527,6 +527,36 @@ class _FakeOpsReader:
         _ = segment_id, since
         return {"ad:bing_aclick": 2, "duplicate": 1}
 
+    # Bloco 6 (R13/R14): a porta ganhou as leituras do teste viral-por-tema
+    async def search_yield(self, segment_id: int, since: datetime) -> dict[str, dict[str, int]]:
+        _ = segment_id, since
+        keys = ("searches", "empty", "failed", "quota", "results", "kept")
+        return {"youtube:seed": dict(zip(keys, (4, 1, 0, 408, 30, 28), strict=True))}
+
+    async def remediation_quota(self, segment_id: int, since: datetime) -> int:
+        _ = segment_id, since
+        return 2
+
+    async def discoveries_by_origin(self, segment_id: int, since: datetime) -> dict[str, int]:
+        _ = segment_id, since
+        return {"seed": 28}
+
+    async def remediation_coverage(self, segment_id: int, since: datetime) -> dict[str, int]:
+        _ = segment_id, since
+        return {"targets": 10, "remeasured": 9, "removed": 1}
+
+    async def pool_by_origin(self, segment_id: int) -> dict[str, dict[str, int]]:
+        _ = segment_id
+        return {"suggest": {"active": 20, "excluded": 5}}
+
+    async def filter_discards(self, segment_id: int) -> dict[str, int]:
+        _ = segment_id
+        return {"lang": 5}
+
+    async def language_coverage(self, segment_id: int) -> dict[str, dict[str, int]]:
+        _ = segment_id
+        return {"youtube": {"videos": 4, "with_language": 3}}
+
 
 def _fake_ops_deps(
     *, missing: bool = False
@@ -915,3 +945,20 @@ def test_web_eval_requires_timezone_aware_as_of() -> None:
 
     assert result.exit_code != 0
     assert json.loads(result.stdout)["error"]["code"] == "usage_error"
+
+
+def test_ops_report_traz_as_secoes_do_teste_viral(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Bloco 6 (R13/R14): a CLI alimenta as seções novas pelo leitor."""
+    import json
+
+    monkeypatch.setattr("content_factory.cli.main._ops_deps", _fake_ops_deps())
+    result = runner.invoke(app, ["ops-report", "--segment", "velas"])
+    assert result.exit_code == 0, result.stdout
+    report = json.loads(result.stdout)["report"]
+    assert report["search_quota"]["quota_total"] == 410  # 408 buscas + 2 remedição
+    assert report["search_quota"]["by_origin"]["youtube:seed"]["videos_per_search"] == 7.0
+    assert report["discovery_origins"] == {"seed": 28}
+    assert report["remediation"]["coverage"] == 0.9
+    assert report["term_pool"] == {"suggest": {"active": 20, "excluded": 5}}
+    assert report["filter_discards"] == {"lang": 5}
+    assert report["language"]["youtube"]["rate"] == 0.75

@@ -421,6 +421,35 @@ class OpsReportReader(Protocol):
         """Descartes web por motivo (`web_search_hits.discard_reason`) na janela (F0)."""
         ...
 
+    async def search_yield(self, segment_id: int, since: datetime) -> dict[str, dict[str, int]]:
+        """R13: por `plataforma:origem` → searches/empty/failed/quota/results/kept."""
+        ...
+
+    async def remediation_quota(self, segment_id: int, since: datetime) -> int:
+        """R13: cota das runs `remediate:*` na janela."""
+        ...
+
+    async def discoveries_by_origin(self, segment_id: int, since: datetime) -> dict[str, int]:
+        """R13: vídeos DISTINTOS por origem do termo na janela."""
+        ...
+
+    async def remediation_coverage(self, segment_id: int, since: datetime) -> dict[str, int]:
+        """R7/R13: alvos (descobertos na janela, não removidos), alvos medidos na
+        janela, e removidos do segmento."""
+        ...
+
+    async def pool_by_origin(self, segment_id: int) -> dict[str, dict[str, int]]:
+        """R4/R13: pool por origem → `{active, excluded}`."""
+        ...
+
+    async def filter_discards(self, segment_id: int) -> dict[str, int]:
+        """R1/R13: termos excluídos por motivo."""
+        ...
+
+    async def language_coverage(self, segment_id: int) -> dict[str, dict[str, int]]:
+        """R14: por plataforma → vídeos e vídeos com idioma declarado."""
+        ...
+
 
 class ResearchCampaignRepository(Protocol):
     async def start(self, segment_id: int, ends_at: datetime) -> ResearchCampaign: ...
