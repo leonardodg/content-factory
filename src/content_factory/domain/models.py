@@ -264,3 +264,18 @@ class SearchQueryRun(BaseModel):
     error_code: str | None = None
     started_at: datetime
     finished_at: datetime
+
+
+class RemediationTarget(BaseModel):
+    """R7: alvo de remedição — identificadores só, sem métrica."""
+
+    video_id: int
+    platform: str
+    platform_video_id: str
+
+
+class RefreshResult(BaseModel):
+    """R7: o que a remedição achou e o que sumiu (removido/privado)."""
+
+    candidates: list[CandidateVideo] = Field(default_factory=list[CandidateVideo])
+    missing_ids: list[str] = Field(default_factory=list[str])
