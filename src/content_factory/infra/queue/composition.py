@@ -22,11 +22,13 @@ from content_factory.app.ports import (
     KeywordExpander,
     PlatformHealth,
     RateLimiter,
+    RefreshableCollector,
     ResearchCampaignRepository,
     SocialDiscoverer,
     TermSearcher,
     TrendsProvider,
 )
+from content_factory.app.remediate import RemediationDeps
 from content_factory.app.research_pipeline import ResearchDeps
 from content_factory.app.score import ScoreDeps
 from content_factory.app.segment_deps import SegmentDepsBundle, SegmentDepsFactory
@@ -48,6 +50,19 @@ def term_searchers_from(collectors: Iterable[object]) -> dict[str, TermSearcher]
         cast(TermSearcher, c).platform: cast(TermSearcher, c)
         for c in collectors
         if callable(getattr(c, "search_term", None))
+    }
+
+
+def refreshables_from(collectors: Iterable[object]) -> dict[str, RefreshableCollector]:
+    """R7: coletores que remedem vídeos por id (hoje só o YouTube), por plataforma.
+
+    Mesmo ponto de decisão do `term_searchers_from`: quem não implementa
+    `refresh` (Instagram/TikTok/web) não entra e nunca recebe alvos.
+    """
+    return {
+        cast(RefreshableCollector, c).platform: cast(RefreshableCollector, c)
+        for c in collectors
+        if callable(getattr(c, "refresh", None))
     }
 
 
@@ -147,6 +162,10 @@ class SharedDeps:
     # R5: plataformas da fase social do research (`None` = todas as do
     # segmento). Lida 1x no startup pelo worker (`RESEARCH_SOCIAL_PLATFORMS`).
     social_platforms: frozenset[str] | None = None
+    # R7: janela/teto/gap da remedição (`REMEDIATION_*`), lidos 1x no startup.
+    remediation_window_days: int = 7
+    remediation_limit: int = 500
+    remediation_min_gap_hours: int = 3
 
 
 @dataclass
@@ -243,6 +262,19 @@ class AppDeps(SegmentDepsFactory):
                     social_platforms=shared.social_platforms,
                 ),
                 web=WebScoreRepositoryImpl(session),
+                remediate=RemediationDeps(
+                    # mesmas instâncias do CollectDeps: limiter e breaker são
+                    # compartilhados (a remedição e a busca disputam a cota do
+                    # YouTube); `videos` é a MESMA sessão da UoW do segmento.
+                    videos=videos,
+                    refreshables=refreshables_from(shared.collectors),
+                    runs=runs,
+                    limiter=shared.limiter,
+                    health=shared.health,
+                    window_days=shared.remediation_window_days,
+                    limit=shared.remediation_limit,
+                    min_gap_hours=shared.remediation_min_gap_hours,
+                ),
             )
 
 
@@ -276,6 +308,9 @@ async def compose_app_deps(
     max_concurrent_discoveries: int,
     platform_limits: dict[str, int],
     social_platforms: frozenset[str] | None = None,
+    remediation_window_days: int = 7,
+    remediation_limit: int = 500,
+    remediation_min_gap_hours: int = 3,
 ) -> AppDeps:
     """Fábrica do worker: `register_defaults` + engine + Redis compartilhado.
 
@@ -348,6 +383,9 @@ async def compose_app_deps(
                 platform_slots=PlatformSlots(platform_limits),
                 max_concurrent_discoveries=max_concurrent_discoveries,
                 social_platforms=social_platforms,
+                remediation_window_days=remediation_window_days,
+                remediation_limit=remediation_limit,
+                remediation_min_gap_hours=remediation_min_gap_hours,
             ),
             campaigns=_FreshSessionCampaigns(factory),
             job_runs=_FreshSessionJobRuns(factory),
