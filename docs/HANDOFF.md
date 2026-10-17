@@ -5,6 +5,26 @@
 
 ## 🔄 EM ANDAMENTO
 
+_**Descoberta de conteúdo viral por tema — épico R1–R14 (2026-10-17).**_
+Especificação `ai-plans/2026-10-16-especificacao-viral-por-tema.md`; planos
+`ai-plans/2026-10-16-viral-por-tema-bloco-1..6-*.md`; pré-registro
+`manual/pre-registro-viral-por-tema.md`.
+
+- **Fase A (coleta) — blocos 1–4:** 1 (filtro/ranking/pool, #50), 2
+  (atribuição/criadores/log de buscas, #50 + #51), 3 (remedição a cada coleta
+  + cron 4×/dia, #52 + #53) na `main`; 4 (vagas por origem + Trends com
+  âncora, migração `0014`) no PR do bloco 4. Pré-registro commitado.
+- **Deploy da Fase A** (orquestrador, janela sem cron, fila vazia): backup;
+  encerrar campanhas 856–858; imagem nova; migrações `0011`–`0014`; `cf
+  segment load` dos 3 segmentos; envs do pré-registro; campanhas de 4 dias;
+  fumaça research → collect → score; adendo com a data de início no
+  pré-registro.
+- **Fase B (análise) — blocos 5–6:** `viral-v2`, `cf term-report --as-of`,
+  top vídeos, hashtags e `ops-report` novo (migração `0015`); durante o teste.
+- **TikTok:** fora do teste (API oficial não aceita empresa); correção do
+  Chromium da imagem e da busca na TikTokApi v7 no PR #54.
+
+
 _**Relevância web e potencial de conteúdo (2026-10-16, branch
 `docs/plano-web-relevancia`).**_ Plano:
 `ai-plans/2026-10-16-web-relevancia-potencial.md` (F0–F6). Dados, versão e
