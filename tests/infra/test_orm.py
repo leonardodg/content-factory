@@ -156,3 +156,51 @@ def test_term_trend_days_tem_colunas_e_unique() -> None:
         if isinstance(con, UniqueConstraint)
     }
     assert ("segment_id", "term", "day") in uniques
+
+
+def test_tabelas_do_bloco_5() -> None:
+    """R9/R10: `video_scores_v2` (append-only, ao lado de `video_scores`) e
+    `term_reports` (uma linha por chave de um relatório no corte)."""
+    from content_factory.infra.db.orm import TermReportRow, VideoScoreV2Row
+
+    assert {
+        "video_id",
+        "segment_id",
+        "computed_at",
+        "as_of",
+        "viral_score_v2",
+        "velocity",
+        "engagement",
+        "channel_relative",
+        "reach",
+        "population_n",
+        "explanation",
+        "formula_version",
+        "window_days",
+    } <= {c.name for c in VideoScoreV2Row.__table__.columns}
+    assert VideoScoreV2Row.__table__.columns["viral_score_v2"].nullable is True
+    assert {
+        "report_id",
+        "segment_id",
+        "platform",
+        "scope",
+        "report_key",
+        "n",
+        "baseline_n",
+        "median_viral_v2",
+        "median_velocity",
+        "median_engagement",
+        "median_channel_relative",
+        "top10_fraction",
+        "engagement_score",
+        "diff",
+        "ci_low",
+        "ci_high",
+        "overlap",
+        "verdict",
+        "rank",
+        "version",
+        "rules_version",
+        "as_of",
+        "computed_at",
+    } <= {c.name for c in TermReportRow.__table__.columns}
