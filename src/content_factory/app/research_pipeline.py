@@ -11,9 +11,11 @@ from content_factory.app.ports import (
     KeywordExpander,
     KeywordSignalRepository,
     Lock,
+    NoOpSegmentTermRepository,
     PlatformHealth,
     RateLimiter,
     SegmentRepository,
+    SegmentTermRepository,
     SocialDiscoverer,
     TrendObservationRepository,
     TrendsProvider,
@@ -21,15 +23,18 @@ from content_factory.app.ports import (
 )
 from content_factory.domain.errors import CollectorError
 from content_factory.domain.fanout_guard import FanoutGuard
+from content_factory.domain.kw_rank import KW_RANK_VERSION, SuggestHit, rank_suggestions
 from content_factory.domain.models import (
     CandidateVideo,
     CollectRun,
     DepthConfig,
     KeywordSignal,
     Segment,
+    SegmentTerm,
     TrendPoint,
 )
 from content_factory.domain.suggest_probes import suggest_probes
+from content_factory.domain.term_filter import TERM_FILTER_VERSION, TermFilterConfig, filter_terms
 
 logger = logging.getLogger(__name__)
 
@@ -51,6 +56,10 @@ class ResearchDeps:
     lock: Lock
     limiter: RateLimiter
     guard: FanoutGuard
+    # Pool de termos do segmento (R4). Default NoOp: chamadas existentes
+    # (worker/CLI/testes) continuam funcionando sem mudança; a composição
+    # injeta o repositório real.
+    terms: SegmentTermRepository = field(default_factory=NoOpSegmentTermRepository)
     # Teto de discover_by_keywords() simultâneos na fase de rede (Task 8).
     # Mesmo nome de CollectDeps.max_concurrent_discoveries de propósito: um
     # só conceito ("fan-out de rede limitado") nos dois use-cases, ponto de
@@ -229,24 +238,71 @@ async def run_research_cycle(
         # ciclo segue com os sinais que houver (plano
         # 2026-10-14-content-factory-research-fontes-resilientes) — antes,
         # o Trends HTTP 400 diário abortava o segmento antes da fase social.
-        async def _expand() -> list[KeywordSignal]:
+        async def _expand() -> list[SuggestHit]:
             await deps.limiter.acquire(deps.web.platform)
-            hits = await deps.web.expand([*seeds, *probe_seeds], 0)
-            # Transição para o pool (R2/R4, Bloco 1 Task 8): mantém o contrato de
-            # sinais por enquanto, mas o peso passa a vir da POSIÇÃO na sugestão
-            # (1ª ocorrência do termo) em vez do 0,5 fixo.
-            best: dict[str, int] = {}
-            for hit in hits:
-                if hit.term not in best or hit.position < best[hit.term]:
-                    best[hit.term] = hit.position
-            return [
-                KeywordSignal(keyword=term, source=deps.web.platform, weight=1.0 / pos, depth=1)
-                for term, pos in best.items()
-            ]
+            # R2: a posição de cada sugestão na lista da semente substitui o
+            # peso fixo 0,5 (o rank completo vem logo abaixo, com o histórico).
+            return await deps.web.expand([*seeds, *probe_seeds], 0)
 
         web_raw, web_failed = await _run_source(deps.web.platform, segment, deps, _expand)
-        web_signals = deps.guard.truncate(web_raw, "web")
+
+        # R1+R2+R4: ranqueia por posição/recorrência/persistência, filtra o que
+        # está fora do nicho/idioma e consolida o pool (fonte única das buscas).
+        # O dia de HOJE é gravado ANTES de ler — senão o dia corrente nunca conta.
+        today = deps.clock().date()
+        cfg = TermFilterConfig(
+            anchors=tuple(segment.anchor_terms), blocked=tuple(segment.blocked_terms)
+        )
+        await deps.signals.record_days(
+            segment.id, list(dict.fromkeys(h.term for h in web_raw)), "web_suggest", today
+        )
+        seen_days = await deps.signals.days_seen(segment.id, "web_suggest", 7, today)
+        weights = rank_suggestions(web_raw, seen_days)
+
+        accepted, rejected = filter_terms(list(weights), cfg)
+        # o truncate (por peso) só tem sentido agora: antes todo peso era 0,5
+        web_signals = deps.guard.truncate(
+            [KeywordSignal(keyword=t, source="web_suggest", weight=weights[t]) for t in accepted],
+            "web",
+        )
         counts["web_found"] = len(web_signals)
+
+        terms = [
+            SegmentTerm(
+                segment_id=segment.id,
+                term=s.keyword,
+                origin="suggest",
+                kw_rank=s.weight,
+                rules_version=f"{TERM_FILTER_VERSION}+{KW_RANK_VERSION}",
+            )
+            for s in web_signals
+        ]
+        terms += [
+            SegmentTerm(
+                segment_id=segment.id,
+                term=term,
+                origin="suggest",
+                kw_rank=weights[term],
+                status="excluded",
+                exclude_reason=reason,
+                rules_version=TERM_FILTER_VERSION,
+            )
+            for term, reason in rejected
+        ]
+        terms += [  # seeds nunca são excluídas (R4)
+            SegmentTerm(
+                segment_id=segment.id,
+                term=k,
+                origin="seed",
+                rules_version=TERM_FILTER_VERSION,
+            )
+            for k in segment.keywords
+        ]
+        await deps.terms.upsert_many(segment.id, terms)
+        counts["terms_active"] = len(web_signals) + len(segment.keywords)
+        counts["terms_excluded"] = len(rejected)
+        for reason in ("blocked", "lang", "no_anchor"):
+            counts[f"filter_discards_{reason}"] = sum(1 for _, r in rejected if r == reason)
 
         # Google Trends: até 5 termos por consulta, normalizados entre si —
         # vão os 5 de maior peso do Suggest (antes: todos, ~145, e 400)

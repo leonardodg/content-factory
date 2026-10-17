@@ -7,14 +7,16 @@ estrutura dos testes. Sem Redis, sem banco, sem rede.
 
 import asyncio
 from collections.abc import Sequence
-from datetime import datetime
+from datetime import date, datetime
 from math import ceil
-from typing import Any, ClassVar
+from typing import Any, ClassVar, Literal
 
 from content_factory.app.ports import (
     Collector,
     CollectRunRepository,
+    KeywordSignalRepository,
     SegmentRepository,
+    SegmentTermRepository,
     TrendObservationRepository,
     VideoRepository,
     WebScoreRepository,
@@ -23,8 +25,10 @@ from content_factory.domain.errors import CollectorError
 from content_factory.domain.models import (
     CandidateVideo,
     CollectRun,
+    KeywordSignal,
     Segment,
     SegmentConfig,
+    SegmentTerm,
     TrendPoint,
     UpsertStats,
     VideoSnapshot,
@@ -283,6 +287,79 @@ class FakeWebScores(WebScoreRepository):
         _ = segment_id
         self.until_asked.append(until)
         return list(self._hits)
+
+
+class FakeKeywordSignals(KeywordSignalRepository):
+    """Sinais gravados + dias distintos do Suggest (R2) em memória."""
+
+    def __init__(self) -> None:
+        self.saved: list[KeywordSignal] = []
+        self.days: dict[tuple[str, date], int] = {}
+
+    async def upsert_many(self, segment_id: int, signals: Sequence[KeywordSignal]) -> int:
+        self.saved.extend(signals)
+        return len(signals)
+
+    async def top_for_segment(
+        self, segment_id: int, source: str | None, limit: int
+    ) -> list[KeywordSignal]:
+        _ = segment_id, source, limit
+        return []
+
+    async def record_days(
+        self, segment_id: int, keywords: Sequence[str], source: str, day: date
+    ) -> int:
+        _ = segment_id, source
+        for kw in keywords:
+            self.days[(kw, day)] = 1
+        return len(keywords)
+
+    async def days_seen(
+        self, segment_id: int, source: str, days: int, today: date
+    ) -> dict[str, int]:
+        _ = segment_id, source
+        counts: dict[str, int] = {}
+        for kw, day in self.days:
+            if 0 <= (today - day).days < days:
+                counts[kw] = counts.get(kw, 0) + 1
+        return counts
+
+
+class FakeSegmentTerms(SegmentTermRepository):
+    """Pool de termos (R4) em memória: só acumula para assert."""
+
+    def __init__(self) -> None:
+        self.saved: list[SegmentTerm] = []
+
+    async def upsert_many(self, segment_id: int, terms: Sequence[SegmentTerm]) -> int:
+        self.saved.extend(terms)
+        return len(terms)
+
+    async def top_by_origin(
+        self,
+        segment_id: int,
+        origin: str,
+        limit: int,
+        order_by: Literal["kw_rank", "trend_score", "engagement_score"] = "kw_rank",
+    ) -> list[SegmentTerm]:
+        _ = segment_id, origin, limit, order_by
+        return []
+
+    async def counts_by_origin(self, segment_id: int) -> dict[str, int]:
+        _ = segment_id
+        return {}
+
+    async def all_for_segment(
+        self, segment_id: int, status: str | None = None
+    ) -> list[SegmentTerm]:
+        _ = segment_id, status
+        return []
+
+    async def set_status(
+        self, segment_id: int, origin: str, keep: Sequence[str], reason: str
+    ) -> int:
+        _ = segment_id, origin, keep, reason
+        return 0
 
 
 class FakeTrendObservations(TrendObservationRepository):

@@ -2,15 +2,17 @@ import asyncio
 import logging
 from collections.abc import Sequence
 from datetime import UTC, date, datetime, timedelta
-from typing import ClassVar
+from typing import ClassVar, cast
 
 import pytest
 from tests.stubs import (
     ConcurrencyTracker,
+    FakeKeywordSignals,
     FakeLimiter,
     FakeLock,
     FakeRepos,
     FakeRuns,
+    FakeSegmentTerms,
     FakeTrendObservations,
     FakeVideos,
 )
@@ -1212,3 +1214,116 @@ async def test_social_keywords_put_segment_seeds_first_without_duplicates() -> N
     assert isinstance(social, _FakeSocial)
     # seed primeiro; "vela relacionada" vem do web E do trends, mas aparece 1 vez
     assert social.calls == [["vela", "vela relacionada"]]
+
+
+class _HitWeb:
+    """Suggest que devolve hits FIXOS — controla termo, semente e posição."""
+
+    platform: ClassVar[str] = "web_suggest"
+
+    def __init__(self, hits: list[SuggestHit]) -> None:
+        self._hits = hits
+
+    async def expand(self, seeds: list[str], depth: int) -> list[SuggestHit]:
+        _ = seeds, depth
+        return list(self._hits)
+
+
+class _SegmentsWithConfig:
+    def __init__(self, segment: Segment) -> None:
+        self._segment = segment
+
+    async def get_by_slug(self, slug: str) -> Segment:
+        return self._segment
+
+    async def upsert(self, cfg: SegmentConfig) -> Segment:
+        raise NotImplementedError
+
+
+def research_deps(
+    *,
+    suggest_hits: list[SuggestHit],
+    anchor_terms: list[str] | None = None,
+    blocked_terms: list[str] | None = None,
+    keywords: list[str] | None = None,
+) -> ResearchDeps:
+    """Deps do research com Suggest controlado e fakes do pool/dias (R1/R2/R4)."""
+    repos = FakeRepos()
+    segment = Segment(
+        id=1,
+        slug="velas-artesanais",
+        name="Velas artesanais",
+        platforms=["instagram"],
+        keywords=["vela artesanal"] if keywords is None else keywords,
+        probe_terms=[],
+        anchor_terms=anchor_terms or [],
+        blocked_terms=blocked_terms or [],
+    )
+    return ResearchDeps(
+        web=_HitWeb(suggest_hits),
+        trends=_RecordingTrends(),
+        socials={"instagram": _FakeSocial()},
+        signals=FakeKeywordSignals(),
+        trend_observations=FakeTrendObservations(),
+        segments=_SegmentsWithConfig(segment),
+        videos=repos.videos,
+        runs=repos.runs,
+        lock=FakeLock(),
+        limiter=FakeLimiter(),
+        guard=FanoutGuard(DepthConfig()),
+        terms=FakeSegmentTerms(),
+    )
+
+
+@pytest.mark.asyncio
+async def test_research_filtra_ranqueia_e_grava_o_pool() -> None:
+    deps = research_deps(
+        suggest_hits=[
+            SuggestHit("como fazer vela aromática", "velas", 1),  # aceita
+            SuggestHit("candle making for beginners", "velas", 2),  # lang
+            SuggestHit("presente original", "velas", 3),  # no_anchor
+        ],
+        anchor_terms=["vela"],
+        blocked_terms=["grafico"],
+    )
+    out = await run_research_cycle("velas-artesanais", DepthConfig(), deps)
+    terms = cast("FakeSegmentTerms", deps.terms)
+    assert out.counts["filter_discards_lang"] == 1
+    assert out.counts["filter_discards_no_anchor"] == 1
+    assert out.counts["filter_discards_blocked"] == 0
+    by_key = {(t.term, t.origin): t for t in terms.saved}
+    aceita = by_key[("como fazer vela aromática", "suggest")]
+    assert aceita.status == "active"
+    assert aceita.kw_rank is not None and aceita.kw_rank != 0.5
+    excluida = by_key[("presente original", "suggest")]
+    assert excluida.status == "excluded" and excluida.exclude_reason == "no_anchor"
+    assert all(t.status == "active" for t in terms.saved if t.origin == "seed")
+    assert out.counts["terms_active"] == out.counts["web_found"] + 1
+    assert out.counts["terms_excluded"] == 2
+
+
+@pytest.mark.asyncio
+async def test_research_grava_o_dia_antes_de_ler_a_persistencia() -> None:
+    deps = research_deps(suggest_hits=[SuggestHit("vela de soja", "velas", 1)])
+    await run_research_cycle("velas-artesanais", DepthConfig(), deps)
+    signals = cast("FakeKeywordSignals", deps.signals)
+    # o termo de hoje conta 1 dia (não 0, nem "default 1" sem gravar)
+    assert signals.days[("vela de soja", deps.clock().date())] == 1
+
+
+@pytest.mark.asyncio
+async def test_research_so_manda_ao_trends_e_as_redes_termos_aceitos() -> None:
+    deps = research_deps(
+        suggest_hits=[
+            SuggestHit("candle for beginners", "velas", 1),  # lang → fora
+            SuggestHit("vela de soja", "velas", 2),  # aceita
+        ],
+        anchor_terms=["vela"],
+    )
+    await run_research_cycle("velas-artesanais", DepthConfig(), deps)
+    trends = cast("_RecordingTrends", deps.trends)
+    requested = trends.calls[0][0] if trends.calls else []
+    assert "candle for beginners" not in requested
+    assert "vela de soja" in requested
+    social = cast("_FakeSocial", deps.socials["instagram"])
+    assert all("candle for beginners" not in call for call in social.calls)

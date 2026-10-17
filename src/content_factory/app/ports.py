@@ -219,6 +219,40 @@ class SegmentTermRepository(Protocol):
         ...
 
 
+class NoOpSegmentTermRepository:
+    """Default de `ResearchDeps` quando o chamador não grava o pool (testes)."""
+
+    async def upsert_many(self, segment_id: int, terms: Sequence[SegmentTerm]) -> int:
+        _ = segment_id
+        return len(terms)
+
+    async def top_by_origin(
+        self,
+        segment_id: int,
+        origin: str,
+        limit: int,
+        order_by: Literal["kw_rank", "trend_score", "engagement_score"] = "kw_rank",
+    ) -> list[SegmentTerm]:
+        _ = segment_id, origin, limit, order_by
+        return []
+
+    async def counts_by_origin(self, segment_id: int) -> dict[str, int]:
+        _ = segment_id
+        return {}
+
+    async def all_for_segment(
+        self, segment_id: int, status: str | None = None
+    ) -> list[SegmentTerm]:
+        _ = segment_id, status
+        return []
+
+    async def set_status(
+        self, segment_id: int, origin: str, keep: Sequence[str], reason: str
+    ) -> int:
+        _ = segment_id, origin, keep, reason
+        return 0
+
+
 class CollectRunRepository(Protocol):
     async def record(self, run: CollectRun) -> int: ...
     async def status_counts(self, segment_id: int, since: datetime) -> dict[str, int]:
