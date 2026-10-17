@@ -13,6 +13,7 @@ from tests.stubs import (
     FakeRepos,
     FakeRuns,
     FakeSegmentTerms,
+    FakeTermTrendDays,
     FakeTrendObservations,
     FakeVideos,
 )
@@ -516,10 +517,10 @@ async def test_run_research_cycle_records_trend_observations() -> None:
         guard=FanoutGuard(DepthConfig()),
     )
     await run_research_cycle("candles", DepthConfig(), deps)
-    # _FakeWeb devolve 1 sinal "vela relacionada" → _FakeTrends devolve 1 TrendPoint
-    assert len(trend_obs.recorded) == 1
-    assert trend_obs.recorded[0].keyword == "vela relacionada"
-    assert trend_obs.recorded[0].interest == 50.0
+    # _FakeWeb devolve 1 sinal "vela relacionada" → 1 lote [âncora, termo].
+    # Bloco 4 (R3): a série da âncora também é gravada (1 ponto cada).
+    assert sorted(p.keyword for p in trend_obs.recorded) == ["vela", "vela relacionada"]
+    assert all(p.interest == 50.0 for p in trend_obs.recorded)
 
 
 class _FakeGatedSocial:
@@ -1068,7 +1069,10 @@ async def test_web_circuit_open_does_not_abort_research() -> None:
     runs = _runs_by_collector(repos)
     assert runs["research:web_suggest"].status == "failed"
     assert runs["research:web_suggest"].error_code == "circuit_open"
-    assert runs["research:trends"].status == "ok"
+    # Bloco 4 (R3): sem termo aceito não há lote — o Trends nem é chamado
+    # (antes: consulta vazia "ok"). A resiliência é a mesma: o ciclo segue.
+    assert "research:trends" not in runs
+    assert out.counts["trends_failed"] == 0 and out.counts["trend_batches"] == 0
     assert out.counts["social_inserted"] == 1
 
 
@@ -1084,7 +1088,9 @@ async def test_both_sources_failing_fall_back_to_seeds_for_social() -> None:
     deps.trends = _BoomTrends(UpstreamChanged("google_trends", "HTTP 400"))
     out = await run_research_cycle("candles", DepthConfig(), deps)
     assert calls == [["vela"]]  # seeds do segmento
-    assert out.counts["source_errors"] == 2
+    # Bloco 4 (R3): Suggest fora → nenhum termo → nenhum lote: o Trends não é
+    # chamado, então só o Suggest conta como erro de fonte (antes: 2).
+    assert out.counts["source_errors"] == 1
     assert out.counts["signals_saved"] == 0
     assert out.partial is True  # candidato social inserido
 
@@ -1111,7 +1117,7 @@ async def test_happy_path_records_source_runs_and_is_ok() -> None:
     runs = _runs_by_collector(repos)
     assert runs["research:web_suggest"].status == "ok"
     assert runs["research:trends"].status == "ok"
-    assert runs["research:trends"].found == 1
+    assert runs["research:trends"].found == 2  # Bloco 4: lote = [âncora, termo]
     assert out.counts["source_errors"] == 0
     assert out.ok is True
 
@@ -1212,25 +1218,29 @@ class _RecordingTrends:
 
 
 @pytest.mark.asyncio
-async def test_trends_gets_valid_timeframe_and_top5_keywords_by_weight() -> None:
-    """Trends 400 em 100% das runs (2026-10-13→15): o pipeline passava
-    `timeframe="week"` (inválido no Google Trends) e TODAS as keywords do
-    Suggest (~145), mas a consulta aceita no máximo 5 e normaliza os valores
-    dentro de cada consulta. Agora: período válido e as 5 de maior peso.
-    """
+async def test_trends_vai_em_lotes_com_ancora_e_serie_diaria() -> None:
+    """Bloco 4 (R3) substitui o contrato antigo deste teste ("1 consulta, os 5
+    de maior peso, `today 12-m`"): agora os top-N do pool (por kw_rank) vão
+    em lotes de 4 + a âncora fixa (1ª keyword), com série DIÁRIA
+    (`today 3-m`) — os 7 dias e a inclinação precisam de pontos diários.
+    O que o teste antigo protegia continua: período válido e no máximo 5
+    termos por consulta (o limite do Google Trends)."""
     from dataclasses import replace
 
-    from content_factory.app.research_pipeline import TRENDS_MAX_KEYWORDS, TRENDS_TIMEFRAME
+    from content_factory.app.research_pipeline import TRENDS_TIMEFRAME
 
     deps, _, _ = _make_deps()
     trends = _RecordingTrends()
     deps = replace(deps, web=_ManyWeb(), trends=trends)
     await run_research_cycle("candles", DepthConfig(), deps)
-    assert len(trends.calls) == 1
-    keywords, timeframe = trends.calls[0]
-    assert timeframe == TRENDS_TIMEFRAME == "today 12-m"
-    assert TRENDS_MAX_KEYWORDS == 5
-    assert keywords == ["kw0", "kw1", "kw2", "kw3", "kw4"]  # 1/1, 1/2, 1/3, 1/4, 1/5
+    assert TRENDS_TIMEFRAME == "today 3-m"
+    assert [tf for _, tf in trends.calls] == [TRENDS_TIMEFRAME, TRENDS_TIMEFRAME]
+    assert all(len(kws) <= 5 for kws, _ in trends.calls)
+    anchor = "vela"  # 1ª keyword do segmento de `_make_deps`
+    assert [kws for kws, _ in trends.calls] == [
+        [anchor, "kw0", "kw1", "kw2", "kw3"],  # kw_rank: posição 1..4
+        [anchor, "kw4", "kw5", "kw6", "kw7"],
+    ]
 
 
 @pytest.mark.asyncio
@@ -1379,3 +1389,107 @@ async def test_research_nao_marca_not_seen_quando_o_suggest_falha() -> None:
     out = await run_research_cycle("velas-artesanais", DepthConfig(), deps)
     assert out.counts["web_failed"] == 1
     assert cast("FakeSegmentTerms", deps.terms).status_calls == []
+
+
+# --- Bloco 4 Task 7: Trends mede o top-N do pool em lotes com âncora (R3) ---
+
+
+class _DailyTrends:
+    """Trends com série DIÁRIA fixa: âncora = 100, demais termos = 50.
+
+    `fail_on_call` (1-based) levanta naquele lote — os outros seguem.
+    """
+
+    def __init__(self, days: int = 28, fail_on_call: int | None = None) -> None:
+        self.calls: list[tuple[list[str], str]] = []
+        self._days = days
+        self._fail_on_call = fail_on_call
+
+    async def interest_over_time(self, keywords: list[str], timeframe: str) -> list[TrendPoint]:
+        self.calls.append((list(keywords), timeframe))
+        if self._fail_on_call == len(self.calls):
+            raise CollectorError("upstream_changed", "trends")
+        end = datetime(2026, 10, 20, tzinfo=UTC)
+        return [
+            TrendPoint(
+                keyword=k,
+                period_start=end - timedelta(days=self._days - 1 - i),
+                period_granularity="day",
+                interest=100.0 if j == 0 else 50.0,
+            )
+            for j, k in enumerate(keywords)
+            for i in range(self._days)
+        ]
+
+
+def _hits(terms: list[str]) -> list[SuggestHit]:
+    return [SuggestHit(t, "velas", i + 1) for i, t in enumerate(terms)]
+
+
+@pytest.mark.asyncio
+async def test_research_pontua_top_n_do_pool_por_ancora() -> None:
+    from dataclasses import replace
+
+    from content_factory.app.research_pipeline import TRENDS_TIMEFRAME
+
+    trends = _DailyTrends()
+    days = FakeTermTrendDays()
+    deps = replace(
+        research_deps(suggest_hits=_hits(["vela a", "vela b", "vela c", "vela d", "vela e"])),
+        trends=trends,
+        trend_days=days,
+    )
+    out = await run_research_cycle("velas-artesanais", DepthConfig(), deps)
+    assert out.counts["trend_batches"] == 2  # 5 termos → [4, 1]
+    assert all(kws[0] == "vela artesanal" for kws, _ in trends.calls)  # âncora 1º
+    assert all(tf == TRENDS_TIMEFRAME for _, tf in trends.calls)
+    assert out.counts["trend_terms_scored"] == 5
+    assert {d.term for d in days.saved} == {"vela a", "vela b", "vela c", "vela d", "vela e"}
+    assert all(d.anchor == "vela artesanal" and d.interest_mean == 0.5 for d in days.saved)
+    terms = cast("FakeSegmentTerms", deps.terms)
+    assert set(terms.trend_scores) == {"vela a", "vela b", "vela c", "vela d", "vela e"}
+
+
+@pytest.mark.asyncio
+async def test_lote_que_falha_nao_descarta_os_outros() -> None:
+    from dataclasses import replace
+
+    deps = replace(
+        research_deps(suggest_hits=_hits([f"vela {i}" for i in range(8)])),
+        trends=_DailyTrends(fail_on_call=2),
+        trend_days=FakeTermTrendDays(),
+    )
+    out = await run_research_cycle("velas-artesanais", DepthConfig(), deps)
+    assert out.counts["trend_batches"] == 2
+    assert out.counts["trend_batches_failed"] == 1
+    assert out.counts["trend_terms_scored"] == 4
+    assert out.counts["trends_failed"] == 0  # só vira failed se TODOS os lotes falharem
+
+
+@pytest.mark.asyncio
+async def test_todos_os_lotes_falham_vira_trends_failed() -> None:
+    from dataclasses import replace
+
+    deps = replace(
+        research_deps(suggest_hits=_hits(["vela a"])),
+        trends=_DailyTrends(fail_on_call=1),
+        trend_days=FakeTermTrendDays(),
+    )
+    out = await run_research_cycle("velas-artesanais", DepthConfig(), deps)
+    assert out.counts["trends_failed"] == 1 and out.counts["trend_terms_scored"] == 0
+
+
+@pytest.mark.asyncio
+async def test_ancora_repetida_nos_lotes_e_gravada_uma_vez_em_trend_observations() -> None:
+    from dataclasses import replace
+
+    deps = replace(
+        research_deps(suggest_hits=_hits([f"vela {i}" for i in range(8)])),
+        trends=_DailyTrends(),
+        trend_days=FakeTermTrendDays(),
+    )
+    await run_research_cycle("velas-artesanais", DepthConfig(), deps)
+    observed = cast("FakeTrendObservations", deps.trend_observations).recorded
+    keys = [(p.keyword, p.period_start) for p in observed]
+    assert len(keys) == len(set(keys))
+    assert sum(1 for k, _ in keys if k == "vela artesanal") == 28  # 1 série da âncora
