@@ -4,7 +4,7 @@ from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Any, NoReturn, cast
+from typing import Any, NoReturn
 
 import typer
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -107,7 +107,6 @@ async def _segment_platforms(segment_slug: str) -> list[str]:
 @asynccontextmanager
 async def _collect_deps(platforms: list[str]) -> AsyncGenerator[CollectDeps]:
     """Deps reais do `collect`: registry de collectors + Postgres + Redis."""
-    from content_factory.app.ports import TermSearcher
     from content_factory.config import get_settings
     from content_factory.infra.collectors import register_defaults, registry
     from content_factory.infra.db.base import get_session_factory
@@ -120,6 +119,7 @@ async def _collect_deps(platforms: list[str]) -> AsyncGenerator[CollectDeps]:
         WebHitRepositoryImpl,
     )
     from content_factory.infra.lock import RedisLock
+    from content_factory.infra.queue.composition import term_searchers_from
     from content_factory.infra.ratelimit import RedisRateLimiter
     from content_factory.infra.redis_ops import redis_client
 
@@ -130,11 +130,7 @@ async def _collect_deps(platforms: list[str]) -> AsyncGenerator[CollectDeps]:
         collectors = registry.resolve(platforms)
         # R6: coletores que buscam por termo (YouTube) ganham atribuição; os
         # demais seguem o `discover()` legado.
-        term_searchers = {
-            collector.platform: cast(TermSearcher, collector)
-            for collector in collectors
-            if hasattr(collector, "search_term")
-        }
+        term_searchers = term_searchers_from(collectors)
         yield CollectDeps(
             collectors=collectors,
             videos=VideoRepositoryImpl(session),

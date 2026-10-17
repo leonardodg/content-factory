@@ -6,7 +6,7 @@ variáveis no startup e passa os valores.
 """
 
 import logging
-from collections.abc import AsyncGenerator, Awaitable, Callable
+from collections.abc import AsyncGenerator, Awaitable, Callable, Iterable
 from contextlib import AsyncExitStack, asynccontextmanager
 from dataclasses import dataclass
 from datetime import datetime
@@ -36,6 +36,19 @@ from content_factory.domain.models import DepthConfig, ResearchCampaign, Segment
 from content_factory.infra.redis_ops import RedisOps
 
 logger = logging.getLogger(__name__)
+
+
+def term_searchers_from(collectors: Iterable[object]) -> dict[str, TermSearcher]:
+    """R6: coletores que buscam por termo (hoje só o YouTube), por plataforma.
+
+    Único ponto de decisão — worker (composição) e CLI (`cf collect`) usam o
+    mesmo; quem não tem `search_term` segue o `discover()` legado.
+    """
+    return {
+        cast(TermSearcher, c).platform: cast(TermSearcher, c)
+        for c in collectors
+        if callable(getattr(c, "search_term", None))
+    }
 
 
 def parse_social_platforms(raw: str | None) -> frozenset[str] | None:
@@ -187,11 +200,7 @@ class AppDeps(SegmentDepsFactory):
             runs = CollectRunRepositoryImpl(session)
             # R6: coletores que buscam por termo (YouTube) — a coleta deixa de
             # ser UM `discover()` e vira uma busca por termo, com atribuição.
-            term_searchers = {
-                collector.platform: cast(TermSearcher, collector)
-                for collector in shared.collectors
-                if hasattr(collector, "search_term")
-            }
+            term_searchers = term_searchers_from(shared.collectors)
             yield SegmentDepsBundle(
                 uow=SessionUnitOfWork(session),
                 collect=CollectDeps(
