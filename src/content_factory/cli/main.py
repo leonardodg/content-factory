@@ -1,4 +1,5 @@
 import asyncio
+import csv
 import logging
 import os
 from collections.abc import AsyncGenerator
@@ -19,6 +20,7 @@ from content_factory.app.ports import (
 )
 from content_factory.app.results import collect_result, score_result
 from content_factory.app.score import ScoreDeps, ScoreOutcome, score
+from content_factory.app.term_report import TermReportOutcome
 from content_factory.app.web_eval import WebEvalReport
 from content_factory.app.web_rank import WebRankOutcome
 from content_factory.app.web_sample import WebSampleRun
@@ -666,6 +668,113 @@ def web_eval_cmd(
         body["ranking_v1"] = report.ranking_v1
         body["ranking_base"] = report.ranking_base
     print(dumps(envelope_ok("web-eval", **body)))
+    raise typer.Exit(exit_code_for(ok=True))
+
+
+_REPO_ROOT = Path(__file__).resolve().parents[3]
+_TERM_REPORT_FIELDS = [
+    "scope",
+    "report_key",
+    "rank",
+    "n",
+    "baseline_n",
+    "verdict",
+    "median_viral_v2",
+    "median_velocity",
+    "median_engagement",
+    "median_channel_relative",
+    "top10_fraction",
+    "engagement_score",
+    "diff",
+    "ci_low",
+    "ci_high",
+    "overlap",
+    "title",
+    "views",
+]
+
+
+async def _aterm_report(
+    segment_slug: str, platform: str, as_of: datetime, top: int
+) -> TermReportOutcome:
+    """Relatório no corte (R10): grava `term_reports` e o engagement do pool."""
+    from content_factory.app.term_report import TermReportDeps, build_term_report
+    from content_factory.config import get_settings
+    from content_factory.infra.db.base import get_session_factory
+    from content_factory.infra.db.repositories import (
+        PopulationReaderImpl,
+        SegmentRepositoryImpl,
+        SegmentTermRepositoryImpl,
+        TermReportRepositoryImpl,
+    )
+
+    factory: async_sessionmaker[AsyncSession] = get_session_factory(get_settings())
+    async with factory() as session:
+        deps = TermReportDeps(
+            population=PopulationReaderImpl(session),
+            reports=TermReportRepositoryImpl(session),
+            segments=SegmentRepositoryImpl(session),
+            terms=SegmentTermRepositoryImpl(session),
+            window_days=int(os.getenv("VIRAL_V2_WINDOW_DAYS", "30")),
+            min_population=int(os.getenv("VIRAL_V2_MIN_POPULATION", "5")),
+        )
+        outcome = await build_term_report(segment_slug, platform, as_of, deps, top_videos=top)
+        await session.commit()
+        return outcome
+
+
+def _write_term_report_csv(outcome: TermReportOutcome, path: Path) -> None:
+    """CSV LOCAL: inclui títulos de vídeos de terceiros — nunca no repositório."""
+    titles = {v.platform_video_id: (v.title, v.views) for v in outcome.top}
+    with path.open("w", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(f, fieldnames=_TERM_REPORT_FIELDS)
+        writer.writeheader()
+        for r in outcome.records:
+            row: dict[str, Any] = {k: getattr(r, k) for k in _TERM_REPORT_FIELDS[:-2]}
+            title, views = (
+                titles.get(r.report_key, ("", None)) if r.scope == "video" else ("", None)
+            )
+            row["title"], row["views"] = title, views
+            writer.writerow(row)
+
+
+@app.command("term-report")
+def term_report_cmd(
+    segment: str = typer.Option(..., "--segment", help="slug do segmento"),
+    as_of: str = typer.Option(
+        ..., "--as-of", help="corte com fuso (ex.: 2026-10-21T12:00:00+00:00)"
+    ),
+    platform: str = typer.Option("youtube", "--platform", help="plataforma da comparação"),
+    top: int = typer.Option(20, "--top-videos", min=1, max=200, help="tamanho do top de vídeos"),
+    out: str | None = typer.Option(
+        None, "--out", help="CSV local (FORA do repositório: tem títulos de terceiros)"
+    ),
+) -> None:
+    """Ranking de temas, veredito por origem e top vídeos NO CORTE (R10)."""
+    try:
+        cutoff = datetime.fromisoformat(as_of)
+    except ValueError as exc:
+        print(dumps(envelope_err("term-report", "usage_error", f"--as-of inválido: {as_of}")))
+        raise typer.Exit(exit_code_for(ok=False)) from exc
+    if cutoff.tzinfo is None:
+        print(dumps(envelope_err("term-report", "usage_error", "--as-of precisa de fuso")))
+        raise typer.Exit(exit_code_for(ok=False))
+    out_path = Path(out).resolve() if out else None
+    if out_path is not None and out_path.is_relative_to(_REPO_ROOT):
+        msg = "--out dentro do repositório (público): grave fora dele"
+        print(dumps(envelope_err("term-report", "out_inside_repo", msg)))
+        raise typer.Exit(exit_code_for(ok=False))
+    try:
+        outcome = asyncio.run(_aterm_report(segment, platform, cutoff, top))
+    except SegmentNotFound as exc:
+        print(dumps(envelope_err("term-report", "segment_not_found", redact(str(exc)))))
+        raise typer.Exit(exit_code_for(ok=False)) from exc
+    except Exception as exc:
+        print(dumps(envelope_err("term-report", "internal_error", redact(str(exc)))))
+        raise typer.Exit(exit_code_for(ok=False)) from exc
+    if out_path is not None:
+        _write_term_report_csv(outcome, out_path)
+    print(dumps(envelope_ok("term-report", as_of=cutoff.isoformat(), **outcome.as_counts())))
     raise typer.Exit(exit_code_for(ok=True))
 
 

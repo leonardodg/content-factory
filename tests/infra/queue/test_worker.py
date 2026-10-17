@@ -230,6 +230,8 @@ class _FakeSegmentBundle:
     research: _FakeResearchPart
     web: object = None
     remediate: RemediationDeps = field(default_factory=_noop_remediation_deps)
+    # R9 (Bloco 5): o `_score_v2_impl` é trocado nos testes; o deps não é lido
+    score_v2: object = None
 
 
 class _FakeAppDeps:
@@ -1912,3 +1914,100 @@ def test_term_searchers_from_so_pega_quem_busca_por_termo() -> None:
     instagram = FakeCollector("instagram")
     out = term_searchers_from([cast(Any, youtube), instagram])
     assert out == {"youtube": youtube}
+
+
+# --- Bloco 5 Task 7: viral-v2 no job de score, atrás de VIRAL_V2_ENABLED ---
+
+
+async def test_run_score_job_viral_v2_depois_do_fase_h_em_transacao_propria(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from content_factory.app.score_v2 import ScoreV2Outcome
+    from content_factory.config import Settings
+
+    events: list[str] = []
+
+    async def fake_score(deps: ScoreDeps) -> object:
+        _ = deps
+        events.append("score")
+        return _ScoreOk()
+
+    async def fake_v2(deps: object) -> ScoreV2Outcome:
+        _ = deps
+        events.append("v2")
+        return ScoreV2Outcome(scored=6, skipped_relevance=1, hashtags_active=2)
+
+    monkeypatch.setattr(w, "_score_impl", fake_score)
+    monkeypatch.setattr(w, "_score_v2_impl", fake_v2)
+    monkeypatch.setattr(w, "get_settings", lambda: Settings(viral_v2_enabled=True))
+    committed: list[str] = []
+    out = await w.run_score_job(
+        {
+            "campaigns_deps": _FakeCampaignsMultiSegment(slugs=["velas"]),
+            "app_deps": _FakeAppDeps(committed, []),
+        }
+    )
+    assert events == ["score", "v2"]
+    assert committed == ["commit", "commit"]  # fase-h, depois o viral-v2
+    assert out["segments"]["velas"]["viral_v2"] == {
+        "scored": 6,
+        "skipped_relevance": 1,
+        "insufficient": 0,
+        "hashtags_active": 2,
+        "hashtags_stale": 0,
+    }
+
+
+async def test_run_score_job_viral_v2_falha_mantem_o_fase_h(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from content_factory.config import Settings
+
+    async def fake_score(deps: ScoreDeps) -> object:
+        _ = deps
+        return _ScoreOk()
+
+    async def boom(deps: object) -> object:
+        raise RuntimeError("video_scores_v2 fora")
+
+    monkeypatch.setattr(w, "_score_impl", fake_score)
+    monkeypatch.setattr(w, "_score_v2_impl", boom)
+    monkeypatch.setattr(w, "get_settings", lambda: Settings(viral_v2_enabled=True))
+    committed: list[str] = []
+    rolled_back: list[str] = []
+    out = await w.run_score_job(
+        {
+            "campaigns_deps": _FakeCampaignsMultiSegment(slugs=["velas"]),
+            "app_deps": _FakeAppDeps(committed, rolled_back),
+        }
+    )
+    assert out["segments"]["velas"]["ok"] is True
+    assert out["segments"]["velas"]["viral_v2"] == "failed"
+    assert committed == ["commit"] and rolled_back == ["rollback"]
+
+
+async def test_run_score_job_viral_v2_desligado_nao_roda(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from content_factory.config import Settings
+
+    called: list[str] = []
+
+    async def fake_score(deps: ScoreDeps) -> object:
+        _ = deps
+        return _ScoreOk()
+
+    async def fake_v2(deps: object) -> object:
+        called.append("v2")
+        return object()
+
+    monkeypatch.setattr(w, "_score_impl", fake_score)
+    monkeypatch.setattr(w, "_score_v2_impl", fake_v2)
+    monkeypatch.setattr(w, "get_settings", lambda: Settings(viral_v2_enabled=False))
+    out = await w.run_score_job(
+        {
+            "campaigns_deps": _FakeCampaignsMultiSegment(slugs=["velas"]),
+            "app_deps": _FakeAppDeps([], []),
+        }
+    )
+    assert called == [] and "viral_v2" not in out["segments"]["velas"]

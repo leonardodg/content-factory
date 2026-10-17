@@ -223,7 +223,12 @@ def percentile_ranks(values: Mapping[int, float]) -> dict[int, float]:
 
 
 def _log1p(value: float | None) -> float | None:
-    return None if value is None or value <= 0 else math.log1p(value)
+    """`None` = sem medida (ausente, renormaliza); 0 ou negativo = medida ZERO.
+
+    Velocidade/alcance zero são o pior valor, não falta de dado — tratar 0 como
+    ausente deixava o vídeo parado acima de quem cresceu pouco (QA 17/10).
+    """
+    return None if value is None else math.log1p(max(value, 0.0))
 
 
 def _raw_components(r: ViralInput) -> dict[str, float | None]:

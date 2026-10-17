@@ -31,6 +31,10 @@ class Settings(BaseSettings):
     # reversível sem mudar schema (migração 0010 é aditiva). Default off — só
     # ligar com veredito "aprovado" na F4 em >= 2 dos 3 segmentos PT.
     web_score_enabled: bool = False
+    # R9 (Bloco 5): `viral-v2` + hashtags no job de score, DEPOIS do fase-h e
+    # em transação própria. Default off: liga no deploy da Fase B
+    # (`VIRAL_V2_ENABLED=1`) sem rebuild; desligar é reversível (tabela própria).
+    viral_v2_enabled: bool = False
     # F1 em produção: com isto ligado, segmento sem protocolo `q1` válido faz
     # o collect da web falhar (`missing_protocol`) em vez de cair em silêncio
     # no legado de 1 consulta. Default off (compatível com o comportamento

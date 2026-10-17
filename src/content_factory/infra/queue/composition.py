@@ -32,6 +32,7 @@ from content_factory.app.ports import (
 from content_factory.app.remediate import RemediationDeps
 from content_factory.app.research_pipeline import ResearchDeps
 from content_factory.app.score import ScoreDeps
+from content_factory.app.score_v2 import ScoreV2Deps
 from content_factory.app.segment_deps import SegmentDepsBundle, SegmentDepsFactory
 from content_factory.config import Settings
 from content_factory.domain.fanout_guard import FanoutGuard
@@ -167,6 +168,9 @@ class SharedDeps:
     # R7: janela/teto/gap da remedição (`REMEDIATION_*`), lidos 1x no startup.
     # R3 (Bloco 4): termos do pool medidos no Trends por research
     trends_terms_per_day: int = 16
+    # R9 (Bloco 5): janela e população mínima do viral-v2
+    viral_v2_window_days: int = 30
+    viral_v2_min_population: int = 5
     remediation_window_days: int = 7
     remediation_limit: int = 500
     remediation_min_gap_hours: int = 3
@@ -205,6 +209,7 @@ class AppDeps(SegmentDepsFactory):
             CollectRunRepositoryImpl,
             DiscoveryRepositoryImpl,
             KeywordSignalRepositoryImpl,
+            PopulationReaderImpl,
             ScoreRepositoryImpl,
             SearchQueryRepositoryImpl,
             SegmentRepositoryImpl,
@@ -212,6 +217,7 @@ class AppDeps(SegmentDepsFactory):
             TermTrendRepositoryImpl,
             TrendObservationRepositoryImpl,
             VideoRepositoryImpl,
+            ViralV2RepositoryImpl,
             WebHitRepositoryImpl,
             WebScoreRepositoryImpl,
         )
@@ -272,6 +278,14 @@ class AppDeps(SegmentDepsFactory):
                     trends_terms_per_day=shared.trends_terms_per_day,
                 ),
                 web=WebScoreRepositoryImpl(session),
+                score_v2=ScoreV2Deps(
+                    population=PopulationReaderImpl(session),
+                    scores_v2=ViralV2RepositoryImpl(session),
+                    terms=SegmentTermRepositoryImpl(session),
+                    segment=segment,
+                    window_days=shared.viral_v2_window_days,
+                    min_population=shared.viral_v2_min_population,
+                ),
                 remediate=RemediationDeps(
                     # mesmas instâncias do CollectDeps: limiter e breaker são
                     # compartilhados (a remedição e a busca disputam a cota do
@@ -322,6 +336,8 @@ async def compose_app_deps(
     platform_limits: dict[str, int],
     social_platforms: frozenset[str] | None = None,
     trends_terms_per_day: int = 16,
+    viral_v2_window_days: int = 30,
+    viral_v2_min_population: int = 5,
     remediation_window_days: int = 7,
     remediation_limit: int = 500,
     remediation_min_gap_hours: int = 3,
@@ -398,6 +414,8 @@ async def compose_app_deps(
                 max_concurrent_discoveries=max_concurrent_discoveries,
                 social_platforms=social_platforms,
                 trends_terms_per_day=trends_terms_per_day,
+                viral_v2_window_days=viral_v2_window_days,
+                viral_v2_min_population=viral_v2_min_population,
                 remediation_window_days=remediation_window_days,
                 remediation_limit=remediation_limit,
                 remediation_min_gap_hours=remediation_min_gap_hours,
