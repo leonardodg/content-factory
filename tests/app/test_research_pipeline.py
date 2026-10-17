@@ -446,6 +446,36 @@ async def test_run_research_cycle_partial_when_one_of_two_social_fails() -> None
 
 
 @pytest.mark.asyncio
+async def test_research_sem_fase_social_quando_desligada() -> None:
+    """R5: `social_platforms=frozenset()` desliga a fase social (orçamento).
+
+    Suggest/Trends/pool seguem rodando; nenhuma cota de busca social é gasta.
+    """
+    repos = FakeRepos()
+    social = _FakeSocial()
+    web = _FakeWeb()
+    deps = ResearchDeps(
+        web=web,
+        trends=_FakeTrends(),
+        socials={"instagram": social},
+        signals=_FakeSignalRepo(),
+        trend_observations=FakeTrendObservations(),
+        segments=_FakeSegmentsWithKeywords(),
+        videos=repos.videos,
+        runs=repos.runs,
+        lock=FakeLock(),
+        limiter=FakeLimiter(),
+        guard=FanoutGuard(DepthConfig()),
+        social_platforms=frozenset(),
+    )
+    out = await run_research_cycle("candles", DepthConfig(), deps)
+    assert out.counts["social_platforms_attempted"] == 0
+    assert social.calls == []  # nenhuma cota de busca no research
+    assert web.calls  # Suggest continua rodando
+    assert out.ok is True
+
+
+@pytest.mark.asyncio
 async def test_run_research_cycle_ok_when_no_social_platform_configured() -> None:
     """Segmento sem rede social configurada: ausência de coleta social não é falha."""
     repos = FakeRepos()

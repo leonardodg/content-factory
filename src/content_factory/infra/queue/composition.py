@@ -38,6 +38,22 @@ from content_factory.infra.redis_ops import RedisOps
 logger = logging.getLogger(__name__)
 
 
+def parse_social_platforms(raw: str | None) -> frozenset[str] | None:
+    """`RESEARCH_SOCIAL_PLATFORMS` → plataformas da fase social do research (R5).
+
+    - unset/vazio → `None` (todas as plataformas do segmento, comportamento
+      atual);
+    - `none` (qualquer caixa) → `frozenset()` (fase social desligada: só
+      Suggest/Trends/pool gastam cota);
+    - lista `youtube,instagram` → o conjunto dessas plataformas.
+    """
+    if raw is None or not raw.strip():
+        return None
+    if raw.strip().lower() == "none":
+        return frozenset()
+    return frozenset(p.strip().lower() for p in raw.split(",") if p.strip())
+
+
 def _campaign_repo(session: AsyncSession) -> ResearchCampaignRepository:
     # import tardio: o teste troca `repositories.ResearchCampaignRepositoryImpl`
     from content_factory.infra.db.repositories import ResearchCampaignRepositoryImpl
@@ -115,6 +131,9 @@ class SharedDeps:
     platform_slots: PlatformSlots
     # COLLECT_MAX_CONCURRENCY, lido 1x no startup pelo worker: trocar exige restart
     max_concurrent_discoveries: int
+    # R5: plataformas da fase social do research (`None` = todas as do
+    # segmento). Lida 1x no startup pelo worker (`RESEARCH_SOCIAL_PLATFORMS`).
+    social_platforms: frozenset[str] | None = None
 
 
 @dataclass
@@ -212,6 +231,7 @@ class AppDeps(SegmentDepsFactory):
                     guard=FanoutGuard(segment.research or DepthConfig()),
                     platform_slots=shared.platform_slots,
                     health=shared.health,
+                    social_platforms=shared.social_platforms,
                 ),
                 web=WebScoreRepositoryImpl(session),
             )
@@ -246,6 +266,7 @@ async def compose_app_deps(
     *,
     max_concurrent_discoveries: int,
     platform_limits: dict[str, int],
+    social_platforms: frozenset[str] | None = None,
 ) -> AppDeps:
     """Fábrica do worker: `register_defaults` + engine + Redis compartilhado.
 
@@ -317,6 +338,7 @@ async def compose_app_deps(
                 lock_client=shared_client,
                 platform_slots=PlatformSlots(platform_limits),
                 max_concurrent_discoveries=max_concurrent_discoveries,
+                social_platforms=social_platforms,
             ),
             campaigns=_FreshSessionCampaigns(factory),
             job_runs=_FreshSessionJobRuns(factory),

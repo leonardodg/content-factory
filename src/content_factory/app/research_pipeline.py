@@ -56,6 +56,10 @@ class ResearchDeps:
     lock: Lock
     limiter: RateLimiter
     guard: FanoutGuard
+    # R5 (orçamento): plataformas da fase social do research. `None` = todas
+    # as do segmento (comportamento atual); `frozenset()` = nenhuma (só
+    # Suggest/Trends/pool). A composição lê `RESEARCH_SOCIAL_PLATFORMS`.
+    social_platforms: frozenset[str] | None = None
     # Pool de termos do segmento (R4). Default NoOp: chamadas existentes
     # (worker/CLI/testes) continuam funcionando sem mudança; a composição
     # injeta o repositório real.
@@ -355,6 +359,7 @@ async def run_research_cycle(
             (platform, discoverer)
             for platform, discoverer in deps.socials.items()
             if platform in segment.platforms
+            and (deps.social_platforms is None or platform in deps.social_platforms)
         ]
         discoveries = await bounded_gather(
             wanted,

@@ -1766,3 +1766,20 @@ async def test_startup_failure_after_registry_closes_collectors(
         await w.create_app_deps(Settings())
     assert closed == ["youtube"]
     assert engine.disposed == 1
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        (None, None),
+        ("", None),
+        ("  ", None),
+        ("none", frozenset[str]()),
+        ("NONE", frozenset[str]()),
+        ("youtube,instagram", frozenset({"youtube", "instagram"})),
+        (" YouTube ", frozenset({"youtube"})),
+    ],
+)
+def test_parse_social_platforms(raw: str | None, expected: frozenset[str] | None) -> None:
+    """R5: unset → todas; `none` → nenhuma; lista → conjunto."""
+    assert w.parse_social_platforms(raw) == expected
