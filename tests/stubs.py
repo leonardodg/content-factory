@@ -177,21 +177,27 @@ class FakeRefresher:
         found: list[str] | str = "all",
         *,
         error: CollectorError | None = None,
+        error_on_call: int | None = None,
         quota_per_batch: int = 0,
     ) -> None:
         self._found = found
         self.error = error
+        self._error_on_call = error_on_call
         self._quota_per_batch = quota_per_batch
         self.calls = 0
         self.asked: list[RemediationTarget] = []
+        self.batches: list[list[str]] = []
 
     async def refresh(self, targets: Sequence[RemediationTarget]) -> RefreshResult:
         self.calls += 1
         self.asked.extend(targets)
+        self.batches.append([t.platform_video_id for t in targets])
         if self._quota_per_batch:
             for _ in range(0, len(targets), 50):
                 record_quota(self._quota_per_batch)
-        if self.error is not None:
+        if self.error is not None and (
+            self._error_on_call is None or self.calls == self._error_on_call
+        ):
             raise self.error
         ids = [t.platform_video_id for t in targets]
         keep = ids if self._found == "all" else [i for i in ids if i in self._found]
