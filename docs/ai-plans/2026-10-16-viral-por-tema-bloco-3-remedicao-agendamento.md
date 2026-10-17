@@ -673,3 +673,72 @@ WHERE v.removed_at IS NOT NULL AND vm.captured_at > v.removed_at;  -- esperado: 
 - **R7** ✓ alvos últimos 7 dias com teto 500, só YouTube e sem medição nas últimas 3 h (Task 5); contrato de erro/cota/breaker igual ao da coleta (Task 6); `videos.list` em lotes de 50 (Task 4), `video_metrics` por remedição (Tasks 5-6), removido/privado marcado (`removed_at`) e fora dos alvos (Tasks 2/5). Instagram segue mídia própria e TikTok fora (porta separada, `refreshables` só com YouTube).
 - **R12** ✓ collect `02,08,14,20` e score configuráveis por env (Task 1); research 07:00 inalterado; catch-up e cron leem as mesmas envs (Task 1); remedição dentro da coleta, bem abaixo de 6 h.
 - Fora deste bloco: R5 (plano de consulta) e R3 (Trends) no Bloco 4; a remedição não entra no `ops-report` detalhado até R13 (Bloco 6).
+
+---
+
+## Resultado (execução do bloco)
+
+Tasks 1–7 implementadas com TDD (teste falhando → implementação → verde) e
+commit por task. Migração `0013` validada do zero: `upgrade head`, `downgrade
+0012` e `upgrade head` de novo numa base vazia, `alembic check` sem drift.
+`make gates` verde (test/lint/typecheck/security/docs/privacy) e
+`pytest -m integration` com Postgres+Redis descartáveis: 62 passed.
+
+### Desvios do plano (e por quê)
+
+1. **Envs da remedição**: o helper `_remediation_deps_from_env` do plano
+   devolvia `RemediationDeps` sem `runs`/`limiter`/`health` (campos
+   obrigatórios da Task 6) e `composition.py` não lê env. As envs
+   `REMEDIATION_*` são lidas no `create_app_deps` (com `_int_env`, que tolera
+   valor inválido como `_max_concurrency_from_env`) e passadas a
+   `compose_app_deps` → `SharedDeps.remediation_*`.
+2. **Sub-envelope**: além de `targets/refreshed/metrics_written/removed`, o
+   envelope leva `failed_platforms` e `quota_used` — são contagens do
+   `RemediationOutcome` (Task 6) e são o sinal operacional do contrato de
+   erro/cota.
+3. **Lock ocupado**: a remedição **não** roda quando o collect devolveu
+   `ja_em_execucao`. O plano chamava sempre; com o outro collect da mesma UoW
+   ainda não commitado, a remedição gravaria `video_metrics` duplicado do
+   mesmo vídeo (o gap de 3 h só compara contra o que já está commitado).
+4. **Paridade CLI × worker** (`tests/cli/test_cli.py`): a CLI (`cf collect`)
+   não remedeia — o escopo do plano é o `run_collect_job`. O teste de paridade
+   passa a comparar o envelope do collect e verifica o sub-envelope
+   `remediation` à parte (presente com zeros, ausente no `ja_em_execucao`).
+5. **`tests/app/test_remediate.py`**: os fakes observáveis (`runs`, `health`)
+   são passados explicitamente pelo helper, porque os campos de
+   `RemediationDeps` são os Protocolos (pyright strict não deixa acessar
+   `.saved` num `CollectRunRepository`). O breaker é verificado por
+   `FakeHealth.failures`: `PlatformHealth.record_failure(platform)` não recebe
+   o código do erro, então `reports == [(platform, code)]` não é observável no
+   fake sem inventar uma porta nova.
+6. **Integração do worker** (`tests/infra/queue/test_worker_integration.py`): o
+   `_remediate_impl` é neutralizado nos 2 testes de UoW/erro. Com o bundle
+   real, a remedição tocaria o YouTube de verdade (chave vazia → `AuthExpired`)
+   e somaria 1 `CollectRun` `remediate:youtube` por segmento às contagens de
+   `collect_runs` que esses testes assertam.
+7. **Docs**: `SCORE_CRON_HOURS` (Task 1) e `REMEDIATION_*` entram em
+   `operacao.md` + `app.env.example` + `defaults.env`; o sub-envelope em
+   `contrato-envelopes.md`; os diagramas do ciclo ganham o cron 4×/dia e a
+   re-medição.
+
+### Verificação local com dados reais (pré-deploy)
+
+E2E com Postgres real (`alembic upgrade head`) + `YoutubeCollector` com
+transporte falso, 4 vídeos: 1 medido agora (fora), 1 medido há 5 h (dentro), 1
+removido (fora), 1 nunca medido (dentro):
+
+- `RemediationOutcome(targets=2, refreshed=2, metrics_written=2, removed=0,
+  failed_platforms=0, quota_used=2)`;
+- `collect_runs`: 1 run `remediate:youtube` `ok` com `quota_used = 2`;
+- `video_metrics`: 2 linhas novas com as métricas do YouTube e
+  `followers_at_capture = 777`;
+- SQL de aceite do Task 8: 0 pares de medição com gap < 1 h e 0 medições após
+  `removed_at`;
+- 2ª remedição imediata: `targets=0` (gap de 3 h), sem run nova e sem cota.
+
+### Pendente (pós-deploy, com dados de produção)
+
+SQL do Task 8 após 2 coletas (≈ 12 h): gap < 1 h = 0, `remediate:*` com cota e
+status, ≥ 90% dos vídeos YouTube com medição nova e `velocity` não nula; R12
+com 4 runs `collect`/`score` no dia e `ticks.wall_ms_max` bem abaixo de 6 h;
+`removed_at > 0` e nenhuma medição posterior.
