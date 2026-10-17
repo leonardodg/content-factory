@@ -74,3 +74,13 @@ def test_new_protocols_accept_structural_fakes() -> None:
     assert expander.platform == "web_suggest"
     assert social.platform == "instagram"
     assert trends is not None and signals is not None
+
+
+def test_refresh_result_e_remediation_target() -> None:
+    from content_factory.app.ports import RefreshableCollector, RemediationRepository
+    from content_factory.domain.models import RefreshResult, RemediationTarget
+
+    assert RefreshableCollector.__name__ == "RefreshableCollector"
+    assert RemediationRepository.__name__ == "RemediationRepository"
+    t = RemediationTarget(video_id=1, platform="youtube", platform_video_id="abc")
+    assert RefreshResult().missing_ids == [] and t.platform == "youtube"

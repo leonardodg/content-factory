@@ -45,6 +45,49 @@ redigida.
 - `ok` do job = todos os segmentos `ok`;
 - `partial` do job = algum segmento parcial, ou algum `ok` com outro falhando.
 
+### Sub-envelope `remediation` (R7, só no worker)
+
+O `collect_job` remede os vídeos já conhecidos do segmento logo depois do
+`collect()`, na MESMA UoW, e acrescenta o passo ao envelope do segmento:
+
+```json
+{"ok": true, "partial": false, "found": 13,
+ "remediation": {"targets": 15, "skipped_language": 12, "refreshed": 15,
+                 "metrics_written": 15, "removed": 1, "failed_platforms": 0,
+                 "quota_used": 2}}
+```
+
+- `targets`: alvos que a remediação TENTOU remedir — janela
+  (`REMEDIATION_WINDOW_DAYS`), sem medição nas últimas
+  `REMEDIATION_MIN_GAP_HOURS`, não marcados como removidos e **com o idioma do
+  segmento**;
+- `skipped_language`: alvos descartados pela regra de idioma (R14/17-10, a
+  MESMA `language_matches` da coleta): com `accepted_language: pt-BR`, o vídeo
+  declarado `pt-PT` sai (os 12 da coleta real de 16/10) e não gasta cota.
+  `pt` sem região e idioma não declarado ficam; `targets + skipped_language` =
+  alvos devolvidos pelo repositório;
+- `metrics_written`: linhas gravadas em `video_metrics`;
+- `removed`: vídeos que a plataforma não devolveu (removido/privado) e foram
+  marcados em `videos.removed_at`. Só conta id ausente numa resposta VÁLIDA:
+  lote com `{"items": []}` é `upstream_changed` (a remediação não marca o lote
+  inteiro como removido nem inventa remoção em cima de erro);
+- `failed_platforms`: plataformas cuja remedição falhou — vira uma `CollectRun`
+  `remediate:<plataforma>` `failed` e **não** derruba a coleta;
+- **lotes de 50** (`RemediationDeps.batch_size`, o teto do `videos.list`): cada
+  lote é gravado antes do próximo. Erro no lote N para os lotes seguintes, mas
+  o que já foi medido/removido nos lotes anteriores fica — as contagens do
+  sub-envelope são o que de fato entrou no banco. Na run
+  `remediate:<plataforma>`, `found` = alvos do run e `updated` = candidatos
+  medidos (podem divergir quando um lote falha);
+- erro de contrato (`CollectorError`) grava o `code` na run (`upstream_changed`,
+  `rate_limited`, `network`, `auth_expired`…); exceção fora do contrato grava
+  `internal_error` com traceback no log, sem propagar (a UoW do segmento não
+  cai);
+- a chave **não aparece** quando o collect nem rodou (lock ocupado,
+  `ja_em_execucao`): remedir ali gravaria métrica duplicada;
+- a CLI (`cf collect`) não remedeia, então o teste de paridade compara o
+  envelope sem essa chave.
+
 ## Mudança em relação ao formato anterior (2026-10-15)
 
 - worker: execução parcial era `ok: false, partial: true`; agora é

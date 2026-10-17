@@ -2,7 +2,7 @@ import asyncio
 import logging
 from collections.abc import AsyncGenerator, Callable
 from contextlib import asynccontextmanager
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from typing import Any, ClassVar, cast
 
 import pytest
@@ -14,11 +14,12 @@ from content_factory.app.ports import (
     NoOpSearchQueryRepository,
     UpsertReport,
 )
+from content_factory.app.remediate import RemediationDeps, RemediationOutcome
 from content_factory.app.research_pipeline import ResearchDeps
 from content_factory.app.score import ScoreDeps, ScoreOutcome
 from content_factory.domain.errors import SegmentNotFound
 from content_factory.domain.fanout_guard import FanoutGuard
-from content_factory.domain.models import DepthConfig, ResearchCampaign, Segment
+from content_factory.domain.models import DepthConfig, ResearchCampaign, SearchConfig, Segment
 from content_factory.infra.queue import worker as w
 from content_factory.infra.ratelimit import RedisRateLimiter, Window
 from tests.stubs import (
@@ -27,7 +28,9 @@ from tests.stubs import (
     FakeLimiter,
     FakeLock,
     FakeRedis,
+    FakeRemediationRepo,
     FakeRepos,
+    FakeRuns,
     TrackedCollector,
 )
 
@@ -182,6 +185,33 @@ class _FakeUoW:
         self._on_rollback()
 
 
+def _patch_noop_remediate(monkeypatch: pytest.MonkeyPatch) -> None:
+    """R7: troca só o passo de remedição por um neutro (sem alvos).
+
+    Testes que exercitam o job de coleta REAL (composição real) continuam
+    focados na coleta; a remedição tem testes próprios (app + infra).
+    """
+
+    async def _noop(segment_id: int, deps: object) -> RemediationOutcome:
+        return RemediationOutcome()
+
+    monkeypatch.setattr(w, "_remediate_impl", _noop)
+
+
+def _noop_remediation_deps() -> RemediationDeps:
+    """`RemediationDeps` sem alvos: os testes de collect não exercitam a R7.
+
+    Devolver `None` no lugar disso chamaria o `remediate` REAL (hook padrão) e
+    explodiria no bundle fake.
+    """
+    return RemediationDeps(
+        videos=FakeRemediationRepo(targets=[]),
+        refreshables={},
+        runs=FakeRuns(),
+        limiter=FakeLimiter(),
+    )
+
+
 @dataclass
 class _FakeScorePart:
     segment: Segment
@@ -199,6 +229,7 @@ class _FakeSegmentBundle:
     score: _FakeScorePart
     research: _FakeResearchPart
     web: object = None
+    remediate: RemediationDeps = field(default_factory=_noop_remediation_deps)
 
 
 class _FakeAppDeps:
@@ -271,6 +302,74 @@ async def test_run_collect_job_processes_all_active_segments(
     assert set(out["segments"]) == {"velas", "sabonetes"}
     assert committed == ["commit", "commit"]  # 1 commit por segmento
     assert rolled_back == []
+
+
+async def test_run_collect_job_remede_apos_coletar(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """R7: a remedição roda depois do collect, na MESMA UoW (1 commit)."""
+    order: list[str] = []
+
+    async def fake_collect(slug: str, platforms: list[str], limit: int, deps: object) -> object:
+        order.append("collect")
+
+        class _Out:
+            ok = True
+            partial = False
+            counts: ClassVar[dict[str, object]] = {"found": 1}
+
+        return _Out()
+
+    async def fake_remediate(segment_id: int, deps: object) -> RemediationOutcome:
+        order.append("remediate")
+        return RemediationOutcome(targets=2, skipped_language=3, refreshed=2, metrics_written=2)
+
+    monkeypatch.setattr(w, "_collect_impl", fake_collect)
+    monkeypatch.setattr(w, "_remediate_impl", fake_remediate)
+    monkeypatch.setattr(w, "_load_settings", lambda: _collect_cfg([], 10))
+    campaigns = _FakeCampaignsMultiSegment(slugs=["velas-artesanais"])
+    app_deps = _FakeAppDeps(order, [])
+
+    out = await w.run_collect_job({"campaigns_deps": campaigns, "app_deps": app_deps})
+    assert out["segments"]["velas-artesanais"]["remediation"] == {
+        "targets": 2,
+        "skipped_language": 3,
+        "refreshed": 2,
+        "metrics_written": 2,
+        "removed": 0,
+        "failed_platforms": 0,
+        "quota_used": 0,
+    }
+    assert order == ["collect", "remediate", "commit"]  # remedição antes do commit
+
+
+async def test_run_collect_job_nao_remede_quando_collect_ja_em_execucao(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Lock ocupado ⇒ o collect nem rodou; remedir ali gravaria métrica duplicada."""
+    remediated: list[str] = []
+
+    async def fake_collect(slug: str, platforms: list[str], limit: int, deps: object) -> object:
+        class _Out:
+            ok = False
+            partial = False
+            runs: ClassVar[list[object]] = []
+            counts: ClassVar[dict[str, object]] = {"ja_em_execucao": True}
+
+        return _Out()
+
+    async def fake_remediate(segment_id: int, deps: object) -> RemediationOutcome:
+        remediated.append("remediate")
+        return RemediationOutcome()
+
+    monkeypatch.setattr(w, "_collect_impl", fake_collect)
+    monkeypatch.setattr(w, "_remediate_impl", fake_remediate)
+    monkeypatch.setattr(w, "_load_settings", lambda: _collect_cfg([], 10))
+    campaigns = _FakeCampaignsMultiSegment(slugs=["velas-artesanais"])
+
+    out = await w.run_collect_job({"campaigns_deps": campaigns, "app_deps": _FakeAppDeps([], [])})
+    assert "remediation" not in out["segments"]["velas-artesanais"]
+    assert remediated == []
 
 
 async def test_run_collect_job_noop_when_no_active_segment(
@@ -348,7 +447,20 @@ async def test_run_collect_job_isolates_segment_exception(
     assert out["ok"] is False
     assert out["segments"]["velas"]["ok"] is False
     assert "boom" in out["segments"]["velas"]["error"]["message"]
-    assert out["segments"]["sabonetes"] == {"ok": True, "partial": False, "found": 1}
+    assert out["segments"]["sabonetes"] == {
+        "ok": True,
+        "partial": False,
+        "found": 1,
+        "remediation": {
+            "targets": 0,
+            "skipped_language": 0,
+            "refreshed": 0,
+            "metrics_written": 0,
+            "removed": 0,
+            "failed_platforms": 0,
+            "quota_used": 0,
+        },
+    }
     assert committed == ["commit"]  # só sabonetes comitou
     assert rolled_back == ["rollback"]  # velas sofreu rollback, não trava a sessão
 
@@ -1078,6 +1190,7 @@ async def test_create_segment_deps_builds_per_segment_bundle(
         platforms=["youtube"],
         keywords=["k1"],
         research=DepthConfig(max_depth=5),
+        search=SearchConfig(relevance_language="pt", accepted_language="pt-BR"),
     )
     seg_b = Segment(id=2, slug="sabonetes", name="Sabonetes", platforms=["youtube"], keywords=["k"])
     async with deps.create_segment_deps(seg_a) as bundle_a:
@@ -1085,10 +1198,13 @@ async def test_create_segment_deps_builds_per_segment_bundle(
         assert bundle_a.score.keywords == ["k1"]
         assert bundle_a.research.guard.admit("x", depth=4) is True
         assert bundle_a.collect.limiter is deps.shared.limiter
+        # R14/17-10: a remediação herda o idioma exigido do segmento
+        assert bundle_a.remediate.accepted_language == "pt-BR"
         await bundle_a.uow.commit()
     async with deps.create_segment_deps(seg_b) as bundle_b:
         assert bundle_b.score.segment.slug == "sabonetes"
         assert bundle_b.research.guard.admit("x", depth=4) is False
+        assert bundle_b.remediate.accepted_language is None
         await bundle_b.uow.commit()
     assert len(created) == 2  # só as UoWs dos segmentos
     assert created[0] is not created[1]
@@ -1142,6 +1258,7 @@ async def test_worker_segments_share_platform_slots_capping_tiktok(
 
     monkeypatch.setenv("WORKER_MAX_SEGMENTS", "3")
     monkeypatch.setenv("PLATFORM_MAX_CONCURRENCY", "tiktok=1")
+    _patch_noop_remediate(monkeypatch)
     _, session_factory = _recording_sessions()
     _patch_composition(monkeypatch, session_factory)
 
@@ -1344,6 +1461,7 @@ class _KeyedFakeLock:
 class _RealCollectBundle:
     uow: _FakeUoW
     collect: CollectDeps
+    remediate: RemediationDeps = field(default_factory=_noop_remediation_deps)
 
 
 class _SharedLimiterAppDeps:

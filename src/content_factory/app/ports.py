@@ -12,6 +12,8 @@ from content_factory.domain.models import (
     Discovery,
     KeywordSignal,
     MetricCoverage,
+    RefreshResult,
+    RemediationTarget,
     ResearchCampaign,
     ScoreResult,
     SearchQuery,
@@ -21,6 +23,7 @@ from content_factory.domain.models import (
     SegmentTerm,
     TrendPoint,
     UpsertStats,
+    VideoMetrics,
     VideoSnapshot,
     WebPageScoreRow,
     WebSearchHit,
@@ -72,6 +75,19 @@ class TermSearcher(Protocol):
     ) -> list[Discovery]: ...
 
 
+class RefreshableCollector(Protocol):
+    """R7: re-mede vídeos já conhecidos por id (só o YouTube implementa).
+
+    Porta separada do `Collector`: Instagram (mídia própria) e TikTok não
+    precisam implementá-la nem nos fakes. `refresh` devolve o que voltou do
+    `videos.list` e os ids que a plataforma não devolveu (removido/privado).
+    """
+
+    platform: ClassVar[str]
+
+    async def refresh(self, targets: Sequence[RemediationTarget]) -> RefreshResult: ...
+
+
 class TrendsProvider(Protocol):
     """Métrica de série temporal por keyword (ex. Google Trends)."""
 
@@ -96,6 +112,33 @@ class VideoRepository(Protocol):
     async def latest_for_segment(self, segment_id: int) -> list[VideoSnapshot]:
         """1 linha por vídeo do segmento com a métrica mais recente."""
         ...
+
+
+class RemediationRepository(Protocol):
+    """R7: alvos da remedição, gravação de métrica e marcação de removidos.
+
+    Deliberadamente separada de `VideoRepository`: a remedição **não** usa
+    `upsert_candidates` (que sobrescreveria metadados e `discovery_source`),
+    grava só `video_metrics`.
+    """
+
+    async def remediation_targets(
+        self,
+        segment_id: int,
+        since_days: int,
+        limit: int,
+        min_gap_hours: int,
+        platforms: Sequence[str],
+    ) -> list[RemediationTarget]:
+        """Vídeos do segmento descobertos nos últimos `since_days`, sem medição
+        nas últimas `min_gap_hours` e que não estejam marcados como removidos."""
+        ...
+
+    async def record_metrics(
+        self, target: RemediationTarget, metrics: VideoMetrics, followers_at_capture: int | None
+    ) -> None: ...
+
+    async def mark_removed(self, video_ids: Sequence[int]) -> int: ...
 
 
 @dataclass(frozen=True)

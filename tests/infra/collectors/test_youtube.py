@@ -1,8 +1,11 @@
+from typing import Any
+
 import httpx
 import pytest
 
 from content_factory.app.call_counters import counting
-from content_factory.domain.models import SegmentConfig
+from content_factory.domain.errors import UpstreamChanged
+from content_factory.domain.models import RemediationTarget, SegmentConfig
 from content_factory.infra.collectors.youtube import YoutubeCollector
 
 SEG = SegmentConfig(
@@ -541,6 +544,116 @@ async def test_channel_id_do_snippet_chega_no_candidato() -> None:
     out = await col.discover(SEG, limit=5)
     assert [c.creator_platform_id for c in out] == ["UC1"]
     assert out[0].creator_followers == 100
+
+
+def _video_item(vid: str, channel: str = "UC1") -> dict[str, Any]:
+    return {
+        "id": vid,
+        "snippet": {
+            "channelId": channel,
+            "channelTitle": "canal",
+            "title": f"vídeo {vid}",
+            "description": "",
+            "publishedAt": "2026-10-15T10:00:00Z",
+            "thumbnails": {"default": {"url": "https://img/x.jpg"}},
+        },
+        "statistics": {"viewCount": "10", "likeCount": "1", "commentCount": "0"},
+        "contentDetails": {"duration": "PT1M"},
+    }
+
+
+def _youtube_refresh_transport(
+    returned: list[str], calls: list[str] | None = None
+) -> httpx.MockTransport:
+    """`videos.list` devolve só os ids de `returned` que foram PEDIDOS (`id=`)."""
+
+    def _route(request: httpx.Request) -> httpx.Response:
+        if calls is not None:
+            calls.append(request.url.path)
+        if request.url.path.endswith("/videos"):
+            asked = (request.url.params.get("id") or "").split(",")
+            return httpx.Response(
+                200, json={"items": [_video_item(v) for v in asked if v in returned]}
+            )
+        return httpx.Response(
+            200, json={"items": [{"id": "UC1", "statistics": {"subscriberCount": "100"}}]}
+        )
+
+    return httpx.MockTransport(_route)
+
+
+def _collector_with_transport(transport: httpx.MockTransport) -> YoutubeCollector:
+    return YoutubeCollector(api_key="k", transport=transport)
+
+
+@pytest.mark.asyncio
+async def test_refresh_lotes_de_50_e_detecta_removido() -> None:
+    # transport devolve só "v2" no videos.list (v1 sumiu) e um channel
+    col = _collector_with_transport(_youtube_refresh_transport(returned=["v2"]))
+    out = await col.refresh(
+        [
+            RemediationTarget(video_id=1, platform="youtube", platform_video_id="v1"),
+            RemediationTarget(video_id=2, platform="youtube", platform_video_id="v2"),
+        ]
+    )
+    assert [c.platform_video_id for c in out.candidates] == ["v2"]
+    assert out.missing_ids == ["v1"]
+
+
+@pytest.mark.asyncio
+async def test_refresh_quebra_em_lotes_de_50_e_conta_cota() -> None:
+    calls: list[str] = []
+    ids = [f"v{i}" for i in range(51)]
+    col = _collector_with_transport(_youtube_refresh_transport(returned=ids, calls=calls))
+    targets = [
+        RemediationTarget(video_id=i, platform="youtube", platform_video_id=v)
+        for i, v in enumerate(ids)
+    ]
+    with counting() as counters:
+        out = await col.refresh(targets)
+    assert [c.platform_video_id for c in out.candidates] == ids
+    assert out.missing_ids == []
+    assert sum(1 for p in calls if p.endswith("/videos")) == 2  # 50 + 1
+    assert counters.quota_used == 4  # 2 lotes x (videos + channels)
+
+
+@pytest.mark.asyncio
+async def test_refresh_sem_items_levanta_upstream_changed() -> None:
+    """Revisão pre-merge: `{"items": []}` NÃO é evidência de remoção.
+
+    Sem isso o lote inteiro viraria `missing_ids` → `videos.removed_at` (o
+    vídeo sai dos alvos por toda a janela) num sintoma clássico de contrato
+    quebrado/quota estourada. Mesma regra do `_search_ranked` ("search sem
+    items"): resposta sem items é anomalia de upstream, não remoção.
+    """
+    col = _collector_with_transport(_youtube_refresh_transport(returned=[]))
+    with pytest.raises(UpstreamChanged) as exc:
+        await col.refresh(
+            [
+                RemediationTarget(video_id=1, platform="youtube", platform_video_id="v1"),
+                RemediationTarget(video_id=2, platform="youtube", platform_video_id="v2"),
+            ]
+        )
+    assert exc.value.code == "upstream_changed"
+
+
+@pytest.mark.asyncio
+async def test_refresh_com_algum_item_marca_o_ausente_como_removido() -> None:
+    """A detecção de removido continua: id ausente entre itens que voltaram.
+
+    O lote com resposta VÁLIDA (≥ 1 item) é evidência: o id que não voltou
+    saiu (removido/privado).
+    """
+    col = _collector_with_transport(_youtube_refresh_transport(returned=["v1", "v3"]))
+    out = await col.refresh(
+        [
+            RemediationTarget(video_id=1, platform="youtube", platform_video_id="v1"),
+            RemediationTarget(video_id=2, platform="youtube", platform_video_id="v2"),
+            RemediationTarget(video_id=3, platform="youtube", platform_video_id="v3"),
+        ]
+    )
+    assert [c.platform_video_id for c in out.candidates] == ["v1", "v3"]
+    assert out.missing_ids == ["v2"]
 
 
 @pytest.mark.asyncio

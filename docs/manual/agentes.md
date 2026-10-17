@@ -13,7 +13,7 @@ daqui usa os comandos do [Primeiro passo](guide-start.md) e da
 
 | Papel | Responsabilidade |
 |---|---|
-| Worker (arq, cron 07:00/08:00/20:00 BRT) | agenda e roda `research_job`/`collect_job`/`score_job` sobre todos os segmentos ativos ([Operação §4](operacao.md#4-worker-e-cron)) |
+| Worker (arq, cron 07:00 + collect/score 4×/dia BRT) | agenda e roda `research_job`/`collect_job`/`score_job` sobre todos os segmentos ativos ([Operação §4](operacao.md#4-worker-e-cron)) |
 | **Agente (este runbook)** | monitora saúde, diagnostica falhas, analisa scores, escala ao humano |
 
 O agente **não** agenda coletas periódicas (nada de cron ou loop próprio)
@@ -71,7 +71,7 @@ Ler o top-10 de `video_scores` com a query pronta de
 [Análise](analise.md) (não repetida aqui — mesmo `psql` do passo 2).
 Objetivo: confirmar que `cf score` do cron pontuou e que o ranking
 faz sentido; `cf score` manual só quando os dados mudaram desde o último
-disparo (08:30/21:30 BRT — [Operação §4](operacao.md#4-worker-e-cron)).
+disparo (30 min depois de cada coleta — [Operação §4](operacao.md#4-worker-e-cron)).
 
 ### Passo 4 — Escalonar ao humano quando
 

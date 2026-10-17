@@ -147,8 +147,8 @@ a CLI manual); cron no fuso do projeto:
 | Job | Horário (BRT) | Origem |
 |---|---|---|
 | `research_job` | 07:00 | fixo no código (`hour={7}`, `minute=0`) — só roda com campanha ativa ([§5](#5-campanhas-de-pesquisa-cf-research)) |
-| `collect_job` | 08:00 e 20:00 | horas via `COLLECT_CRON_HOURS` (default `08,20`), minuto `0` |
-| `score_job` | 08:30 e 21:30 | fixo no código (`hour={8, 21}`, `minute=30`) |
+| `collect_job` | 02:00, 08:00, 14:00 e 20:00 | horas via `COLLECT_CRON_HOURS` (default `02,08,14,20`), minuto `0` |
+| `score_job` | 02:30, 08:30, 14:30 e 20:30 | horas via `SCORE_CRON_HOURS` (default = `COLLECT_CRON_HOURS`), minuto `30` |
 
 Fuso fixo `America/Sao_Paulo` (`ZoneInfo` no `WorkerSettings`) — os horários
 não dependem do TZ da máquina. Os dois cron jobs têm `unique=True`: um
@@ -171,19 +171,35 @@ No log: `catch-up: <job> perdeu o horário — rodando agora` e o envelope
 `{"ok", "missed", "ran"}`.
 
 **Envs do worker** (`COLLECT_PLATFORMS`/`LIMIT` são relidas a cada
-job, assim como `WORKER_MAX_SEGMENTS`; `COLLECT_CRON_HOURS` e
-`COLLECT_MAX_CONCURRENCY` valem do carregamento
+job, assim como `WORKER_MAX_SEGMENTS`; `COLLECT_CRON_HOURS`,
+`COLLECT_MAX_CONCURRENCY` e as `REMEDIATION_*` valem do carregamento
 do processo — trocar exige restart do worker):
 
 | Env | Default | Significado |
 |---|---|---|
 | `COLLECT_PLATFORMS` | vazio | vazio = plataformas declaradas do segmento |
 | `COLLECT_LIMIT` | `10` | limite de vídeos por plataforma na coleta (produção: `25` desde 2026-10-16; o `3` do teste E2E ficou esquecido no `app.env` até lá) |
-| `COLLECT_CRON_HOURS` | `08,20` | horas do collect em BRT; valor inválido cai no default |
+| `COLLECT_CRON_HOURS` | `02,08,14,20` | horas do collect em BRT (4×/dia); valor inválido cai no default |
+| `SCORE_CRON_HOURS` | = `COLLECT_CRON_HOURS` | horas do score em BRT; ausente acompanha o collect (mesmo dia, minuto `30`) |
 | `COLLECT_MAX_CONCURRENCY` | `2` | teto de `discover()` simultâneos por collect (Task 7); ponto de partida para benchmark, não limite seguro universal; valor inválido ou < 1 cai em `2`/`1` |
 | `WORKER_MAX_SEGMENTS` | `3` | teto de segmentos simultâneos por job (Task 11); lido a cada tick, trocar não exige restart; valor inválido ou < 1 cai em `3`/`1` |
 | `CATCHUP_ON_STARTUP` | `1` | `0` desliga o catch-up de horário perdido no startup |
 | `PLATFORM_MAX_CONCURRENCY` | `tiktok=1,web=1` | teto de discovers simultâneos **por plataforma no processo**, entre segmentos (`plataforma=limite,…`); a env é SOMADA ao default, nunca remove o teto do TikTok; entrada inválida ou < 1 é ignorada; vale do startup (exige restart) |
+| `REMEDIATION_WINDOW_DAYS` | `7` | janela (em dias) dos vídeos remedidos: só os descobertos nesse período entram nos alvos (R7); vale do startup |
+| `REMEDIATION_LIMIT` | `500` | teto de alvos por segmento na remedição (R7) — 10 lotes de 50 ids no `videos.list` (YouTube) |
+| `REMEDIATION_MIN_GAP_HOURS` | `3` | não remedir vídeo com medição nas últimas N horas (R7): evita 2 medições com o mesmo `captured_at`; vale do startup |
+
+A remediação aplica a **regra de idioma do segmento** (`accepted_language` da
+busca, R14/17-10): o alvo cujo `videos.language` não casa — ex.: `pt-PT` com
+`pt-BR` — sai antes do coletor e não gasta cota (`skipped_language` no
+envelope). Histórico anterior à regra (a coleta real de 16/10 trouxe 12 de 27 em
+pt-PT) deixa de ser remedido; `pt` sem região e idioma não declarado ficam.
+
+A remediação pede os alvos em **lotes de 50** (`videos.list`): cada lote é
+gravado antes do próximo, então o erro de um lote não custa as métricas dos
+anteriores (a run `remediate:<plataforma>` fica `failed` com o `error_code`).
+Erro fora do contrato grava `internal_error` e **não** derruba a coleta; lote
+sem items (`{"items": []}`) é `upstream_changed` — nunca vira remoção em massa.
 
 Fixos no código (não são env):
 

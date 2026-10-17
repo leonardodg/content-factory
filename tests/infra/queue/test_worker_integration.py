@@ -19,6 +19,7 @@ from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from content_factory.app.collect import CollectDeps
+from content_factory.app.remediate import RemediationOutcome
 from content_factory.config import Settings
 from content_factory.domain.models import CandidateVideo, CollectRun, SegmentConfig
 from content_factory.infra.db.orm import (
@@ -34,6 +35,21 @@ from content_factory.infra.queue import worker as w
 from tests.conftest import requires_infra, requires_redis
 
 pytestmark = pytest.mark.integration
+
+
+def _patch_noop_remediate(monkeypatch: pytest.MonkeyPatch) -> None:
+    """R7: neutra o passo de remedição nestes testes (foco: UoW e erro).
+
+    Sem o stub o bundle REAL tocaria o YouTube de verdade (chave vazia →
+    `AuthExpired` → 1 `CollectRun` `remediate:youtube` extra por segmento),
+    sujando as contagens de `collect_runs`. A remedição tem testes próprios
+    (`tests/app/test_remediate.py`, `tests/infra/queue/test_worker.py`).
+    """
+
+    async def _noop(segment_id: int, deps: object) -> RemediationOutcome:
+        return RemediationOutcome()
+
+    monkeypatch.setattr(w, "_remediate_impl", _noop)
 
 
 @requires_infra
@@ -119,6 +135,7 @@ async def test_concurrent_segment_uows_isolate_commits(
             return _Out()
 
         monkeypatch.setattr(w, "_collect_impl", fake_collect)
+        _patch_noop_remediate(monkeypatch)
         out = await w.run_collect_job({"campaigns_deps": deps.campaigns, "app_deps": deps})
         assert state["peak"] == 3
         assert out["segments"][slugs[1]] == {
@@ -242,6 +259,7 @@ async def test_infra_error_in_persistence_reaches_envelope_unmasked(
             return await real_collect(slug_, ["youtube"], limit, bundle_collect)
 
         monkeypatch.setattr(w, "_collect_impl", _collect)
+        _patch_noop_remediate(monkeypatch)
         out = await w.run_collect_job({"campaigns_deps": deps.campaigns, "app_deps": deps})
         envelope = out["segments"][slug]
         assert envelope["ok"] is False

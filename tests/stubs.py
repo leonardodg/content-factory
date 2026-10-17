@@ -6,7 +6,7 @@ estrutura dos testes. Sem Redis, sem banco, sem rede.
 """
 
 import asyncio
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from datetime import date, datetime
 from math import ceil
 from typing import Any, ClassVar, Literal
@@ -17,6 +17,7 @@ from content_factory.app.ports import (
     CollectRunRepository,
     DiscoveryRepository,
     KeywordSignalRepository,
+    RemediationRepository,
     SearchQueryRepository,
     SegmentRepository,
     SegmentTermRepository,
@@ -31,6 +32,8 @@ from content_factory.domain.models import (
     CollectRun,
     Discovery,
     KeywordSignal,
+    RefreshResult,
+    RemediationTarget,
     SearchQuery,
     SearchQueryRun,
     Segment,
@@ -38,6 +41,7 @@ from content_factory.domain.models import (
     SegmentTerm,
     TrendPoint,
     UpsertStats,
+    VideoMetrics,
     VideoSnapshot,
     WebPageScoreRow,
     WebSearchHit,
@@ -157,6 +161,113 @@ class FakeLimiter:
             raise self._fail
 
 
+class FakeRefresher:
+    """`RefreshableCollector` determinístico (R7).
+
+    `found="all"` devolve todos os alvos; uma lista devolve só esses ids (os
+    demais viram `missing_ids`). `quota_per_batch` é somado via `record_quota`
+    por lote de 50 (mesmo custo do `videos.list` real). `error` levanta no
+    lugar de devolver candidatos.
+    """
+
+    platform: ClassVar[str] = "youtube"
+
+    def __init__(
+        self,
+        found: list[str] | str = "all",
+        *,
+        error: CollectorError | None = None,
+        error_on_call: int | None = None,
+        quota_per_batch: int = 0,
+    ) -> None:
+        self._found = found
+        self.error = error
+        self._error_on_call = error_on_call
+        self._quota_per_batch = quota_per_batch
+        self.calls = 0
+        self.asked: list[RemediationTarget] = []
+        self.batches: list[list[str]] = []
+
+    async def refresh(self, targets: Sequence[RemediationTarget]) -> RefreshResult:
+        self.calls += 1
+        self.asked.extend(targets)
+        self.batches.append([t.platform_video_id for t in targets])
+        if self._quota_per_batch:
+            for _ in range(0, len(targets), 50):
+                record_quota(self._quota_per_batch)
+        if self.error is not None and (
+            self._error_on_call is None or self.calls == self._error_on_call
+        ):
+            raise self.error
+        ids = [t.platform_video_id for t in targets]
+        keep = ids if self._found == "all" else [i for i in ids if i in self._found]
+        return RefreshResult(
+            candidates=[
+                CandidateVideo(
+                    platform=self.platform,
+                    platform_video_id=vid,
+                    url=f"https://youtu.be/{vid}",
+                    creator_handle="stub",
+                    creator_followers=500,
+                    title=vid,
+                    views=100,
+                    likes=5,
+                )
+                for vid in keep
+            ],
+            missing_ids=[i for i in ids if i not in keep],
+        )
+
+
+class FakeRemediationRepo(RemediationRepository):
+    """`RemediationRepository` em memória (R7): alvos fixos, métricas e removidos.
+
+    `video_id` dos alvos = posição na lista (1-based), para o teste amarrar
+    o id de vídeo ao alvo (v1 → 1).
+    """
+
+    def __init__(
+        self,
+        targets: Sequence[str],
+        platform: str = "youtube",
+        languages: Mapping[str, str | None] | None = None,
+    ) -> None:
+        self._targets = list(targets)
+        self._platform = platform
+        self._languages = dict(languages or {})
+        self.asked: list[tuple[int, int, int, int, list[str]]] = []
+        self.metrics: list[tuple[RemediationTarget, VideoMetrics, int | None]] = []
+        self.removed: list[int] = []
+
+    async def remediation_targets(
+        self,
+        segment_id: int,
+        since_days: int,
+        limit: int,
+        min_gap_hours: int,
+        platforms: Sequence[str],
+    ) -> list[RemediationTarget]:
+        self.asked.append((segment_id, since_days, limit, min_gap_hours, list(platforms)))
+        return [
+            RemediationTarget(
+                video_id=i + 1,
+                platform=self._platform,
+                platform_video_id=v,
+                language=self._languages.get(v),
+            )
+            for i, v in enumerate(self._targets)
+        ]
+
+    async def record_metrics(
+        self, target: RemediationTarget, metrics: VideoMetrics, followers_at_capture: int | None
+    ) -> None:
+        self.metrics.append((target, metrics, followers_at_capture))
+
+    async def mark_removed(self, video_ids: Sequence[int]) -> int:
+        self.removed.extend(video_ids)
+        return len(video_ids)
+
+
 class FakeLock:
     """Lock de estado único: `acquired` é o que o próximo `acquire_once` devolve.
 
@@ -234,6 +345,11 @@ class _FakeRuns:
     async def record(self, run: CollectRun) -> int:
         self.recorded.append(run)
         return len(self.recorded)
+
+    @property
+    def saved(self) -> list[CollectRun]:
+        """Alias de `recorded` (nomenclatura do plano do Bloco 3, R7)."""
+        return self.recorded
 
     async def status_counts(self, segment_id: int, since: datetime) -> dict[str, int]:
         _ = segment_id, since

@@ -15,6 +15,7 @@ from collections.abc import Callable, Mapping
 from typing import Any
 
 from content_factory.app.collect import CollectOutcome
+from content_factory.app.remediate import RemediationOutcome
 from content_factory.app.research_pipeline import ResearchOutcome
 from content_factory.app.score import ScoreOutcome
 
@@ -37,6 +38,19 @@ def collect_result(out: CollectOutcome) -> dict[str, Any]:
     code = next((r.error_code for r in out.runs if r.error_code), "internal_error")
     failed = int(out.counts.get("failed", 0))
     return {**_error(code, f"coleta falhou em {failed} plataforma(s)"), **out.counts}
+
+
+def remediation_result(out: RemediationOutcome) -> dict[str, int]:
+    """Sub-envelope `remediation` da coleta (R7) — só contagens, chaves estáveis."""
+    return {
+        "targets": out.targets,
+        "skipped_language": out.skipped_language,
+        "refreshed": out.refreshed,
+        "metrics_written": out.metrics_written,
+        "removed": out.removed,
+        "failed_platforms": out.failed_platforms,
+        "quota_used": out.quota_used,
+    }
 
 
 def score_result(out: ScoreOutcome) -> dict[str, Any]:

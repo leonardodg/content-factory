@@ -10,6 +10,7 @@ from typing import Protocol
 
 from content_factory.app.collect import CollectDeps
 from content_factory.app.ports import UnitOfWork, WebScoreRepository
+from content_factory.app.remediate import RemediationDeps
 from content_factory.app.research_pipeline import ResearchDeps
 from content_factory.app.score import ScoreDeps
 from content_factory.domain.models import Segment
@@ -33,6 +34,8 @@ class SegmentDepsBundle:
     research: ResearchDeps
     # F5: score web próprio (CLI sempre; worker só sob WEB_SCORE_ENABLED).
     web: WebScoreRepository
+    # R7: remedição dos vídeos conhecidos, na MESMA UoW do collect.
+    remediate: RemediationDeps
 
 
 class SegmentDepsFactory(Protocol):

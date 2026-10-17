@@ -71,6 +71,8 @@ class VideoRow(Base):
     raw: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict)
     first_collected_at: Mapped[datetime] = mapped_column(server_default=func.now())
     last_collected_at: Mapped[datetime] = mapped_column(server_default=func.now())
+    # R7: marcado quando a remedição não encontra mais o vídeo (removido/privado)
+    removed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     creator: Mapped[CreatorRow | None] = relationship()
 
 

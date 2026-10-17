@@ -677,10 +677,17 @@ def _collect_outcomes() -> list[CollectOutcome]:
 def test_collect_envelope_parity_cli_and_worker(
     monkeypatch: pytest.MonkeyPatch, outcome: CollectOutcome
 ) -> None:
-    """C3: mesmo CollectOutcome → CLI (sem `command`) == segmento do collect_job."""
+    """C3: mesmo CollectOutcome → CLI (sem `command`) == segmento do collect_job.
+
+    R7: o worker remedeia dentro do job e acrescenta o sub-envelope
+    `remediation`; a CLI (`cf collect`) não remedeia. O contrato C3 é o
+    `collect_result` (o mesmo dict), então a paridade compara o resto e o
+    passo da remedição é verificado à parte.
+    """
     import asyncio
     import json
 
+    from content_factory.app.remediate import RemediationOutcome
     from content_factory.infra.queue import worker as w
 
     async def _fake_acollect(_slug: str, _platforms: list[str], _limit: int) -> CollectOutcome:
@@ -694,8 +701,12 @@ def test_collect_envelope_parity_cli_and_worker(
     async def _fake_collect(*_args: object) -> CollectOutcome:
         return outcome
 
+    async def _fake_remediate(_segment_id: int, _deps: object) -> RemediationOutcome:
+        return RemediationOutcome()
+
     class _Bundle:
         collect = None
+        remediate = None
 
         class uow:
             @staticmethod
@@ -714,10 +725,26 @@ def test_collect_envelope_parity_cli_and_worker(
             return [Segment(id=1, slug="velas", name="Velas", platforms=["web"], keywords=["v"])]
 
     monkeypatch.setattr(w, "_collect_impl", _fake_collect)
+    monkeypatch.setattr(w, "_remediate_impl", _fake_remediate)
     cfg: dict[str, Any] = {"platforms": [], "limit": 10}
     monkeypatch.setattr(w, "_load_settings", lambda: cfg)
     job = asyncio.run(w.run_collect_job({"campaigns_deps": _Campaigns(), "app_deps": _AppDeps()}))
-    assert job["segments"]["velas"] == cli
+    worker_seg = dict(job["segments"]["velas"])
+    remediation = worker_seg.pop("remediation", None)
+    if "ja_em_execucao" in outcome.counts:
+        # R7: lock ocupado ⇒ o collect nem rodou; remedir gravaria métrica duplicada
+        assert remediation is None
+    else:
+        assert remediation == {
+            "targets": 0,
+            "skipped_language": 0,
+            "refreshed": 0,
+            "metrics_written": 0,
+            "removed": 0,
+            "failed_platforms": 0,
+            "quota_used": 0,
+        }
+    assert worker_seg == cli
 
 
 # --- web commands (R #45) ---

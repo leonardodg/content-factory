@@ -29,11 +29,14 @@ from content_factory.app.ports import (
     JobRunReader,
     ResearchCampaignRepository,
 )
+from content_factory.app.remediate import remediate
 from content_factory.app.research_pipeline import run_research_cycle
 from content_factory.app.results import (
+    LOCK_BUSY,
     collect_result,
     exception_result,
     job_result,
+    remediation_result,
     research_result,
     score_result,
 )
@@ -57,7 +60,6 @@ TIMEZONE = ZoneInfo("America/Sao_Paulo")
 RESEARCH_HOURS = {7}
 RESEARCH_MINUTE = 0
 COLLECT_MINUTE = 0
-SCORE_HOURS = {8, 21}
 SCORE_MINUTE = 30
 
 
@@ -97,6 +99,18 @@ def _max_segments_from_env() -> int:
     except ValueError:
         return 3
     return max(1, value)
+
+
+def _int_env(name: str, default: int) -> int:
+    """Inteiro de env com fallback no default (R7: `REMEDIATION_*`).
+
+    Mesmo critério de `_max_concurrency_from_env`: valor inválido não derruba
+    o startup do worker — cai no default.
+    """
+    try:
+        return int(os.getenv(name, str(default)))
+    except ValueError:
+        return default
 
 
 def _platform_max_concurrency_from_env() -> dict[str, int]:
@@ -179,6 +193,7 @@ async def _gather_segments(
 
 # hooks de teste: monkeypatch troca por fakes sem tocar no arq/banco
 _collect_impl: Callable[..., Awaitable[Any]] = collect
+_remediate_impl: Callable[..., Awaitable[Any]] = remediate
 _score_impl: Callable[..., Awaitable[Any]] = score
 _research_impl: Callable[..., Awaitable[Any]] = run_research_cycle
 _web_rank_impl: Callable[..., Awaitable[Any]] = web_rank
@@ -207,8 +222,17 @@ async def run_collect_job(ctx: dict[str, Any]) -> dict[str, Any]:
         platforms: list[str] = cfg["platforms"] or segment.platforms
         async with app_deps.create_segment_deps(segment) as bundle:
             out = await _collect_impl(segment.slug, platforms, cfg["limit"], bundle.collect)
+            result = collect_result(out)
+            # R7: a remedição roda na MESMA UoW/commit do segmento, logo após a
+            # coleta — inclusive com falha PARCIAL de coleta (é independente
+            # dela). Só não roda quando o collect nem começou (lock ocupado):
+            # o outro collect ainda não commitou as medições e a remedição
+            # gravaria snapshots duplicados do mesmo vídeo.
+            if LOCK_BUSY not in out.counts:
+                remediation = await _remediate_impl(segment.id, bundle.remediate)
+                result["remediation"] = remediation_result(remediation)
             await bundle.uow.commit()
-        return collect_result(out)
+        return result
 
     return await _gather_segments(active, _max_segments_from_env(), _one, "collect")
 
@@ -288,7 +312,13 @@ def _now() -> datetime:
 
 
 def _collect_hours() -> set[int]:
-    return parse_cron_hours(os.getenv("COLLECT_CRON_HOURS", "08,20"))
+    return parse_cron_hours(os.getenv("COLLECT_CRON_HOURS", "02,08,14,20"))
+
+
+def _score_hours() -> set[int]:
+    """R12: score acompanha o collect por padrão (minuto 30, R7 dentro da coleta)."""
+    raw = os.getenv("SCORE_CRON_HOURS")
+    return parse_cron_hours(raw) if raw is not None else _collect_hours()
 
 
 def catchup_schedules() -> list[CronSchedule]:
@@ -300,7 +330,7 @@ def catchup_schedules() -> list[CronSchedule]:
     return [
         CronSchedule("research", _times(RESEARCH_HOURS, RESEARCH_MINUTE)),
         CronSchedule("collect", _times(_collect_hours(), COLLECT_MINUTE)),
-        CronSchedule("score", _times(SCORE_HOURS, SCORE_MINUTE)),
+        CronSchedule("score", _times(_score_hours(), SCORE_MINUTE)),
     ]
 
 
@@ -352,12 +382,16 @@ async def create_app_deps(settings: Settings) -> AppDeps:
 
     `COLLECT_MAX_CONCURRENCY` e `PLATFORM_MAX_CONCURRENCY` valem do startup,
     ao contrário de `COLLECT_PLATFORMS`/`COLLECT_LIMIT`, relidas a cada tick.
+    As envs `REMEDIATION_*` (R7) também valem do startup.
     """
     return await compose_app_deps(
         settings,
         max_concurrent_discoveries=int(_load_settings()["max_concurrency"]),
         platform_limits=_platform_max_concurrency_from_env(),
         social_platforms=parse_social_platforms(os.getenv("RESEARCH_SOCIAL_PLATFORMS")),
+        remediation_window_days=_int_env("REMEDIATION_WINDOW_DAYS", 7),
+        remediation_limit=_int_env("REMEDIATION_LIMIT", 500),
+        remediation_min_gap_hours=_int_env("REMEDIATION_MIN_GAP_HOURS", 3),
     )
 
 
@@ -433,7 +467,7 @@ class WorkerSettings:
         cron(
             run_score_job,
             name="score_job",
-            hour=SCORE_HOURS,
+            hour=_score_hours(),
             minute=SCORE_MINUTE,
             unique=True,
             timeout=SCORE_JOB_TIMEOUT_S,
@@ -446,7 +480,7 @@ class WorkerSettings:
     # anterior existia SÓ porque a sessão era compartilhada (quebraria com
     # IllegalStateChangeError sob o default max_jobs=10 do arq).
     max_jobs: ClassVar[int] = 3
-    # cron em horário local do projeto (07:00 research, 08:00/20:00 collect BRT)
+    # cron em horário local do projeto (07:00 research; collect/score 4x/dia por env, R12)
     timezone: ClassVar[tzinfo] = TIMEZONE
     on_startup: ClassVar[StartupShutdown] = startup
     # SEM on_job_end (Task 11, decisão REMOVER): o job_end antigo fazia

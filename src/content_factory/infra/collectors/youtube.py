@@ -1,4 +1,5 @@
 import re
+from collections.abc import Sequence
 from datetime import UTC, datetime, timedelta
 from typing import Any, ClassVar, cast
 
@@ -6,9 +7,13 @@ import httpx
 
 from content_factory.app.call_counters import record_quota
 from content_factory.domain.errors import AuthExpired, NetworkError, RateLimited, UpstreamChanged
+from content_factory.domain.language import language_matches as _language_matches
+from content_factory.domain.language import wanted_language
 from content_factory.domain.models import (
     CandidateVideo,
     Discovery,
+    RefreshResult,
+    RemediationTarget,
     SearchConfig,
     SearchQuery,
     SegmentConfig,
@@ -192,6 +197,53 @@ class YoutubeCollector:
             for position, cand in ranked
         ]
 
+    async def refresh(self, targets: Sequence[RemediationTarget]) -> RefreshResult:
+        """R7: `videos.list` em lotes de 50 + `channels.list`; ids ausentes = removidos.
+
+        Cota: 1 unidade por lote de `videos.list` + 1 por `channels.list`
+        (mesmo `COST_LIST` do `_search_ranked`). Id que a plataforma não
+        devolveu DENTRO de um lote com resposta válida = removido/privado
+        (marca-se `removed_at` fora daqui).
+
+        Lote SEM items (`{"items": []}` ou sem a chave) levanta
+        `UpstreamChanged`: com quota estourada/contrato quebrado a resposta vem
+        vazia, e tratar isso como "todos removidos" tira os vídeos dos alvos
+        por toda a janela — mesma regra do `_search_ranked` ("search sem
+        items"). O use-case chama `refresh` em lotes de 50 (R7, revisão):
+        a resposta vazia de um lote pequeno que era mesmo todo removido vira
+        run `failed` (visível), não remoção em massa.
+        """
+        found: list[CandidateVideo] = []
+        missing: list[str] = []
+        ids = [t.platform_video_id for t in targets]
+        for start in range(0, len(ids), 50):
+            chunk = ids[start : start + 50]
+            stats = await self._get(
+                "videos",
+                {"part": "statistics,snippet,contentDetails", "id": ",".join(chunk)},
+            )
+            record_quota(self.COST_LIST)
+            items = stats.get("items")
+            if not isinstance(items, list) or not items:
+                raise UpstreamChanged(self.platform, "videos.list sem items")
+            entries = cast(list[dict[str, Any]], items)
+            stats_by_id = {str(v["id"]): v for v in entries}
+            missing += [i for i in chunk if i not in stats_by_id]
+            channels = await self._get(
+                "channels",
+                {
+                    "part": "statistics",
+                    "id": ",".join({v["snippet"]["channelId"] for v in stats_by_id.values()}),
+                },
+            )
+            record_quota(self.COST_LIST)
+            followers = {
+                str(c["id"]): int(c["statistics"].get("subscriberCount", 0))
+                for c in channels.get("items", [])
+            }
+            found += [self._map(v, followers) for v in stats_by_id.values()]
+        return RefreshResult(candidates=found, missing_ids=missing)
+
     async def _search_ranked(
         self, q: str, limit: int, search: SearchConfig | None = None
     ) -> list[tuple[int, CandidateVideo]]:
@@ -252,9 +304,7 @@ class YoutubeCollector:
             ((position[str(v["id"])], self._map(v, followers)) for v in stats_by_id.values()),
             key=lambda pc: pc[0],
         )
-        wanted = (
-            (search.accepted_language or search.relevance_language) if search is not None else None
-        )
+        wanted = wanted_language(search)
         return [(p, c) for p, c in ranked if _language_matches(c.language, wanted)]
 
     async def _search(
@@ -285,27 +335,6 @@ class YoutubeCollector:
             language=sn.get("defaultAudioLanguage") or sn.get("defaultLanguage") or None,
             raw=v,
         )
-
-
-def _language_matches(declared: str | None, wanted: str | None) -> bool:
-    """Filtro pós-busca do idioma (T3, 2026-10-16).
-
-    `relevanceLanguage` é só preferência na API: frases exatas sem resultado em
-    pt voltam completadas com vídeos em en/es. Descarta o vídeo cujo idioma
-    DECLARADO tem outro prefixo (pt-BR ≈ pt). Sem idioma declarado, mantém:
-    não há evidência para descartar.
-
-    `wanted` com região (`pt-BR`, de `accepted_language`): declarado com região
-    tem de ser igual (`pt-PT` sai); declarado só com o idioma (`pt`) fica —
-    não há evidência de outra região.
-    """
-    if not wanted or not declared:
-        return True
-    want_lang, _, want_region = wanted.casefold().partition("-")
-    decl_lang, _, decl_region = declared.casefold().partition("-")
-    if decl_lang != want_lang:
-        return False
-    return not (want_region and decl_region) or decl_region == want_region
 
 
 class SearchBoundYoutube:

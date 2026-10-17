@@ -271,3 +271,24 @@ class SearchQueryRun(BaseModel):
     error_code: str | None = None
     started_at: datetime
     finished_at: datetime
+
+
+class RemediationTarget(BaseModel):
+    """R7: alvo de remedição — identificadores só, sem métrica.
+
+    `language` é o idioma DECLARADO do vídeo (`videos.language`), usado pela
+    remediação para aplicar a regra de idioma do segmento (R14/17-10): o alvo
+    que não casa (ex.: `pt-PT` com `accepted_language: pt-BR`) não é remedido.
+    """
+
+    video_id: int
+    platform: str
+    platform_video_id: str
+    language: str | None = None
+
+
+class RefreshResult(BaseModel):
+    """R7: o que a remedição achou e o que sumiu (removido/privado)."""
+
+    candidates: list[CandidateVideo] = Field(default_factory=list[CandidateVideo])
+    missing_ids: list[str] = Field(default_factory=list[str])

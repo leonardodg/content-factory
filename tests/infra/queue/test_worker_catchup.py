@@ -124,6 +124,21 @@ def test_catchup_schedules_match_registered_crons() -> None:
     assert w.catchup_schedules()[0].times == (time(7, 0),)
 
 
+def test_collect_e_score_4x_por_dia_por_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("COLLECT_CRON_HOURS", "02,08,14,20")
+    monkeypatch.setenv("SCORE_CRON_HOURS", "02,08,14,20")
+    sched = {s.job: s.times for s in w.catchup_schedules()}
+    assert sched["collect"] == (time(2, 0), time(8, 0), time(14, 0), time(20, 0))
+    assert sched["score"] == (time(2, 30), time(8, 30), time(14, 30), time(20, 30))
+
+
+def test_score_default_igual_ao_collect(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("COLLECT_CRON_HOURS", "06,18")
+    monkeypatch.delenv("SCORE_CRON_HOURS", raising=False)
+    sched = {s.job: s.times for s in w.catchup_schedules()}
+    assert sched["score"] == (time(6, 30), time(18, 30))
+
+
 def test_catchup_job_is_registered_with_combined_timeout() -> None:
     funcs = {f.name: f for f in w.WorkerSettings.functions}
     assert "catchup_job" in funcs

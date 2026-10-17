@@ -17,8 +17,8 @@ segmento); setas `-.->` são leituras de config/env.
 flowchart TB
     subgraph CRON["arq · America/Sao_Paulo · max_jobs=3"]
         R["research_job<br/>07:00"]
-        C["collect_job<br/>08:00 + 20:00"]
-        S["score_job<br/>08:30 + 21:30"]
+        C["collect_job<br/>02/08/14/20:00"]
+        S["score_job<br/>02/08/14/20:30"]
     end
     R --> SEGS["active_segments()<br/>campanhas ativas, não vencidas"]
     C --> SEGS
