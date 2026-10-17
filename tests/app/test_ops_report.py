@@ -185,12 +185,15 @@ def test_ops_report_traz_as_secoes_do_teste_viral() -> None:
     assert rep["search_quota"]["by_origin"]["youtube:seed"]["videos_per_search"] == 7.0
     assert rep["discovery_origins"]["suggest"] == 25
     assert rep["remediation"]["coverage"] == 0.95
-    assert rep["term_pool"]["suggest"]["excluded"] == 5
-    assert rep["filter_discards"] == {"lang": 4, "no_anchor": 1}
-    assert rep["language"]["youtube"]["rate"] == 0.8
+    assert rep["segment_all_time"]["term_pool"]["suggest"]["excluded"] == 5
+    assert rep["segment_all_time"]["filter_discards"] == {"lang": 4, "no_anchor": 1}
+    assert rep["segment_all_time"]["language"]["youtube"]["rate"] == 0.8
+    # escopo explícito (revisão externa): o acumulado não fica no topo da janela
+    assert "term_pool" not in rep and "language" not in rep
 
 
 def test_ops_report_sem_dados_novos_continua_valido() -> None:
     rep = build_ops_report(runs=[], coverage={}, scored=0, since=_SINCE, until=_UNTIL)
     assert rep["remediation"]["coverage"] is None
-    assert rep["term_pool"] == {} and rep["filter_discards"] == {}
+    assert rep["segment_all_time"]["term_pool"] == {}
+    assert rep["segment_all_time"]["filter_discards"] == {}
