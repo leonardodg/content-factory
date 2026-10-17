@@ -23,6 +23,7 @@ from content_factory.domain.models import (
 )
 from content_factory.infra.db.orm import (
     CollectRunRow,
+    CreatorRow,
     VideoMetricsRow,
     VideoRow,
     VideoScoreRow,
@@ -1796,4 +1797,90 @@ async def test_keyword_signal_days_conta_dias_distintos() -> None:
         await repo.record_days(seg.id, ["vela"], "web_suggest", date(2026, 10, 14))
         await repo.record_days(seg.id, ["vela"], "web_suggest", date(2026, 9, 1))  # fora da janela
         assert await repo.days_seen(seg.id, "web_suggest", 7, today) == {"vela": 2}
+    await engine.dispose()
+
+
+@requires_infra
+async def test_upsert_preenche_criador_e_liga_ao_video() -> None:
+    """R8: channelId → creators; videos.creator_id; followers não regridem a NULL."""
+    engine = create_async_engine(os.environ["TEST_DATABASE_URL"])
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    async with factory() as s:
+        await s.rollback()
+        seg = await SegmentRepositoryImpl(s).upsert(
+            SegmentConfig(
+                slug=f"teste-creator-{uuid4().hex[:8]}",
+                name="Teste creator",
+                platforms=["youtube"],
+                keywords=["k"],
+            )
+        )
+        cid = f"UC{uuid4().hex[:12]}"
+        c = CandidateVideo(
+            platform="youtube",
+            platform_video_id=f"vid-creator-{uuid4().hex[:12]}",
+            url="https://youtu.be/x",
+            creator_handle="Canal X",
+            creator_platform_id=cid,
+            creator_followers=1234,
+        )
+        repo = VideoRepositoryImpl(s)
+        await repo.upsert_candidates(seg.id, "youtube", [c])
+        creator = (
+            await s.execute(select(CreatorRow).where(CreatorRow.platform_creator_id == cid))
+        ).scalar_one()
+        assert (creator.platform, creator.username, creator.followers_count) == (
+            "youtube",
+            "Canal X",
+            1234,
+        )
+        vid = (
+            await s.execute(
+                select(VideoRow).where(VideoRow.platform_video_id == c.platform_video_id)
+            )
+        ).scalar_one()
+        assert vid.creator_id == creator.id
+        # 2ª coleta sem subscriberCount (None) NÃO apaga o followers conhecido
+        await repo.upsert_candidates(
+            seg.id, "youtube", [c.model_copy(update={"creator_followers": None})]
+        )
+        creator2 = (
+            await s.execute(select(CreatorRow).where(CreatorRow.platform_creator_id == cid))
+        ).scalar_one()
+        assert creator2.followers_count == 1234
+    await engine.dispose()
+
+
+@requires_infra
+async def test_upsert_sem_channel_id_nao_cria_criador() -> None:
+    """R8: Instagram/web não têm id de criador → creator_id NULL, sem linha."""
+    engine = create_async_engine(os.environ["TEST_DATABASE_URL"])
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    async with factory() as s:
+        await s.rollback()
+        seg = await SegmentRepositoryImpl(s).upsert(
+            SegmentConfig(
+                slug=f"teste-nocreator-{uuid4().hex[:8]}",
+                name="Teste sem creator",
+                platforms=["instagram"],
+                keywords=["k"],
+            )
+        )
+        handle = f"u-{uuid4().hex[:8]}"
+        c = CandidateVideo(
+            platform="instagram",
+            platform_video_id=f"reel-{uuid4().hex[:12]}",
+            url="https://instagram.com/reel/x",
+            creator_handle=handle,
+        )
+        await VideoRepositoryImpl(s).upsert_candidates(seg.id, "instagram", [c])
+        vid = (
+            await s.execute(
+                select(VideoRow).where(VideoRow.platform_video_id == c.platform_video_id)
+            )
+        ).scalar_one()
+        assert vid.creator_id is None
+        assert (
+            await s.execute(select(CreatorRow).where(CreatorRow.username == handle))
+        ).scalar_one_or_none() is None
     await engine.dispose()

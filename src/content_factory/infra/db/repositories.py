@@ -51,6 +51,7 @@ from content_factory.domain.web_relevance import WebPageInput
 from content_factory.domain.web_urls import ad_signal, canonicalize
 from content_factory.infra.db.orm import (
     CollectRunRow,
+    CreatorRow,
     KeywordSignalDayRow,
     KeywordSignalRow,
     ResearchCampaignRow,
@@ -130,6 +131,32 @@ class VideoRepositoryImpl(VideoRepository):
             # (ex.: conexão) seguem propagando.
             try:
                 async with self._s.begin_nested():
+                    # R8: criador a partir do channelId (YouTube). Sem
+                    # `creator_platform_id` (Instagram/web) não há linha em
+                    # `creators` e o vídeo fica com creator_id NULL.
+                    creator_id: int | None = None
+                    if c.creator_platform_id:
+                        cstmt = pg_insert(CreatorRow).values(
+                            platform=c.platform,
+                            platform_creator_id=c.creator_platform_id,
+                            username=c.creator_handle,
+                            followers_count=c.creator_followers,
+                            raw={},  # o raw do candidato é do VÍDEO, não do criador
+                        )
+                        cstmt = cstmt.on_conflict_do_update(
+                            index_elements=["platform", "platform_creator_id"],
+                            set_={
+                                "username": cstmt.excluded.username,
+                                # COALESCE: coleta sem subscriberCount não apaga
+                                # o valor conhecido
+                                "followers_count": func.coalesce(
+                                    cstmt.excluded.followers_count, CreatorRow.followers_count
+                                ),
+                            },
+                        )
+                        creator_id = (
+                            await self._s.execute(cstmt.returning(CreatorRow.id))
+                        ).scalar_one()
                     stmt = pg_insert(VideoRow).values(
                         platform=c.platform,
                         platform_video_id=c.platform_video_id,
@@ -140,6 +167,7 @@ class VideoRepositoryImpl(VideoRepository):
                         duration_s=c.duration_s,
                         thumbnail_url=c.thumbnail_url,
                         language=c.language,
+                        creator_id=creator_id,
                         raw=c.raw,
                     )
                     stmt = stmt.on_conflict_do_update(
@@ -166,6 +194,11 @@ class VideoRepositoryImpl(VideoRepository):
                                 stmt.excluded.thumbnail_url, VideoRow.thumbnail_url
                             ),
                             "language": func.coalesce(stmt.excluded.language, VideoRow.language),
+                            # R8: só preenche o vínculo quando esta coleta o
+                            # trouxe — coleta sem channelId não desliga o criador
+                            "creator_id": func.coalesce(
+                                stmt.excluded.creator_id, VideoRow.creator_id
+                            ),
                             "raw": stmt.excluded.raw,
                             "last_collected_at": stmt.excluded.last_collected_at,
                         },
