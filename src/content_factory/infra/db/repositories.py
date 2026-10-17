@@ -17,6 +17,7 @@ from content_factory.app.ports import (
     JobRunReader,
     KeywordSignalRepository,
     OpsReportReader,
+    PopulationReader,
     RemediationRepository,
     ResearchCampaignRepository,
     ScoreRepository,
@@ -24,10 +25,12 @@ from content_factory.app.ports import (
     SearchQueryRepository,
     SegmentRepository,
     SegmentTermRepository,
+    TermReportRepository,
     TermTrendRepository,
     TrendObservationRepository,
     UpsertReport,
     VideoRepository,
+    ViralV2Repository,
     WebHitRepository,
     WebScoreRepository,
 )
@@ -39,6 +42,7 @@ from content_factory.domain.models import (
     Discovery,
     KeywordSignal,
     MetricCoverage,
+    PopulationRow,
     RemediationTarget,
     ResearchCampaign,
     ScoreResult,
@@ -46,6 +50,7 @@ from content_factory.domain.models import (
     Segment,
     SegmentConfig,
     SegmentTerm,
+    TermReportRecord,
     TermTrendDay,
     TrendPoint,
     UpsertStats,
@@ -55,6 +60,7 @@ from content_factory.domain.models import (
     WebSearchHit,
 )
 from content_factory.domain.scoring import FORMULA_VERSION
+from content_factory.domain.viral_v2 import VIRAL_V2_VERSION, ViralScore
 from content_factory.domain.web_relevance import WebPageInput
 from content_factory.domain.web_urls import ad_signal, canonicalize
 from content_factory.infra.db.orm import (
@@ -66,12 +72,14 @@ from content_factory.infra.db.orm import (
     SearchQueryRow,
     SegmentRow,
     SegmentTermRow,
+    TermReportRow,
     TermTrendDayRow,
     TrendObservationRow,
     VideoDiscoveryRow,
     VideoMetricsRow,
     VideoRow,
     VideoScoreRow,
+    VideoScoreV2Row,
     VideoSegmentRow,
     WebSearchHitRow,
 )
@@ -1321,3 +1329,169 @@ class WebScoreRepositoryImpl(WebScoreRepository):
             )
             for r in rows
         ]
+
+
+# R9/R10: população do viral-v2 NO CORTE. `m` = medições até o corte por
+# vídeo do segmento; `last` = a mais recente; `prev` = a anterior com pelo
+# menos 1 h de intervalo (2 medições na mesma transação têm o mesmo
+# captured_at e não servem de base para velocidade). Janela de publicação de
+# `window_days` e vídeo não removido até o corte.
+_POPULATION_SQL = text(
+    """
+    WITH m AS (
+      SELECT vm.id, vm.video_id, vm.views, vm.likes, vm.comments, vm.shares, vm.saves,
+             vm.captured_at, vm.followers_at_capture,
+             row_number() OVER (
+               PARTITION BY vm.video_id ORDER BY vm.captured_at DESC, vm.id DESC
+             ) AS rn
+      FROM video_metrics vm
+      JOIN video_segments vs ON vs.video_id = vm.video_id AND vs.segment_id = :segment_id
+      WHERE vm.captured_at <= :as_of
+    ), last AS (SELECT * FROM m WHERE rn = 1),
+    prev AS (
+      SELECT DISTINCT ON (m.video_id) m.video_id, m.views, m.captured_at
+      FROM m JOIN last l ON l.video_id = m.video_id
+      WHERE m.captured_at <= l.captured_at - interval '1 hour'
+      ORDER BY m.video_id, m.captured_at DESC, m.id DESC
+    )
+    SELECT v.id, v.platform, v.platform_video_id, v.title, v.description, v.language,
+           v.raw, v.published_at, l.views, l.likes, l.comments, l.shares, l.saves,
+           l.captured_at, p.views AS prev_views, p.captured_at AS prev_captured_at,
+           coalesce(l.followers_at_capture, c.followers_count) AS followers
+    FROM last l
+    JOIN videos v ON v.id = l.video_id
+    LEFT JOIN prev p ON p.video_id = l.video_id
+    LEFT JOIN creators c ON c.id = v.creator_id
+    WHERE v.published_at >= :as_of - make_interval(days => :window_days)
+      AND (v.removed_at IS NULL OR v.removed_at > :as_of)
+    ORDER BY v.id
+    """
+)
+
+
+def _tags_of(raw: object) -> list[str]:
+    """`raw.snippet.tags` do YouTube, só strings (raw é dado externo)."""
+    if not isinstance(raw, dict):
+        return []
+    snippet = cast(dict[str, object], raw).get("snippet")
+    if not isinstance(snippet, dict):
+        return []
+    tags = cast(dict[str, object], snippet).get("tags")
+    if not isinstance(tags, list):
+        return []
+    return [t for t in cast(list[object], tags) if isinstance(t, str)]
+
+
+class PopulationReaderImpl(PopulationReader):
+    """R9/R10: leitura no corte — base do score e do relatório reprodutível."""
+
+    def __init__(self, session: AsyncSession) -> None:
+        self._s = session
+
+    async def population(
+        self, segment_id: int, as_of: datetime, window_days: int
+    ) -> list[PopulationRow]:
+        result = await self._s.execute(
+            _POPULATION_SQL,
+            {"segment_id": segment_id, "as_of": as_of, "window_days": window_days},
+        )
+        rows: list[PopulationRow] = []
+        for r in result.mappings():
+            raw: dict[str, Any] = (
+                cast(dict[str, Any], r["raw"]) if isinstance(r["raw"], dict) else {}
+            )
+            rows.append(
+                PopulationRow(
+                    video_id=r["id"],
+                    platform=r["platform"],
+                    platform_video_id=r["platform_video_id"],
+                    title=r["title"] or "",
+                    description=r["description"] or "",
+                    language=r["language"],
+                    tags=_tags_of(raw),
+                    published_at=r["published_at"],
+                    views=r["views"],
+                    likes=r["likes"],
+                    comments=r["comments"],
+                    shares=r["shares"],
+                    saves=r["saves"],
+                    captured_at=r["captured_at"],
+                    prev_views=r["prev_views"],
+                    prev_captured_at=r["prev_captured_at"],
+                    followers=r["followers"],
+                    raw=raw,
+                )
+            )
+        return rows
+
+    async def attributions(
+        self, segment_id: int, platform: str, as_of: datetime
+    ) -> list[tuple[int, str, str]]:
+        stmt = (
+            select(
+                VideoDiscoveryRow.video_id,
+                VideoDiscoveryRow.term,
+                VideoDiscoveryRow.term_origin,
+            )
+            .where(
+                VideoDiscoveryRow.segment_id == segment_id,
+                VideoDiscoveryRow.platform == platform,
+                VideoDiscoveryRow.discovered_at <= as_of,
+                VideoDiscoveryRow.term_origin != "unattributed",
+            )
+            .distinct()
+            .order_by(
+                VideoDiscoveryRow.video_id,
+                VideoDiscoveryRow.term,
+                VideoDiscoveryRow.term_origin,
+            )
+        )
+        return [(int(v), str(t), str(o)) for v, t, o in (await self._s.execute(stmt)).all()]
+
+
+class ViralV2RepositoryImpl(ViralV2Repository):
+    """R9: `video_scores_v2` append-only — nunca escreve em `video_scores`."""
+
+    def __init__(self, session: AsyncSession) -> None:
+        self._s = session
+
+    async def append_many(
+        self,
+        segment_id: int,
+        as_of: datetime,
+        scores: Sequence[ViralScore],
+        window_days: int,
+    ) -> int:
+        self._s.add_all(
+            [
+                VideoScoreV2Row(
+                    video_id=sc.video_id,
+                    segment_id=segment_id,
+                    as_of=as_of,
+                    viral_score_v2=sc.total,
+                    velocity=sc.velocity,
+                    engagement=sc.engagement,
+                    channel_relative=sc.channel_relative,
+                    reach=sc.reach,
+                    population_n=sc.population_n,
+                    explanation=dict(sc.explanation),
+                    formula_version=VIRAL_V2_VERSION,
+                    window_days=window_days,
+                )
+                for sc in scores
+            ]
+        )
+        await self._s.flush()
+        return len(scores)
+
+
+class TermReportRepositoryImpl(TermReportRepository):
+    """R10: `term_reports` — as linhas de um relatório no corte."""
+
+    def __init__(self, session: AsyncSession) -> None:
+        self._s = session
+
+    async def append_many(self, rows: Sequence[TermReportRecord]) -> int:
+        self._s.add_all([TermReportRow(**r.model_dump()) for r in rows])
+        await self._s.flush()
+        return len(rows)

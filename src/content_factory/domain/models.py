@@ -312,3 +312,58 @@ class RefreshResult(BaseModel):
 
     candidates: list[CandidateVideo] = Field(default_factory=list[CandidateVideo])
     missing_ids: list[str] = Field(default_factory=list[str])
+
+
+class PopulationRow(BaseModel):
+    """R9: um vídeo da população do `viral-v2` NO CORTE (`as_of`).
+
+    Métricas = última medição até o corte; `prev_*` = a medição anterior com
+    pelo menos 1 h de intervalo (base da velocidade). `followers` vem da
+    medição ou, sem ela, de `creators`.
+    """
+
+    video_id: int
+    platform: str
+    platform_video_id: str
+    title: str = ""
+    description: str = ""
+    language: str | None = None
+    tags: list[str] = Field(default_factory=list[str])
+    published_at: datetime | None = None
+    views: int | None = None
+    likes: int | None = None
+    comments: int | None = None
+    shares: int | None = None
+    saves: int | None = None
+    captured_at: datetime
+    prev_views: int | None = None
+    prev_captured_at: datetime | None = None
+    followers: int | None = None
+    raw: dict[str, Any] = Field(default_factory=dict[str, Any])
+
+
+class TermReportRecord(BaseModel):
+    """R10: uma linha de `term_reports` (escopo `term` | `origin` | `video`)."""
+
+    report_id: str
+    segment_id: int
+    platform: str
+    scope: str
+    report_key: str
+    n: int
+    baseline_n: int | None = None
+    median_viral_v2: float | None = None
+    median_velocity: float | None = None
+    median_engagement: float | None = None
+    median_channel_relative: float | None = None
+    top10_fraction: float | None = None
+    engagement_score: float | None = None
+    diff: float | None = None
+    ci_low: float | None = None
+    ci_high: float | None = None
+    overlap: int | None = None
+    verdict: str
+    rank: int | None = None
+    version: str
+    rules_version: str
+    as_of: datetime
