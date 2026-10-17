@@ -20,6 +20,7 @@ from content_factory.app.ports import KeywordSignalRepository, SocialDiscoverer
 from content_factory.app.research_pipeline import ResearchDeps, ResearchOutcome, run_research_cycle
 from content_factory.domain.errors import CollectorError
 from content_factory.domain.fanout_guard import FanoutGuard
+from content_factory.domain.kw_rank import SuggestHit
 from content_factory.domain.models import (
     CandidateVideo,
     CollectRun,
@@ -45,16 +46,9 @@ class _FakeWeb:
     def __init__(self) -> None:
         self.calls: list[list[str]] = []
 
-    async def expand(self, seeds: list[str], depth: int) -> list[KeywordSignal]:
+    async def expand(self, seeds: list[str], depth: int) -> list[SuggestHit]:
         self.calls.append(list(seeds))
-        return [
-            KeywordSignal(
-                keyword=f"{seeds[0]} relacionada",
-                source=self.platform,
-                weight=0.7,
-                depth=depth + 1,
-            )
-        ]
+        return [SuggestHit(term=f"{seeds[0]} relacionada", seed=seeds[0], position=1)]
 
 
 class _FakeTrends:
@@ -570,15 +564,13 @@ class _SegmentsWithPlatforms:
 
 
 class _RankedWeb:
-    """Devolve N sinais com pesos distintos — o guard trunca pelos maiores."""
+    """Devolve N termos com posições distintas — o guard trunca pelos melhores."""
 
     platform: ClassVar[str] = "web_suggest"
 
-    async def expand(self, seeds: list[str], depth: int) -> list[KeywordSignal]:
-        return [
-            KeywordSignal(keyword=f"kw{i}", source=self.platform, weight=w, depth=depth + 1)
-            for i, w in enumerate([0.1, 0.9, 0.5])
-        ]
+    async def expand(self, seeds: list[str], depth: int) -> list[SuggestHit]:
+        _ = seeds, depth
+        return [SuggestHit(term=f"kw{i}", seed="s", position=i + 1) for i in range(3)]
 
 
 @pytest.mark.asyncio
@@ -983,7 +975,7 @@ class _BoomWeb:
     def __init__(self, error: Exception) -> None:
         self._error = error
 
-    async def expand(self, seeds: list[str], depth: int) -> list[KeywordSignal]:
+    async def expand(self, seeds: list[str], depth: int) -> list[SuggestHit]:
         raise self._error
 
 
@@ -1163,13 +1155,9 @@ async def test_research_social_run_records_quota_used() -> None:
 class _ManyWeb:
     platform: ClassVar[str] = "web_suggest"
 
-    async def expand(self, seeds: list[str], depth: int) -> list[KeywordSignal]:
-        _ = seeds
-        weights = [0.1, 0.9, 0.5, 0.3, 0.8, 0.2, 0.7, 0.6]
-        return [
-            KeywordSignal(keyword=f"kw{i}", source=self.platform, weight=w, depth=depth + 1)
-            for i, w in enumerate(weights)
-        ]
+    async def expand(self, seeds: list[str], depth: int) -> list[SuggestHit]:
+        _ = seeds, depth
+        return [SuggestHit(term=f"kw{i}", seed="s", position=i + 1) for i in range(8)]
 
 
 class _RecordingTrends:
@@ -1200,7 +1188,7 @@ async def test_trends_gets_valid_timeframe_and_top5_keywords_by_weight() -> None
     keywords, timeframe = trends.calls[0]
     assert timeframe == TRENDS_TIMEFRAME == "today 12-m"
     assert TRENDS_MAX_KEYWORDS == 5
-    assert keywords == ["kw1", "kw4", "kw6", "kw7", "kw2"]  # 0.9, 0.8, 0.7, 0.6, 0.5
+    assert keywords == ["kw0", "kw1", "kw2", "kw3", "kw4"]  # 1/1, 1/2, 1/3, 1/4, 1/5
 
 
 @pytest.mark.asyncio

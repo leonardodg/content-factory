@@ -9,7 +9,7 @@ from typing import Any, ClassVar, cast
 import httpx
 
 from content_factory.domain.errors import NetworkError, RateLimited, UpstreamChanged
-from content_factory.domain.models import KeywordSignal
+from content_factory.domain.kw_rank import SuggestHit
 from content_factory.infra.collectors.breaker import CooldownBreaker
 
 PLATFORM = "web_suggest"
@@ -44,12 +44,13 @@ class WebSuggestProvider:
             PLATFORM, threshold=breaker_threshold, cooldown_s=breaker_cooldown_s, clock=clock
         )
 
-    async def expand(self, seeds: list[str], depth: int) -> list[KeywordSignal]:
+    async def expand(self, seeds: list[str], depth: int) -> list[SuggestHit]:
+        _ = depth  # a posição substitui o peso fixo 0,5 (R2); depth fica na porta
         self._breaker.check()
         if not seeds:
             return []
         try:
-            suggestions = await asyncio.to_thread(self._fetch_all, seeds)
+            hits = await asyncio.to_thread(self._fetch_all, seeds)
         except NetworkError, RateLimited, UpstreamChanged:
             self._breaker.record_failure()
             raise
@@ -57,18 +58,18 @@ class WebSuggestProvider:
             self._breaker.record_failure()
             raise self._classify(exc) from exc
         self._breaker.record_success()
-        return self._map(suggestions, depth)
+        return hits
 
-    def _fetch_all(self, seeds: list[str]) -> list[str]:
-        """Busca sugestões para cada seed; dedupe preserva ordem."""
-        seen: set[str] = set()
-        out: list[str] = []
+    def _fetch_all(self, seeds: list[str]) -> list[SuggestHit]:
+        """Sugestões por semente, COM posição (1-based). Dedupe por (semente, termo)."""
+        out: list[SuggestHit] = []
         for seed in seeds:
-            for sug in self._fetch_one(seed):
+            seen: set[str] = set()
+            for position, sug in enumerate(self._fetch_one(seed), start=1):
                 key = sug.casefold().strip()
                 if key and key not in seen:
                     seen.add(key)
-                    out.append(sug)
+                    out.append(SuggestHit(term=sug, seed=seed, position=position))
         return out
 
     def _fetch_one(self, seed: str) -> list[str]:
@@ -105,9 +106,3 @@ class WebSuggestProvider:
         if isinstance(exc, httpx.HTTPError | ConnectionError | TimeoutError | OSError):
             return NetworkError(PLATFORM, str(exc))
         return UpstreamChanged(PLATFORM, str(exc))
-
-    def _map(self, suggestions: list[str], depth: int) -> list[KeywordSignal]:
-        return [
-            KeywordSignal(keyword=str(sug), source=PLATFORM, weight=0.5, depth=depth + 1)
-            for sug in suggestions
-        ]

@@ -5,6 +5,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import ClassVar, Protocol
 
+from content_factory.domain.kw_rank import SuggestHit
 from content_factory.domain.models import (
     CandidateVideo,
     CollectRun,
@@ -46,11 +47,11 @@ class Collector(Protocol):
 
 
 class KeywordExpander(Protocol):
-    """Stage de descoberta de keywords relacionadas (ex. web search suggest)."""
+    """Descoberta de sugestões relacionadas (Google Suggest)."""
 
     platform: ClassVar[str]
 
-    async def expand(self, seeds: list[str], depth: int) -> list[KeywordSignal]: ...
+    async def expand(self, seeds: list[str], depth: int) -> list[SuggestHit]: ...
 
 
 class TrendsProvider(Protocol):

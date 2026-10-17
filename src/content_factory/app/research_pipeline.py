@@ -231,7 +231,18 @@ async def run_research_cycle(
         # o Trends HTTP 400 diário abortava o segmento antes da fase social.
         async def _expand() -> list[KeywordSignal]:
             await deps.limiter.acquire(deps.web.platform)
-            return await deps.web.expand([*seeds, *probe_seeds], 0)
+            hits = await deps.web.expand([*seeds, *probe_seeds], 0)
+            # Transição para o pool (R2/R4, Bloco 1 Task 8): mantém o contrato de
+            # sinais por enquanto, mas o peso passa a vir da POSIÇÃO na sugestão
+            # (1ª ocorrência do termo) em vez do 0,5 fixo.
+            best: dict[str, int] = {}
+            for hit in hits:
+                if hit.term not in best or hit.position < best[hit.term]:
+                    best[hit.term] = hit.position
+            return [
+                KeywordSignal(keyword=term, source=deps.web.platform, weight=1.0 / pos, depth=1)
+                for term, pos in best.items()
+            ]
 
         web_raw, web_failed = await _run_source(deps.web.platform, segment, deps, _expand)
         web_signals = deps.guard.truncate(web_raw, "web")
