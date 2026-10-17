@@ -703,13 +703,14 @@ métrica que a relevância do Bloco 5 descarta.
 Revisão do PR #52 (17/10), três correções com teste cada, todas no caminho da
 remediação (Tasks 4/6):
 
-- [x] **Item 1 — `refresh` sem items é anomalia, não remoção**:
-  `{"items": []}` (ou sem a chave) com ids pedidos levanta `UpstreamChanged`
-  (mesma regra do `_search_ranked`, "search sem items"). Antes o lote inteiro
-  virava `missing_ids` → `videos.removed_at`, o que é irreversível na janela
-  (o vídeo sai dos alvos) e é o sintoma clássico de quota estourada/contrato
-  quebrado. Id ausente num lote COM resposta válida continua sendo
-  removido/privado (teste novo mantém essa detecção).
+- [x] **Item 1 — `items` ausente não é remoção** (ajuste na revisão): `items`
+  AUSENTE ou com tipo que não é lista levanta `UpstreamChanged` (mesma regra do
+  `_search_ranked`, "search sem items") — é contrato quebrado/resposta truncada
+  e não se marca `videos.removed_at` em cima disso (o vídeo sairia dos alvos
+  por toda a janela). Alternativa descartada: tratar resposta vazia como
+  anomalia — no YouTube cota estourada é **HTTP 403**, que o `_get` já converte
+  em `RateLimited`; logo `{"items": []}` é resposta VÁLIDA e o lote inteiro vai
+  para `missing_ids` (removidos), custando 1 unidade e sem `channels.list`.
 - [x] **Item 2 — lotes no use-case, gravação por lote**:
   `RemediationDeps.batch_size` (default 50, o teto do `videos.list`); o
   `remediate` fatia os alvos e grava cada lote ANTES de pedir o próximo. Erro
@@ -815,11 +816,13 @@ removido (fora), 1 nunca medido (dentro):
   skipped_language=0` e medição gravada — o fallback "sem exigência, mantém"
   segue igual ao Bloco 3.
 
-**Revisão pre-merge (Task 10)**, mesma base descartável (`cfrev`), 3 segmentos:
+**Revisão pre-merge (Task 10)**, mesma base descartável (`cfrev`/`cfrev2`), 3
+segmentos:
 
-- `videos.list` devolvendo `{"items": []}`: run `remediate:youtube` `failed`
-  com `error_code = upstream_changed`, `removed = 0` e **nenhum**
-  `videos.removed_at` no banco (item 1);
+- `videos.list` devolvendo `{"items": []}`: run `remediate:youtube` `ok` com
+  `removed=2` e `quota_used=1`, os 2 vídeos com `videos.removed_at` no banco;
+  200 SEM a chave `items`: run `failed/upstream_changed` e **nenhum** removido
+  (item 1);
 - 120 alvos, 2º lote com HTTP 500: `refreshed=50, metrics_written=50,
   quota_used=2`, 50 linhas em `video_metrics` do segmento, `videos.list`
   chamado 2× (lotes seguintes não pedidos) e run `failed/upstream_changed` com
