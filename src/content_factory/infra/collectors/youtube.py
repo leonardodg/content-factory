@@ -202,7 +202,16 @@ class YoutubeCollector:
 
         Cota: 1 unidade por lote de `videos.list` + 1 por `channels.list`
         (mesmo `COST_LIST` do `_search_ranked`). Id que a plataforma não
-        devolveu = removido/privado (marca-se `removed_at` fora daqui).
+        devolveu DENTRO de um lote com resposta válida = removido/privado
+        (marca-se `removed_at` fora daqui).
+
+        Lote SEM items (`{"items": []}` ou sem a chave) levanta
+        `UpstreamChanged`: com quota estourada/contrato quebrado a resposta vem
+        vazia, e tratar isso como "todos removidos" tira os vídeos dos alvos
+        por toda a janela — mesma regra do `_search_ranked` ("search sem
+        items"). O use-case chama `refresh` em lotes de 50 (R7, revisão):
+        a resposta vazia de um lote pequeno que era mesmo todo removido vira
+        run `failed` (visível), não remoção em massa.
         """
         found: list[CandidateVideo] = []
         missing: list[str] = []
@@ -214,10 +223,12 @@ class YoutubeCollector:
                 {"part": "statistics,snippet,contentDetails", "id": ",".join(chunk)},
             )
             record_quota(self.COST_LIST)
-            stats_by_id = {str(v["id"]): v for v in stats.get("items", [])}
+            items = stats.get("items")
+            if not isinstance(items, list) or not items:
+                raise UpstreamChanged(self.platform, "videos.list sem items")
+            entries = cast(list[dict[str, Any]], items)
+            stats_by_id = {str(v["id"]): v for v in entries}
             missing += [i for i in chunk if i not in stats_by_id]
-            if not stats_by_id:
-                continue
             channels = await self._get(
                 "channels",
                 {

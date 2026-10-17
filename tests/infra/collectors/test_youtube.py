@@ -4,6 +4,7 @@ import httpx
 import pytest
 
 from content_factory.app.call_counters import counting
+from content_factory.domain.errors import UpstreamChanged
 from content_factory.domain.models import RemediationTarget, SegmentConfig
 from content_factory.infra.collectors.youtube import YoutubeCollector
 
@@ -614,6 +615,45 @@ async def test_refresh_quebra_em_lotes_de_50_e_conta_cota() -> None:
     assert out.missing_ids == []
     assert sum(1 for p in calls if p.endswith("/videos")) == 2  # 50 + 1
     assert counters.quota_used == 4  # 2 lotes x (videos + channels)
+
+
+@pytest.mark.asyncio
+async def test_refresh_sem_items_levanta_upstream_changed() -> None:
+    """Revisão pre-merge: `{"items": []}` NÃO é evidência de remoção.
+
+    Sem isso o lote inteiro viraria `missing_ids` → `videos.removed_at` (o
+    vídeo sai dos alvos por toda a janela) num sintoma clássico de contrato
+    quebrado/quota estourada. Mesma regra do `_search_ranked` ("search sem
+    items"): resposta sem items é anomalia de upstream, não remoção.
+    """
+    col = _collector_with_transport(_youtube_refresh_transport(returned=[]))
+    with pytest.raises(UpstreamChanged) as exc:
+        await col.refresh(
+            [
+                RemediationTarget(video_id=1, platform="youtube", platform_video_id="v1"),
+                RemediationTarget(video_id=2, platform="youtube", platform_video_id="v2"),
+            ]
+        )
+    assert exc.value.code == "upstream_changed"
+
+
+@pytest.mark.asyncio
+async def test_refresh_com_algum_item_marca_o_ausente_como_removido() -> None:
+    """A detecção de removido continua: id ausente entre itens que voltaram.
+
+    O lote com resposta VÁLIDA (≥ 1 item) é evidência: o id que não voltou
+    saiu (removido/privado).
+    """
+    col = _collector_with_transport(_youtube_refresh_transport(returned=["v1", "v3"]))
+    out = await col.refresh(
+        [
+            RemediationTarget(video_id=1, platform="youtube", platform_video_id="v1"),
+            RemediationTarget(video_id=2, platform="youtube", platform_video_id="v2"),
+            RemediationTarget(video_id=3, platform="youtube", platform_video_id="v3"),
+        ]
+    )
+    assert [c.platform_video_id for c in out.candidates] == ["v1", "v3"]
+    assert out.missing_ids == ["v2"]
 
 
 @pytest.mark.asyncio
