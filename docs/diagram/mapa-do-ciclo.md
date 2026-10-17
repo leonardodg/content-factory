@@ -57,19 +57,17 @@ dados salvos (§5), reciclos (§6) e limites/seguranças (§7).
 ```mermaid
 flowchart TD
     T1["07:00<br/><b>research_job</b><br/>Suggest + Trends +<br/>busca social por keyword"]
-    T2["08:00<br/><b>collect_job</b><br/>YouTube · Instagram ·<br/>TikTok · web"]
-    T3["08:30<br/><b>score_job</b><br/>pontua o último<br/>snapshot de cada vídeo"]
-    T4["20:00<br/><b>collect_job</b><br/>re-mede os mesmos vídeos<br/>(2º snapshot do dia)"]
-    T5["21:30<br/><b>score_job</b><br/>velocity já tem<br/>2 snapshots"]
-    T1 --> T2 --> T3 --> T4 --> T5
-    T5 -. "dia seguinte" .-> T1
+    T2["02/08/14/20:00<br/><b>collect_job</b><br/>YouTube · Instagram ·<br/>TikTok · web<br/>+ remedição dos conhecidos"]
+    T3["30 min depois<br/><b>score_job</b><br/>pontua o último<br/>snapshot de cada vídeo"]
+    T1 --> T2 --> T3
+    T3 -. "a cada 6 h (R12)" .-> T2
 ```
 
 | Job | Cron (BRT) | Configurável | `unique` | Repete por |
 | --- | --- | --- | --- | --- |
 | `research_job` | 07:00 | não (fixo no código) | sim | campanha ativa (`--weeks N`) |
-| `collect_job` | 08:00 e 20:00 | `COLLECT_CRON_HOURS` (default `08,20`) | sim | campanha ativa |
-| `score_job` | 08:30 e 21:30 | não (fixo no código) | sim | campanha ativa |
+| `collect_job` | 02:00, 08:00, 14:00 e 20:00 | `COLLECT_CRON_HOURS` (default `02,08,14,20`) | sim | campanha ativa |
+| `score_job` | 02:30, 08:30, 14:30 e 20:30 | `SCORE_CRON_HOURS` (default = `COLLECT_CRON_HOURS`) | sim | campanha ativa |
 
 Os três só processam segmentos com **campanha ativa e não vencida**
 (`research_campaigns`). Sem campanha, o tick roda vazio (`segments: {}`).
@@ -82,8 +80,8 @@ que acabou de entrar.
 flowchart LR
     subgraph CRON["arq cron · max_jobs=3 · timeout 25/25/5 min"]
         R["research_job 07:00"]
-        C["collect_job 08:00/20:00"]
-        S["score_job 08:30/21:30"]
+        C["collect_job 02/08/14/20:00"]
+        S["score_job 02/08/14/20:30"]
     end
     CAMP[("research_campaigns<br/>active_segments()")]
     R & C & S --> CAMP
@@ -216,21 +214,21 @@ payload bruto).
 sequenceDiagram
     autonumber
     participant R as research 07:00
-    participant C as collect 08:00/20:00
+    participant C as collect 02/08/14/20:00
     participant DB as videos + video_metrics
-    participant S as score 08:30/21:30
+    participant S as score 02/08/14/20:30
     R->>DB: descobre vídeos por keyword dinâmica (snapshot 1)
-    C->>DB: descobre pela query fixa + re-mede os conhecidos (snapshot N)
+    C->>DB: busca por termo + re-mede os conhecidos (snapshot N)
     S->>DB: lê último snapshot + anterior
     S-->>DB: grava viral_score (velocity só com 2 snapshots)
-    C->>DB: 20:00 re-mede de novo (snapshot N+1)
-    S-->>DB: 21:30 novo score, com crescimento real
+    C->>DB: próxima coleta re-mede de novo (snapshot N+1)
+    S-->>DB: novo score, com crescimento real
     Note over R,S: repete todo dia enquanto a campanha estiver ativa
 ```
 
 | Mecanismo | Onde | Comportamento |
 | --- | --- | --- |
-| **Re-medição** | collect 2×/dia | o mesmo vídeo ganha um snapshot por coleta; é o que dá `velocity` |
+| **Re-medição** | collect 4×/dia (R7) | o mesmo vídeo do segmento ganha um snapshot por coleta (janela de 7 dias); é o que dá `velocity` |
 | **Recursão do research** | `FanoutGuard` | seeds na profundidade 0 → Suggest/Trends na 1; `max_depth=2`, `max_nodes_per_cycle=200`, dedupe por keyword; `fanout_per_stage` corta por peso |
 | **Espera do limiter** | `RedisRateLimiter.acquire` | janela cheia: espera com backoff exponencial (1, 2, 4… s, ±20%) até 5 tentativas; espera > 60 s vira `RateLimited` imediato (cota diária não segura o worker) |
 | **Backoff do TikTok** | `_call_with_backoff` | resposta vazia: até 5 tentativas com `2^n + 0–2 s`, depois `blocked` |

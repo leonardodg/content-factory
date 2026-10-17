@@ -147,8 +147,8 @@ a CLI manual); cron no fuso do projeto:
 | Job | Horário (BRT) | Origem |
 |---|---|---|
 | `research_job` | 07:00 | fixo no código (`hour={7}`, `minute=0`) — só roda com campanha ativa ([§5](#5-campanhas-de-pesquisa-cf-research)) |
-| `collect_job` | 08:00 e 20:00 | horas via `COLLECT_CRON_HOURS` (default `08,20`), minuto `0` |
-| `score_job` | 08:30 e 21:30 | fixo no código (`hour={8, 21}`, `minute=30`) |
+| `collect_job` | 02:00, 08:00, 14:00 e 20:00 | horas via `COLLECT_CRON_HOURS` (default `02,08,14,20`), minuto `0` |
+| `score_job` | 02:30, 08:30, 14:30 e 20:30 | horas via `SCORE_CRON_HOURS` (default = `COLLECT_CRON_HOURS`), minuto `30` |
 
 Fuso fixo `America/Sao_Paulo` (`ZoneInfo` no `WorkerSettings`) — os horários
 não dependem do TZ da máquina. Os dois cron jobs têm `unique=True`: um
@@ -179,7 +179,8 @@ do processo — trocar exige restart do worker):
 |---|---|---|
 | `COLLECT_PLATFORMS` | vazio | vazio = plataformas declaradas do segmento |
 | `COLLECT_LIMIT` | `10` | limite de vídeos por plataforma na coleta (produção: `25` desde 2026-10-16; o `3` do teste E2E ficou esquecido no `app.env` até lá) |
-| `COLLECT_CRON_HOURS` | `08,20` | horas do collect em BRT; valor inválido cai no default |
+| `COLLECT_CRON_HOURS` | `02,08,14,20` | horas do collect em BRT (4×/dia); valor inválido cai no default |
+| `SCORE_CRON_HOURS` | = `COLLECT_CRON_HOURS` | horas do score em BRT; ausente acompanha o collect (mesmo dia, minuto `30`) |
 | `COLLECT_MAX_CONCURRENCY` | `2` | teto de `discover()` simultâneos por collect (Task 7); ponto de partida para benchmark, não limite seguro universal; valor inválido ou < 1 cai em `2`/`1` |
 | `WORKER_MAX_SEGMENTS` | `3` | teto de segmentos simultâneos por job (Task 11); lido a cada tick, trocar não exige restart; valor inválido ou < 1 cai em `3`/`1` |
 | `CATCHUP_ON_STARTUP` | `1` | `0` desliga o catch-up de horário perdido no startup |
