@@ -45,6 +45,29 @@ redigida.
 - `ok` do job = todos os segmentos `ok`;
 - `partial` do job = algum segmento parcial, ou algum `ok` com outro falhando.
 
+### Sub-envelope `remediation` (R7, só no worker)
+
+O `collect_job` remede os vídeos já conhecidos do segmento logo depois do
+`collect()`, na MESMA UoW, e acrescenta o passo ao envelope do segmento:
+
+```json
+{"ok": true, "partial": false, "found": 13,
+ "remediation": {"targets": 24, "refreshed": 24, "metrics_written": 24,
+                 "removed": 1, "failed_platforms": 0, "quota_used": 2}}
+```
+
+- `targets`: alvos da janela (`REMEDIATION_WINDOW_DAYS`), sem medição nas
+  últimas `REMEDIATION_MIN_GAP_HOURS` e não marcados como removidos;
+- `metrics_written`: linhas gravadas em `video_metrics`;
+- `removed`: vídeos que a plataforma não devolveu (removido/privado) e foram
+  marcados em `videos.removed_at`;
+- `failed_platforms`: plataformas cuja remedição falhou — vira uma `CollectRun`
+  `remediate:<plataforma>` `failed` e **não** derruba a coleta;
+- a chave **não aparece** quando o collect nem rodou (lock ocupado,
+  `ja_em_execucao`): remedir ali gravaria métrica duplicada;
+- a CLI (`cf collect`) não remedeia, então o teste de paridade compara o
+  envelope sem essa chave.
+
 ## Mudança em relação ao formato anterior (2026-10-15)
 
 - worker: execução parcial era `ok: false, partial: true`; agora é

@@ -171,8 +171,8 @@ No log: `catch-up: <job> perdeu o horário — rodando agora` e o envelope
 `{"ok", "missed", "ran"}`.
 
 **Envs do worker** (`COLLECT_PLATFORMS`/`LIMIT` são relidas a cada
-job, assim como `WORKER_MAX_SEGMENTS`; `COLLECT_CRON_HOURS` e
-`COLLECT_MAX_CONCURRENCY` valem do carregamento
+job, assim como `WORKER_MAX_SEGMENTS`; `COLLECT_CRON_HOURS`,
+`COLLECT_MAX_CONCURRENCY` e as `REMEDIATION_*` valem do carregamento
 do processo — trocar exige restart do worker):
 
 | Env | Default | Significado |
@@ -185,6 +185,9 @@ do processo — trocar exige restart do worker):
 | `WORKER_MAX_SEGMENTS` | `3` | teto de segmentos simultâneos por job (Task 11); lido a cada tick, trocar não exige restart; valor inválido ou < 1 cai em `3`/`1` |
 | `CATCHUP_ON_STARTUP` | `1` | `0` desliga o catch-up de horário perdido no startup |
 | `PLATFORM_MAX_CONCURRENCY` | `tiktok=1,web=1` | teto de discovers simultâneos **por plataforma no processo**, entre segmentos (`plataforma=limite,…`); a env é SOMADA ao default, nunca remove o teto do TikTok; entrada inválida ou < 1 é ignorada; vale do startup (exige restart) |
+| `REMEDIATION_WINDOW_DAYS` | `7` | janela (em dias) dos vídeos remedidos: só os descobertos nesse período entram nos alvos (R7); vale do startup |
+| `REMEDIATION_LIMIT` | `500` | teto de alvos por segmento na remedição (R7) — 10 lotes de 50 ids no `videos.list` (YouTube) |
+| `REMEDIATION_MIN_GAP_HOURS` | `3` | não remedir vídeo com medição nas últimas N horas (R7): evita 2 medições com o mesmo `captured_at`; vale do startup |
 
 Fixos no código (não são env):
 
