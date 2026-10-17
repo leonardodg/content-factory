@@ -1,54 +1,67 @@
-# Bloco 5 — `viral-v2`, ranking de temas e mineração de hashtags (R9+R10+R11)
+# Bloco 5 — `viral-v2`, ranking de temas/origens, top vídeos e hashtags (R9+R10+R11)
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Responder à pergunta do teste. O `fase-h` fica intocado como linha de base; ao lado, `viral-v2` mede engajamento de verdade (velocidade, taxa, desempenho relativo ao canal, alcance — normalizados por plataforma e segmento). Em cima dele, o **ranking de temas por termo e por origem**; e as hashtags dos vídeos do topo voltam ao pool.
+**Goal:** Responder à pergunta do teste e entregar o objetivo do projeto: **quais vídeos são o conteúdo viral de qualidade do segmento, quais temas os trazem, e se as origens da web superam as keywords fixas**.
+- O `fase-h` continua intocado como linha de base.
+- Ao lado dele, o `viral-v2` mede o engajamento de verdade.
+- Em cima do `viral-v2` vêm o ranking por termo, a **regra de decisão pré-registrada por origem**, o top de vídeos e as hashtags dos melhores vídeos, que voltam ao pool.
 
-**Architecture:** Três peças puras novas em `domain/` (`viral_v2`, `term_ranking`, `hashtag_mining`) + três tabelas (`video_scores_v2`, `term_reports`, e o pool ganha `hashtag:<plataforma>`) + dois use-cases (`app/score_v2.py`, `app/term_report.py`) e a mineração no fim do score. `video_scores.total`/`viral_score` do `fase-h` **nunca** são tocados.
+**Fase B:** este bloco e o Bloco 6 são implementados **durante** o teste. Tudo aqui é recalculável a partir do banco com `--as-of`, porque `video_metrics` e `video_discoveries` já estão sendo gravados desde a Fase A. A única coisa que muda o comportamento da coleta são as hashtags (vaga exploratória pré-registrada).
+
+**Architecture:**
+- Peças puras em `domain/`: `viral_v2`, `term_ranking`, `hashtag_mining`.
+- Duas tabelas: `video_scores_v2` (append-only) e `term_reports`.
+- Leitura da **população no corte** (`as_of`) no repositório.
+- Dois use-cases: `app/score_v2.py` (worker: monitoramento + hashtags) e `app/term_report.py` (CLI: relatório reprodutível).
+- O relatório **recalcula** o `viral-v2` no corte, em vez de juntar scores gravados em horários diferentes; percentis de momentos diferentes não se comparam.
 
 **Tech Stack:** Python 3.14, pydantic v2, SQLAlchemy 2 async, Alembic, typer, pytest (asyncio), ruff, pyright strict.
 
 ## Global Constraints
 
 - `domain/` puro; `app/` → portas; `infra/` implementa portas; `cli/worker → app → domain`.
-- `pyright` strict 0 erros; `ruff` linha 100/aspas duplas; `ruff format` limpo; TDD.
-- Envelope só com contagens; **dados no banco** (regra "dados no banco"); exportação CSV só **fora** do repositório.
+- `pyright` strict 0 erros; `ruff` linha 100/aspas duplas; `ruff format` limpo; TDD; sem `assert` em produção (B101).
+- Envelope só com contagens; **dados no banco**; exportação CSV só **fora** do repositório (o repositório é público e os títulos são de terceiros).
 - `make gates` antes de "pronto" (inclui `alembic check`).
-- Migração aditiva: `0015` segue `0014` (Bloco 4).
-- **Nunca escrever em `video_scores.total`/`viral_score`** como parte do `viral-v2`.
-- Bootstrap com **seed fixa** (reprodutibilidade do pré-registro).
+- Migração aditiva: `0015` segue `0014`.
+- **Nunca escrever em `video_scores`** como parte do `viral-v2`.
+- Bootstrap com **seed fixa** (`20261016`).
 
 ## Referência
 
-Especificação §4 R9, R10, R11; §6 (regra de decisão, "top temas", `n < 5`); §9 (n mínimo por plataforma/segmento). **Depende dos Blocos 1–4** (pool, atribuição `video_discoveries`, remedição, `trend_score`).
+Especificação §4 R9, R10, R11; §6 (regra de decisão, "top temas", n mínimo). Pré-registro: `docs/manual/pre-registro-viral-por-tema.md` (Bloco 4, Task 8). **Depende dos Blocos 1–4.**
 
-## Decisões deste bloco
+## Decisões deste bloco (revisão QA)
 
-- Pesos do `viral-v2` fixados como hipótese pré-registrada: velocidade **0,35**, engajamento **0,25**, relativo ao canal **0,25**, alcance **0,15**; janela **30 dias**.
-- Normalização por **percentil dentro de `(platform, segment_id)`** na janela; `n` mínimo por grupo (`VIRAL_V2_MIN_POPULATION=5`). Grupo abaixo do mínimo: componentes calculados, `viral_score_v2 = NULL` e `verdict="insufficient"` (não inventa ranking com poucos vídeos).
-- **Relevância vira filtro** (R1 no título/descrição) e **recência vira janela** (30 d) — nenhum dos dois é peso no `viral-v2`.
-- **Componente ausente é excluído e os pesos renormalizam** (mesma regra do `fase-h`), nunca vira zero.
-- `video_scores_v2` é **append-only** e separado de `video_scores`.
-- `term_reports`: uma linha por (escopo, plataforma, chave) com versão, data de corte e veredito; IC 95% por bootstrap `seed=20261016`, 1.000 reamostragens.
-- Hashtags: fonte = vídeos do segmento no **top 25% do `viral-v2`**; ranking por **frequência ponderada**; passam pelo R1; entram como `hashtag:<plataforma>`; no YouTube buscadas como `#tag`.
+| Decisão | Por quê |
+|---|---|
+| Pesos do `viral-v2`: velocidade 0,35, engajamento 0,25, relativo ao canal 0,25, alcance 0,15. Percentil dentro de `(plataforma, segmento)`; n mínimo 5 por grupo; componente ausente renormaliza | Hipótese pré-registrada (não muda durante o teste). |
+| **Velocidade** = Δviews/Δhoras entre a última medição até o corte e a anterior **com pelo menos 1 h de intervalo** | Evita o par da mesma transação (ver Bloco 3) e o ruído de remedições próximas. |
+| **Relevância vira filtro, e o filtro é sobre título + tags** (âncora), com idioma via `videos.language` (prefixo `pt` ou ausente) | A 1ª versão aplicava `filter_term` em título + **descrição**. Medido: uma descrição PT com "Follow me ... for more" caía por idioma. Descrições do YouTube têm inglês de rodapé o tempo todo. |
+| **Recência vira janela**: `published_at` dentro de `as_of − 30 d` | Spec R9. |
+| **Unidade = vídeo único por chave** | O mesmo vídeo achado pelo mesmo termo em 16 coletas contava 16 vezes (pseudorreplicação). |
+| **Regra por origem = a do pré-registro** (diferença de medianas X − `seed`, IC 95% bootstrap, n ≥ 30; `better`/`worse`/`directional`/`insufficient`) | A 1ª versão comparava cada grupo com o limiar do top 10% (`leader`/`trailing`), que **não é** a regra pré-registrada. |
+| **Top vídeos** (escopo `video`, top 20 por plataforma e segmento) no mesmo relatório | É o entregável do objetivo ("conteúdo viral de qualidade"); a especificação citava no D+4 e nenhum plano implementava. |
+| Hashtags: `filter_hashtag` (substring, sem idioma), top 10 por plataforma ativas, as demais marcadas `excluded`/`stale`; ordenação por `engagement_score`; busca como `#tag` (Bloco 4) | Medido: com `filter_term`, **todas** as hashtags compostas (`velaaromatica`) caíam por `lang`; o pool de hashtags ficaria vazio. |
 
 ## Estrutura de arquivos
 
 | Arquivo | Responsabilidade |
 |---|---|
 | `src/content_factory/domain/viral_v2.py` (novo) | Componentes, percentis por grupo, pesos versionados, explicação. |
-| `src/content_factory/domain/term_ranking.py` (novo) | Mediana, fração no top 10%, `engagement_score`, bootstrap CI, veredito. |
-| `src/content_factory/domain/hashtag_mining.py` (novo) | Extração de hashtags, ranking ponderado pelo `viral-v2`. |
-| `src/content_factory/domain/models.py` (editar) | `ViralV2Row`, `ViralV2Result`, `TermReportRow`. |
-| `src/content_factory/app/ports.py` (editar) | `ViralV2Repository`, `TermReportRepository`. |
+| `src/content_factory/domain/term_ranking.py` (novo) | Vídeo único por chave, medianas, top 10%, `engagement_score`, regra por origem com bootstrap. |
+| `src/content_factory/domain/hashtag_mining.py` (novo) | Extração, ranking ponderado pelo `viral-v2`, R1 em modo hashtag, top K. |
+| `src/content_factory/domain/models.py` (editar) | `PopulationRow`, `TermReportRecord`. |
+| `src/content_factory/app/ports.py` (editar) | `ViralV2Repository`, `TermReportRepository`, `PopulationReader`. |
 | `src/content_factory/infra/db/orm.py` (editar) | `VideoScoreV2Row`, `TermReportRow`. |
 | `alembic/versions/0015_scores_v2_term_reports.py` (novo) | As duas tabelas. |
-| `src/content_factory/infra/db/repositories.py` (editar) | Implementações + leitura das populações (janela, followers, atribuição, hashtags). |
-| `src/content_factory/app/score_v2.py` (novo) | Use-case do `viral-v2` e da mineração de hashtags. |
-| `src/content_factory/app/term_report.py` (novo) | Use-case do ranking de temas. |
+| `src/content_factory/infra/db/repositories.py` (editar) | Implementações + SQL da população no corte e das atribuições. |
+| `src/content_factory/app/population.py` (novo) | `PopulationRow` → `ViralInput` (relevância, velocidade, engajamento) — compartilhado por score e relatório. |
+| `src/content_factory/app/score_v2.py` (novo) | Use-case do worker: grava `viral-v2` e minera hashtags. |
+| `src/content_factory/app/term_report.py` (novo) | Use-case do relatório no corte. |
 | `src/content_factory/cli/main.py` (editar) | `cf term-report`. |
-| `src/content_factory/infra/queue/worker.py` (editar) | `score_v2` no `run_score_job`; env `VIRAL_V2_*`. |
-| `src/content_factory/app/ops_report.py` (editar) | (R13 no Bloco 6; aqui só o necessário para o aceite.) |
+| `src/content_factory/infra/queue/worker.py`, `composition.py` (editar) | `score_v2` no `run_score_job`. |
 | `tests/...` | TDD por arquivo. |
 
 ---
@@ -60,12 +73,9 @@ Especificação §4 R9, R10, R11; §6 (regra de decisão, "top temas", `n < 5`);
 - Test: `tests/domain/test_viral_v2.py`
 
 **Interfaces:**
-- Produces:
-  - `VIRAL_V2_VERSION = "viral-v2"`; `WEIGHTS_V2 = {"velocity":0.35,"engagement":0.25,"channel_relative":0.25,"reach":0.15}`; `WINDOW_DAYS = 30`; `MIN_POPULATION = 5`
-  - `@dataclass(frozen=True) class ViralInput: video_id: int; platform: str; segment_id: int; velocity_per_hour: float | None; engagement_rate: float | None; views: int | None; channel_followers: int | None`
-  - `@dataclass(frozen=True) class ViralScore: video_id: int; total: float | None; velocity: float | None; engagement: float | None; channel_relative: float | None; reach: float | None; population_n: int; explanation: dict[str, object]`
-  - `def percentile_ranks(values: Mapping[int, float]) -> dict[int, float]`
-  - `def score_population(rows: Sequence[ViralInput]) -> list[ViralScore]`
+- Produces: `VIRAL_V2_VERSION`, `WEIGHTS_V2`, `WINDOW_DAYS = 30`, `MIN_POPULATION = 5`, `ViralInput`, `ViralScore`, `percentile_ranks(values: Mapping[int, float]) -> dict[int, float]`, `score_population(rows, min_population=MIN_POPULATION) -> list[ViralScore]`.
+
+> A 1ª versão tinha dois erros de pyright strict: `field(default_factory=dict)` sem tipo, e `percentile_ranks` recebendo `dict[int, float | None]`. Também havia um docstring que contradizia o código (o empate pega a média das posições, não o maior rank). O código abaixo foi executado contra estes testes (pytest, pyright strict e ruff limpos).
 
 - [ ] **Step 1: Testes que falham**
 
@@ -80,67 +90,59 @@ from content_factory.domain.viral_v2 import (
 )
 
 
-def _row(vid: int, **kw: object) -> ViralInput:
-    base: dict[str, object] = dict(
-        video_id=vid,
-        platform="youtube",
-        segment_id=1,
-        velocity_per_hour=10.0,
-        engagement_rate=5.0,
-        views=1000,
-        channel_followers=10_000,
-    )
-    base.update(kw)
-    return ViralInput(**base)  # type: ignore[arg-type]
+def _row(
+    vid: int,
+    *,
+    platform: str = "youtube",
+    velocity: float | None = 10.0,
+    engagement: float | None = 5.0,
+    views: int | None = 1000,
+    followers: int | None = 10_000,
+) -> ViralInput:
+    return ViralInput(vid, platform, 1, velocity, engagement, views, followers)
 
 
 def test_version_e_pesos_somam_1() -> None:
     assert VIRAL_V2_VERSION == "viral-v2"
     assert round(sum(WEIGHTS_V2.values()), 6) == 1.0
-    assert WEIGHTS_V2["velocity"] == 0.35
 
 
-def test_percentil_ranks_ordena_e_escala_0_1() -> None:
-    ranks = percentile_ranks({1: 10.0, 2: 20.0, 3: 30.0})
-    assert ranks[1] < ranks[2] < ranks[3]
-    assert 0.0 <= ranks[1] and ranks[3] <= 1.0
+def test_percentis_pior_0_melhor_1_e_empate_na_media() -> None:
+    assert percentile_ranks({1: 10.0, 2: 20.0, 3: 30.0}) == {1: 0.0, 2: 0.5, 3: 1.0}
+    assert percentile_ranks({1: 5.0, 2: 5.0}) == {1: 0.5, 2: 0.5}
 
 
 def test_populacao_pequena_nao_tem_total() -> None:
-    out = score_population([_row(1), _row(2)])
-    assert all(s.total is None for s in out)
-    assert all(s.population_n == 2 for s in out)
+    assert all(s.total is None for s in score_population([_row(1), _row(2)]))
 
 
-def test_grupo_separado_por_plataforma() -> None:
+def test_min_population_parametrizavel() -> None:
+    rows = [_row(i) for i in range(1, 4)]
+    assert all(s.total is not None for s in score_population(rows, min_population=3))
+
+
+def test_grupos_separados_por_plataforma() -> None:
     rows = [_row(i) for i in range(1, 7)] + [_row(i, platform="instagram") for i in range(10, 16)]
     out = score_population(rows)
-    assert all(s.total is not None for s in out)
-    yt = [s for s in out if any(r.platform == "youtube" and r.video_id == s.video_id for r in rows)]
-    assert len(yt) == 6
+    assert len(out) == 12 and all(s.population_n == 6 for s in out)
 
 
 def test_maior_velocidade_maior_pontuacao_com_mesmo_resto() -> None:
-    rows = [_row(i, velocity_per_hour=float(i)) for i in range(1, 8)]
-    out = {s.video_id: s for s in score_population(rows)}
-    assert out[7].total is not None and out[1].total is not None
-    assert out[7].total > out[1].total
+    out = {
+        s.video_id: s for s in score_population([_row(i, velocity=float(i)) for i in range(1, 8)])
+    }
+    assert (out[7].total or 0.0) > (out[1].total or 0.0)
 
 
 def test_componente_ausente_renormaliza_pesos() -> None:
-    rows = [_row(i) for i in range(1, 7)]
-    rows.append(_row(99, velocity_per_hour=None))
+    rows = [_row(i) for i in range(1, 7)] + [_row(99, velocity=None)]
     out = {s.video_id: s for s in score_population(rows)}
-    assert out[99].total is not None  # sem velocity, os outros 3 bastam
-    assert out[99].velocity is None
-
-
-def test_explicacao_diz_componentes_usados() -> None:
-    out = score_population([_row(i) for i in range(1, 7)])
-    assert "components_used" in out[0].explanation
+    assert out[99].total is not None and out[99].velocity is None
+    used = out[99].explanation["components_used"]
+    assert isinstance(used, list) and "velocity" not in used
 ```
 
-- [ ] **Step 2: Rodar e ver falhar** — `uv run pytest tests/domain/test_viral_v2.py -q` → FAIL.
+- [ ] **Step 2: Rodar e ver falhar** — FAIL.
 
 - [ ] **Step 3: Implementar**
 
@@ -192,14 +194,14 @@ class ViralScore:
     channel_relative: float | None
     reach: float | None
     population_n: int
-    explanation: dict[str, object] = field(default_factory=dict)
+    explanation: dict[str, object] = field(default_factory=dict[str, object])
 
 
 def percentile_ranks(values: Mapping[int, float]) -> dict[int, float]:
-    """Percentil em [0,1] (`rank/(n−1)`; n=1 ⇒ 0.5). Empates: maior rank.
+    """Percentil em [0,1]: pior = 0, melhor = 1 (`posição/(n−1)`); n=1 ⇒ 0,5.
 
-    `(rank − 1) / (n − 1)` colocaria o melhor em 1,0 e o pior em 0,0; usa o
-    meio do intervalo para empates, sem depender da ordem de inserção.
+    Empates recebem a MÉDIA das posições que ocupam — não depende da ordem
+    de inserção.
     """
     n = len(values)
     if n == 0:
@@ -239,7 +241,9 @@ def _raw_components(r: ViralInput) -> dict[str, float | None]:
     }
 
 
-def score_population(rows: Sequence[ViralInput]) -> list[ViralScore]:
+def score_population(
+    rows: Sequence[ViralInput], min_population: int = MIN_POPULATION
+) -> list[ViralScore]:
     """Pontua TODOS os vídeos, normalizando por `(platform, segment_id)`."""
     groups: dict[tuple[str, int], list[ViralInput]] = {}
     for r in rows:
@@ -251,7 +255,7 @@ def score_population(rows: Sequence[ViralInput]) -> list[ViralScore]:
         n = len(group)
         ranks: dict[str, dict[int, float]] = {}
         for name in WEIGHTS_V2:
-            present = {vid: comps[name] for vid, comps in raw.items() if comps[name] is not None}
+            present = {vid: v for vid, comps in raw.items() if (v := comps[name]) is not None}
             ranks[name] = percentile_ranks(present)
         for r in group:
             comps: dict[str, float | None] = {
@@ -259,7 +263,7 @@ def score_population(rows: Sequence[ViralInput]) -> list[ViralScore]:
             }
             available = {k: v for k, v in comps.items() if v is not None}
             total: float | None = None
-            if available and n >= MIN_POPULATION:
+            if available and n >= min_population:
                 weight_sum = sum(WEIGHTS_V2[k] for k in available)
                 total = round(sum(available[k] * WEIGHTS_V2[k] for k in available) / weight_sum, 6)
             out[r.video_id] = ViralScore(
@@ -274,8 +278,8 @@ def score_population(rows: Sequence[ViralInput]) -> list[ViralScore]:
                     "formula_version": VIRAL_V2_VERSION,
                     "components_used": sorted(available),
                     "population_n": n,
-                    "min_population": MIN_POPULATION,
-                    "insufficient": n < MIN_POPULATION,
+                    "min_population": min_population,
+                    "insufficient": n < min_population,
                 },
             )
     return list(out.values())
@@ -292,21 +296,16 @@ git commit -m "feat(domain): viral-v2 — percentis por plataforma/segmento e pe
 
 ---
 
-### Task 2: Ranking de temas puro (`domain/term_ranking.py`)
+### Task 2: Ranking de temas e regra por origem (`domain/term_ranking.py`)
 
 **Files:**
 - Create: `src/content_factory/domain/term_ranking.py`
 - Test: `tests/domain/test_term_ranking.py`
 
 **Interfaces:**
-- Produces:
-  - `TERM_RANK_VERSION = "term-rank-v1"`; `ENGAGEMENT_WEIGHTS = {"top10_fraction":0.4,"median_velocity":0.3,"median_engagement":0.3}`; `MIN_N = 5`; `BOOTSTRAP_SEED = 20261016`; `BOOTSTRAP_RESAMPLES = 1000`
-  - `@dataclass(frozen=True) class TermSample: video_id: int; term: str; origin: str; viral_v2: float | None; velocity: float | None; engagement: float | None; channel_relative: float | None`
-  - `@dataclass(frozen=True) class TermSummary: key: str; scope: str; n: int; median_velocity: float | None; median_engagement: float | None; median_channel_relative: float | None; top10_fraction: float | None; engagement_score: float | None; ci_low: float | None; ci_high: float | None; verdict: str`
-  - `def median(values: Sequence[float]) -> float | None`
-  - `def bootstrap_ci(values: Sequence[float], seed: int = BOOTSTRAP_SEED, resamples: int = BOOTSTRAP_RESAMPLES) -> tuple[float | None, float | None]`
-  - `def summarize(samples: Sequence[TermSample], *, scope: str, key: str, top10_threshold: float) -> TermSummary`
-  - `def rank(samples: Sequence[TermSample], scope: str) -> list[TermSummary]`
+- Produces: `TERM_RANK_VERSION`, `ENGAGEMENT_WEIGHTS`, `MIN_N_TERM = 5`, `MIN_N_ORIGIN = 30`, `BASELINE_ORIGIN = "seed"`, `BOOTSTRAP_SEED`, `BOOTSTRAP_RESAMPLES`, `TermSample`, `TermSummary`, `OriginComparison`, `median`, `top10_threshold`, `summarize`, `rank_terms`, `bootstrap_diff_ci`, `compare_origins`.
+
+> Executado na revisão QA contra estes testes (pytest, pyright strict e ruff limpos).
 
 - [ ] **Step 1: Testes que falham**
 
@@ -314,70 +313,58 @@ git commit -m "feat(domain): viral-v2 — percentis por plataforma/segmento e pe
 # tests/domain/test_term_ranking.py
 from content_factory.domain.term_ranking import (
     BOOTSTRAP_SEED,
-    MIN_N,
+    MIN_N_ORIGIN,
+    MIN_N_TERM,
     TermSample,
-    bootstrap_ci,
-    median,
-    rank,
-    summarize,
+    bootstrap_diff_ci,
+    compare_origins,
+    rank_terms,
 )
 
 
-def _samples(term: str, origin: str, n: int, base: float = 50.0) -> list[TermSample]:
-    return [
-        TermSample(
-            video_id=i,
-            term=term,
-            origin=origin,
-            viral_v2=base + i,
-            velocity=float(i),
-            engagement=1.0 + i,
-            channel_relative=0.5,
-        )
-        for i in range(n)
-    ]
+def _s(term: str, origin: str, n: int, base: float, start: int = 0) -> list[TermSample]:
+    return [TermSample(start + i, term, origin, base + i, float(i), 1.0 + i, 0.5) for i in range(n)]
 
 
-def test_mediana() -> None:
-    assert median([1.0, 3.0, 2.0]) == 2.0
-    assert median([]) is None
+def test_constantes_congeladas() -> None:
+    assert (BOOTSTRAP_SEED, MIN_N_TERM, MIN_N_ORIGIN) == (20261016, 5, 30)
 
 
-def test_bootstrap_reprodutivel_e_com_limites() -> None:
-    a = bootstrap_ci([1.0, 2.0, 3.0, 4.0, 5.0])
-    b = bootstrap_ci([1.0, 2.0, 3.0, 4.0, 5.0])
-    assert a == b and a[0] is not None and a[1] is not None
-    assert a[0] <= 3.0 <= a[1]
+def test_mesmo_video_repetido_conta_uma_vez() -> None:
+    repetido = [TermSample(1, "vela", "seed", 50.0, 1.0, 1.0, 0.5)] * 16
+    out = rank_terms(repetido + _s("vela", "seed", 3, 60, start=100))
+    assert out[0].n == 4 and out[0].verdict == "insufficient"
 
 
-def test_n_menor_que_5_e_insuficiente() -> None:
-    s = summarize(_samples("vela", "seed", 4), scope="term", key="vela", top10_threshold=90.0)
-    assert s.verdict == "insufficient"
-    assert s.engagement_score is None
+def test_rank_terms_ordena_e_insuficiente_vai_para_o_fim() -> None:
+    out = rank_terms(
+        _s("forte", "suggest", 10, 80)
+        + _s("fraco", "suggest", 10, 1, 100)
+        + _s("poucos", "seed", 3, 50, 200)
+    )
+    assert out[0].key == "forte" and out[-1].verdict == "insufficient"
+    assert out[0].top10_fraction is not None and out[0].engagement_score is not None
 
 
-def test_termo_suficiente_tem_score_e_ci() -> None:
-    s = summarize(_samples("vela", "seed", 10), scope="term", key="vela", top10_threshold=50.0)
-    assert s.verdict != "insufficient"
-    assert s.n == 10 and s.engagement_score is not None and s.ci_low is not None
+def test_origem_melhor_pior_direcional_e_insuficiente() -> None:
+    def verdict(x_base: float, seed_base: float, n_x: int = 40) -> str:
+        samples = _s("x", "suggest", n_x, x_base) + _s("y", "seed", 40, seed_base, 1000)
+        return compare_origins(samples)[0].verdict
+
+    assert verdict(60, 10) == "better"
+    assert verdict(0, 60) == "worse"
+    assert verdict(10, 10) == "directional"
+    assert verdict(90, 10, n_x=10) == "insufficient"  # n < 30
 
 
-def test_fraction_top10_conta_certo() -> None:
-    samples = _samples("vela", "seed", 4, base=100.0)  # todos acima do limiar
-    s = summarize(samples, scope="term", key="vela", top10_threshold=50.0)
-    assert s.top10_fraction == 1.0
+def test_sobreposicao_com_seed_e_reportada() -> None:
+    out = compare_origins(_s("x", "suggest", 30, 60) + _s("y", "seed", 30, 60))
+    assert out[0].overlap == 30
 
 
-def test_rank_ordena_por_engagement_score_e_joga_insuficiente_para_o_fim() -> None:
-    samples = _samples("forte", "seed", 10, base=100.0) + _samples("fraco", "seed", 10, base=1.0)
-    samples += _samples("poucos", "suggest", 3)
-    out = rank(samples, scope="term")
-    assert out[-1].verdict == "insufficient"
-    assert out[0].key == "forte"
-
-
-def test_semente_de_bootstrap_esta_congelada() -> None:
-    assert BOOTSTRAP_SEED == 20261016 and MIN_N == 5
+def test_bootstrap_reprodutivel() -> None:
+    a, b = [1.0, 2.0, 3.0], [1.0, 2.0, 3.0]
+    assert bootstrap_diff_ci(a, b) == bootstrap_diff_ci(a, b)
 ```
 
 - [ ] **Step 2: Rodar e ver falhar** — FAIL.
@@ -386,16 +373,25 @@ def test_semente_de_bootstrap_esta_congelada() -> None:
 
 ```python
 # src/content_factory/domain/term_ranking.py
-"""Ranking de temas (R10) — puro, com bootstrap de seed FIXA e n mínimo.
+"""Ranking de temas e veredito por origem (R10, §6) — puro, seed FIXA.
 
-Verdictos: `insufficient` (n < MIN_N — nunca vencedor), `leader`
-(IC 95% da mediana todo acima do limiar do top 10%), `directional`
-(IC cruza o limiar), `trailing` (todo abaixo).
+Unidade de análise = VÍDEO ÚNICO por chave (termo ou origem): o mesmo vídeo
+achado pelo mesmo termo em 16 coletas conta 1 vez (sem pseudorreplicação).
+Um vídeo achado por duas origens conta nas duas (sobreposição reportada).
+
+Duas saídas:
+- `rank_terms`: por termo, `n` (vídeos únicos), medianas, fração no top 10%
+  do `viral-v2`, `engagement_score`; `n < MIN_N_TERM` ⇒ `insufficient`
+  (nunca vencedor).
+- `compare_origins`: regra PRÉ-REGISTRADA — origem X vs `seed`: diferença
+  das medianas do `viral-v2` com IC 95% por bootstrap; `n < MIN_N_ORIGIN`
+  em X ou em `seed` ⇒ `insufficient`; limite inferior > 0 ⇒ `better`;
+  limite superior < 0 ⇒ `worse`; senão `directional`.
 """
 
 import random
 import statistics
-from collections.abc import Sequence
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 
 TERM_RANK_VERSION = "term-rank-v1"
@@ -404,13 +400,17 @@ ENGAGEMENT_WEIGHTS: dict[str, float] = {
     "median_velocity": 0.3,
     "median_engagement": 0.3,
 }
-MIN_N = 5
+MIN_N_TERM = 5
+MIN_N_ORIGIN = 30
+BASELINE_ORIGIN = "seed"
 BOOTSTRAP_SEED = 20261016
 BOOTSTRAP_RESAMPLES = 1000
 
 
 @dataclass(frozen=True)
 class TermSample:
+    """Uma atribuição: vídeo × termo × origem, com o `viral-v2` no corte."""
+
     video_id: int
     term: str
     origin: str
@@ -423,36 +423,54 @@ class TermSample:
 @dataclass(frozen=True)
 class TermSummary:
     key: str
-    scope: str  # "term" | "origin"
     n: int
+    median_viral_v2: float | None
     median_velocity: float | None
     median_engagement: float | None
     median_channel_relative: float | None
     top10_fraction: float | None
     engagement_score: float | None
+    verdict: str  # "ranked" | "insufficient"
+
+
+@dataclass(frozen=True)
+class OriginComparison:
+    origin: str
+    n: int
+    baseline_n: int
+    median_viral_v2: float | None
+    baseline_median: float | None
+    diff: float | None
     ci_low: float | None
     ci_high: float | None
-    verdict: str
+    overlap: int  # vídeos que também vieram da `seed`
+    verdict: str  # "better" | "worse" | "directional" | "insufficient"
 
 
 def median(values: Sequence[float]) -> float | None:
     return round(statistics.median(values), 6) if values else None
 
 
-def bootstrap_ci(
-    values: Sequence[float], seed: int = BOOTSTRAP_SEED, resamples: int = BOOTSTRAP_RESAMPLES
-) -> tuple[float | None, float | None]:
-    """IC 95% (percentis 2,5 e 97,5) da mediana — seed fixa: reprodutível."""
-    if not values:
-        return None, None
-    rng = random.Random(seed)
-    n = len(values)
-    medians = sorted(
-        statistics.median([values[rng.randrange(n)] for _ in range(n)]) for _ in range(resamples)
-    )
-    lo = medians[int(0.025 * resamples)]
-    hi = medians[min(int(0.975 * resamples), resamples - 1)]
-    return round(lo, 6), round(hi, 6)
+def _unique_by_video(samples: Iterable[TermSample]) -> list[TermSample]:
+    seen: dict[int, TermSample] = {}
+    for s in samples:
+        seen.setdefault(s.video_id, s)
+    return list(seen.values())
+
+
+def _group(samples: Sequence[TermSample], by: str) -> dict[str, list[TermSample]]:
+    groups: dict[str, list[TermSample]] = {}
+    for s in samples:
+        groups.setdefault(s.term if by == "term" else s.origin, []).append(s)
+    return {k: _unique_by_video(v) for k, v in groups.items()}
+
+
+def top10_threshold(samples: Sequence[TermSample]) -> float | None:
+    """Percentil 90 do `viral-v2` dos vídeos ÚNICOS do recorte."""
+    viral = [s.viral_v2 for s in _unique_by_video(samples) if s.viral_v2 is not None]
+    if len(viral) < 10:
+        return None
+    return statistics.quantiles(sorted(viral), n=10)[8]
 
 
 def _score(components: dict[str, float | None]) -> float | None:
@@ -460,77 +478,91 @@ def _score(components: dict[str, float | None]) -> float | None:
     if not available:
         return None
     weight_sum = sum(ENGAGEMENT_WEIGHTS[k] for k in available)
-    return round(sum(available[k] * ENGAGEMENT_WEIGHTS[k] for k in available) / weight_sum, 6)
+    return round(sum(v * ENGAGEMENT_WEIGHTS[k] for k, v in available.items()) / weight_sum, 6)
 
 
-def summarize(
-    samples: Sequence[TermSample], *, scope: str, key: str, top10_threshold: float
-) -> TermSummary:
-    n = len(samples)
-    viral = [s.viral_v2 for s in samples if s.viral_v2 is not None]
-    top = [v for v in viral if v >= top10_threshold]
-    frac = round(len(top) / len(viral), 6) if viral else None
-    med_v = median([s.velocity for s in samples if s.velocity is not None])
-    med_e = median([s.engagement for s in samples if s.engagement is not None])
-    med_rel = median([s.channel_relative for s in samples if s.channel_relative is not None])
-    if n < MIN_N:
-        return TermSummary(
-            key=key,
-            scope=scope,
-            n=n,
-            median_velocity=med_v,
-            median_engagement=med_e,
-            median_channel_relative=med_rel,
-            top10_fraction=frac,
-            engagement_score=None,
-            ci_low=None,
-            ci_high=None,
-            verdict="insufficient",
-        )
-    ci_low, ci_high = bootstrap_ci(viral)
-    if ci_low is not None and ci_low >= top10_threshold:
-        verdict = "leader"
-    elif ci_high is not None and ci_high < top10_threshold:
-        verdict = "trailing"
-    else:
-        verdict = "directional"
+def summarize(group: Sequence[TermSample], key: str, threshold: float | None) -> TermSummary:
+    viral = [s.viral_v2 for s in group if s.viral_v2 is not None]
+    frac = (
+        round(sum(1 for v in viral if v >= threshold) / len(viral), 6)
+        if viral and threshold is not None
+        else None
+    )
+    med_v = median([s.velocity for s in group if s.velocity is not None])
+    med_e = median([s.engagement for s in group if s.engagement is not None])
+    insufficient = len(group) < MIN_N_TERM
     return TermSummary(
         key=key,
-        scope=scope,
-        n=n,
+        n=len(group),
+        median_viral_v2=median(viral),
         median_velocity=med_v,
         median_engagement=med_e,
-        median_channel_relative=med_rel,
-        top10_fraction=frac,
-        engagement_score=_score(
-            {"top10_fraction": frac, "median_velocity": med_v, "median_engagement": med_e}
+        median_channel_relative=median(
+            [s.channel_relative for s in group if s.channel_relative is not None]
         ),
-        ci_low=ci_low,
-        ci_high=ci_high,
-        verdict=verdict,
+        top10_fraction=frac,
+        engagement_score=None
+        if insufficient
+        else _score({"top10_fraction": frac, "median_velocity": med_v, "median_engagement": med_e}),
+        verdict="insufficient" if insufficient else "ranked",
     )
 
 
-def rank(samples: Sequence[TermSample], scope: str) -> list[TermSummary]:
-    """Agrupa por termo (escopo `term`) ou origem (escopo `origin`)."""
-    viral = [s.viral_v2 for s in samples if s.viral_v2 is not None]
-    threshold = (
-        statistics.quantiles(sorted(viral), n=10)[8]
-        if len(viral) >= 10
-        else max(viral, default=0.0)
-    )
-    groups: dict[str, list[TermSample]] = {}
-    for s in samples:
-        key = s.term if scope == "term" else s.origin
-        groups.setdefault(key, []).append(s)
-    summaries = [
-        summarize(group, scope=scope, key=key, top10_threshold=threshold)
-        for key, group in groups.items()
-    ]
+def rank_terms(samples: Sequence[TermSample]) -> list[TermSummary]:
+    threshold = top10_threshold(samples)
+    out = [summarize(g, k, threshold) for k, g in _group(samples, "term").items()]
     return sorted(
-        summaries,
-        key=lambda s: (s.verdict == "insufficient", -(s.engagement_score or 0.0), s.key),
+        out, key=lambda s: (s.verdict == "insufficient", -(s.engagement_score or 0.0), s.key)
     )
+
+
+def bootstrap_diff_ci(
+    a: Sequence[float],
+    b: Sequence[float],
+    seed: int = BOOTSTRAP_SEED,
+    resamples: int = BOOTSTRAP_RESAMPLES,
+) -> tuple[float, float]:
+    """IC 95% (percentis 2,5/97,5) de mediana(a) − mediana(b); reamostra cada grupo."""
+    rng = random.Random(seed)
+    diffs = sorted(
+        statistics.median(rng.choices(a, k=len(a))) - statistics.median(rng.choices(b, k=len(b)))
+        for _ in range(resamples)
+    )
+    return round(diffs[int(0.025 * resamples)], 6), round(diffs[int(0.975 * resamples) - 1], 6)
+
+
+def compare_origins(samples: Sequence[TermSample]) -> list[OriginComparison]:
+    groups = _group(samples, "origin")
+    base = [s.viral_v2 for s in groups.get(BASELINE_ORIGIN, []) if s.viral_v2 is not None]
+    base_ids = {s.video_id for s in groups.get(BASELINE_ORIGIN, [])}
+    out: list[OriginComparison] = []
+    for origin, group in sorted(groups.items()):
+        if origin == BASELINE_ORIGIN:
+            continue
+        values = [s.viral_v2 for s in group if s.viral_v2 is not None]
+        med, base_med = median(values), median(base)
+        ci_low = ci_high = diff = None
+        if med is None or base_med is None or min(len(values), len(base)) < MIN_N_ORIGIN:
+            verdict = "insufficient"
+        else:
+            diff = round(med - base_med, 6)
+            ci_low, ci_high = bootstrap_diff_ci(values, base)
+            verdict = "better" if ci_low > 0 else "worse" if ci_high < 0 else "directional"
+        out.append(
+            OriginComparison(
+                origin=origin,
+                n=len(values),
+                baseline_n=len(base),
+                median_viral_v2=med,
+                baseline_median=base_med,
+                diff=diff,
+                ci_low=ci_low,
+                ci_high=ci_high,
+                overlap=sum(1 for s in group if s.video_id in base_ids),
+                verdict=verdict,
+            )
+        )
+    return out
 ```
 
 - [ ] **Step 4: Rodar e ver passar** — PASS.
@@ -539,7 +571,7 @@ def rank(samples: Sequence[TermSample], scope: str) -> list[TermSummary]:
 
 ```bash
 git add src/content_factory/domain/term_ranking.py tests/domain/test_term_ranking.py
-git commit -m "feat(domain): term-rank-v1 — medianas, top 10%, IC por bootstrap e veredito (R10)"
+git commit -m "feat(domain): term-rank-v1 — vídeo único, ranking de temas e regra por origem (R10/§6)"
 ```
 
 ---
@@ -551,68 +583,42 @@ git commit -m "feat(domain): term-rank-v1 — medianas, top 10%, IC por bootstra
 - Test: `tests/domain/test_hashtag_mining.py`
 
 **Interfaces:**
-- Produces:
-  - `HASHTAG_MINE_VERSION = "hashtag-mine-v1"`; `TOP_FRACTION = 0.25`
-  - `@dataclass(frozen=True) class HashtagSource: video_id: int; platform: str; viral_v2: float | None; raw: Mapping[str, object]; title: str = ""; description: str = ""`
-  - `@dataclass(frozen=True) class MinedHashtag: tag: str; platform: str; weight: float; videos: int`
-  - `def extract_hashtags(source: HashtagSource) -> list[str]`
-  - `def mine(sources: Sequence[HashtagSource]) -> list[MinedHashtag]`
+- Consumes: `content_factory.domain.term_filter.{TermFilterConfig, filter_hashtag}` (Bloco 1).
+- Produces: `HASHTAG_MINE_VERSION`, `TOP_FRACTION = 0.25`, `TOP_K = 10`, `HashtagSource`, `MinedHashtag`, `extract_hashtags`, `mine(sources, config) -> list[MinedHashtag]`.
+
+> Executado na revisão QA contra estes testes.
 
 - [ ] **Step 1: Testes que falham**
 
 ```python
 # tests/domain/test_hashtag_mining.py
-from content_factory.domain.hashtag_mining import (
-    HashtagSource,
-    extract_hashtags,
-    mine,
-)
+from content_factory.domain.hashtag_mining import HashtagSource, extract_hashtags, mine
+from content_factory.domain.term_filter import TermFilterConfig
 
-YT_RAW = {
-    "snippet": {
-        "tags": ["velasartesanais", "decoracao"],
-        "description": "Aprenda #velaaromatica e #Dica",
-    },
-}
+VELAS = TermFilterConfig(anchors=("vela", "velas"), blocked=("bajista",))
+RAW = {"snippet": {"tags": ["velas artesanais", "decoracao"], "description": "x"}}
 
 
-def test_extrai_snippet_tags_e_hashtags_do_texto() -> None:
-    src = HashtagSource(
-        video_id=1, platform="youtube", viral_v2=90.0, raw=YT_RAW, title="Vela #velaDeSoja"
-    )
-    tags = extract_hashtags(src)
-    assert "velasartesanais" in tags and "velaaromatica" in tags
-    assert "veladesoja" in tags and "dica" in tags
+def test_extrai_tags_sem_espaco_e_hashtags_do_titulo() -> None:
+    tags = extract_hashtags(HashtagSource(1, "youtube", 9.0, RAW, title="Vela #VelaDeSoja"))
+    assert {"velasartesanais", "veladesoja", "decoracao"} <= set(tags)
 
 
-def test_mineracao_usa_so_o_top_25_por_cento() -> None:
+def test_so_top_25_por_cento_e_so_tags_do_nicho() -> None:
+    fraca = {"snippet": {"tags": ["velafraca"]}}
     sources = [
-        HashtagSource(video_id=1, platform="youtube", viral_v2=100.0, raw=YT_RAW),
-        HashtagSource(
-            video_id=2, platform="youtube", viral_v2=10.0, raw={"snippet": {"tags": ["fraco"]}}
-        ),
-        HashtagSource(video_id=3, platform="youtube", viral_v2=90.0, raw=YT_RAW),
-        HashtagSource(
-            video_id=4, platform="youtube", viral_v2=5.0, raw={"snippet": {"tags": ["fraco"]}}
-        ),
+        HashtagSource(i, "youtube", float(i), RAW if i >= 8 else fraca) for i in range(1, 11)
     ]
-    out = mine(sources)
-    assert all(h.tag != "fraco" for h in out)
+    tags = {h.tag for h in mine(sources, VELAS)}
+    assert "velasartesanais" in tags
+    assert "velafraca" not in tags  # fora do top 25%
+    assert "decoracao" not in tags  # sem âncora
 
 
-def test_peso_por_frequencia_vezes_viral_v2() -> None:
-    sources = [
-        HashtagSource(video_id=1, platform="youtube", viral_v2=100.0, raw=YT_RAW),
-        HashtagSource(video_id=2, platform="youtube", viral_v2=50.0, raw=YT_RAW),
-    ]
-    out = {h.tag: h for h in mine(sources)}
-    assert out["velasartesanais"].videos == 2
-    assert out["velasartesanais"].weight > out.get("dica", out["velasartesanais"]).weight - 1e-9
-
-
-def test_video_sem_viral_v2_nao_entra() -> None:
-    out = mine([HashtagSource(video_id=1, platform="youtube", viral_v2=None, raw=YT_RAW)])
-    assert out == []
+def test_sem_viral_v2_nao_entra_e_top_k_por_plataforma() -> None:
+    assert mine([HashtagSource(1, "youtube", None, RAW)], VELAS) == []
+    muitas = {"snippet": {"tags": [f"vela{i}" for i in range(30)]}}
+    assert len(mine([HashtagSource(1, "youtube", 10.0, muitas)], VELAS)) == 10
 ```
 
 - [ ] **Step 2: Rodar e ver falhar** — FAIL.
@@ -623,17 +629,22 @@ def test_video_sem_viral_v2_nao_entra() -> None:
 # src/content_factory/domain/hashtag_mining.py
 """Mineração de hashtags (R11) — pura.
 
-Fonte: só os vídeos do segmento no TOP 25% do `viral-v2` (não todos). O peso
-de cada hashtag é a soma do `viral-v2` dos vídeos que a usam — frequência
-PONDERADA pelo desempenho, não contagem crua.
+Fonte: só os vídeos do segmento no TOP 25% do `viral-v2`. Peso = soma do
+`viral-v2` dos vídeos que usam a tag (frequência PONDERADA). Passa pelo R1
+em modo hashtag (`filter_hashtag`: âncora/bloqueio por substring, sem idioma).
+Só as `TOP_K` melhores por plataforma ficam ativas no pool.
 """
 
 import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+from typing import cast
+
+from content_factory.domain.term_filter import TermFilterConfig, filter_hashtag
 
 HASHTAG_MINE_VERSION = "hashtag-mine-v1"
 TOP_FRACTION = 0.25
+TOP_K = 10
 _HASHTAG_RE = re.compile(r"#(\w{2,50})", re.UNICODE)
 
 
@@ -659,42 +670,51 @@ def _snippet_tags(raw: Mapping[str, object]) -> list[str]:
     snippet = raw.get("snippet")
     if not isinstance(snippet, Mapping):
         return []
-    tags = snippet.get("tags")
+    tags = cast(Mapping[str, object], snippet).get("tags")
     if not isinstance(tags, list):
         return []
-    return [str(t) for t in tags]
-
-
-def _text_hashtags(text: str) -> list[str]:
-    return [m.casefold() for m in _HASHTAG_RE.findall(text)]
+    return [str(t) for t in cast(list[object], tags)]
 
 
 def extract_hashtags(source: HashtagSource) -> list[str]:
-    """YouTube: `snippet.tags` + `#tags` do título e da descrição."""
-    tags = [t.casefold() for t in _snippet_tags(source.raw)]
-    tags += _text_hashtags(source.title)
-    tags += _text_hashtags(source.description)
+    """`snippet.tags` (sem espaço) + `#tags` do título/descrição, minúsculas e sem `#`."""
+    tags = [t.casefold().replace(" ", "") for t in _snippet_tags(source.raw)]
+    for text in (source.title, source.description):
+        tags += [m.casefold() for m in _HASHTAG_RE.findall(text)]
     return list(dict.fromkeys(t for t in tags if t))
 
 
-def mine(sources: Sequence[HashtagSource]) -> list[MinedHashtag]:
+def mine(sources: Sequence[HashtagSource], config: TermFilterConfig) -> list[MinedHashtag]:
     scored = [s for s in sources if s.viral_v2 is not None]
     if not scored:
         return []
-    cutoff = sorted((s.viral_v2 or 0.0) for s in scored)[int((1 - TOP_FRACTION) * len(scored))]
-    top = [s for s in scored if (s.viral_v2 or 0.0) >= cutoff]
+    values = sorted(s.viral_v2 for s in scored if s.viral_v2 is not None)
+    cutoff = values[int((1 - TOP_FRACTION) * len(values))]
     weight: dict[tuple[str, str], float] = {}
     videos: dict[tuple[str, str], int] = {}
-    for source in top:
+    for source in scored:
+        if source.viral_v2 is None or source.viral_v2 < cutoff:
+            continue
         for tag in extract_hashtags(source):
+            if not filter_hashtag(tag, config).accepted:
+                continue
             key = (source.platform, tag)
-            weight[key] = weight.get(key, 0.0) + (source.viral_v2 or 0.0)
+            weight[key] = weight.get(key, 0.0) + source.viral_v2
             videos[key] = videos.get(key, 0) + 1
-    out = [
-        MinedHashtag(tag=tag, platform=platform, weight=round(w, 6), videos=videos[(platform, tag)])
-        for (platform, tag), w in weight.items()
-    ]
-    return sorted(out, key=lambda h: (-h.weight, h.tag))
+    ranked = sorted(
+        (
+            MinedHashtag(tag=t, platform=p, weight=round(w, 6), videos=videos[(p, t)])
+            for (p, t), w in weight.items()
+        ),
+        key=lambda h: (h.platform, -h.weight, h.tag),
+    )
+    out: list[MinedHashtag] = []
+    per_platform: dict[str, int] = {}
+    for h in ranked:
+        if per_platform.get(h.platform, 0) < TOP_K:
+            out.append(h)
+            per_platform[h.platform] = per_platform.get(h.platform, 0) + 1
+    return out
 ```
 
 - [ ] **Step 4: Rodar e ver passar** — PASS.
@@ -703,7 +723,7 @@ def mine(sources: Sequence[HashtagSource]) -> list[MinedHashtag]:
 
 ```bash
 git add src/content_factory/domain/hashtag_mining.py tests/domain/test_hashtag_mining.py
-git commit -m "feat(domain): hashtag-mine-v1 — extração e ranking ponderado pelo viral-v2 (R11)"
+git commit -m "feat(domain): hashtag-mine-v1 — top 25%, filtro de hashtag e top 10 (R11)"
 ```
 
 ---
@@ -711,109 +731,102 @@ git commit -m "feat(domain): hashtag-mine-v1 — extração e ranking ponderado 
 ### Task 4: Tabelas `video_scores_v2` e `term_reports` (migração `0015`)
 
 **Files:**
-- Modify: `src/content_factory/infra/db/orm.py`, `src/content_factory/domain/models.py`
+- Modify: `src/content_factory/infra/db/orm.py`
 - Create: `alembic/versions/0015_scores_v2_term_reports.py`
 - Test: `tests/infra/test_orm.py` (editar)
 
 **Interfaces:**
 - Produces:
-  - `VideoScoreV2Row`: `video_id`, `segment_id`, `computed_at`, `viral_score_v2` (nullable), `velocity`, `engagement`, `channel_relative`, `reach`, `population_n`, `components_available` JSONB, `explanation` JSONB, `formula_version`, `window_days`
-  - `TermReportRow`: `segment_id`, `computed_at`, `scope`, `platform`, `key`, `origin`, `n`, `median_velocity`, `median_engagement`, `median_channel_relative`, `top10_fraction`, `engagement_score`, `ci_low`, `ci_high`, `verdict`, `rules_version`, `version`, `as_of`
-  - Modelos pydantic: `ViralV2Row`, `TermReportRow` (em `domain/models.py`).
+  - `VideoScoreV2Row` (append-only): `id`, `video_id`, `segment_id`, `computed_at`, `as_of`, `viral_score_v2` (nullable), `velocity`, `engagement`, `channel_relative`, `reach`, `population_n`, `explanation` JSONB, `formula_version`, `window_days`. Índices `(segment_id, computed_at)` e `(video_id, computed_at)`.
+  - `TermReportRow`: `id`, `report_id` (UUID do relatório: todas as linhas de uma execução), `segment_id`, `platform`, `scope` (`term` | `origin` | `video`), `report_key`, `n`, `baseline_n`, `median_viral_v2`, `median_velocity`, `median_engagement`, `median_channel_relative`, `top10_fraction`, `engagement_score`, `diff`, `ci_low`, `ci_high`, `overlap`, `verdict`, `rank`, `version`, `rules_version`, `as_of`, `computed_at`. Índices `(segment_id, as_of)` e `report_id`.
+  - Use `report_key`, não `key`, como nome de coluna (mesmo nome no ORM e na migração).
 
-- [ ] **Step 1: Teste que falha**
-
-```python
-def test_tabelas_do_bloco_5() -> None:
-    from content_factory.infra.db.orm import TermReportRow, VideoScoreV2Row
-
-    assert "viral_score_v2" in {c.name for c in VideoScoreV2Row.__table__.columns}
-    assert {"scope", "key", "verdict", "ci_low", "ci_high"} <= {
-        c.name for c in TermReportRow.__table__.columns
-    }
-```
-
-- [ ] **Step 2: Rodar e ver falhar** — FAIL.
-
-- [ ] **Step 3: Implementar ORM + migração `0015`** (revision `0015`, down `0014`)
-
-`video_scores_v2` append-only com índices `(segment_id, computed_at)` e `(video_id, computed_at)`; `term_reports` com `(segment_id, computed_at)` e `(segment_id, scope)`. `key` é nome de coluna reservado em alguns dialetos → use `report_key` no ORM e `sa.Column("report_key", ...)` na migração (mantenha consistência ORM↔migração; o `alembic check` compara nomes).
-
-- [ ] **Step 4: Rodar e ver passar + `uv run alembic check`** → PASS, sem drift.
-
-- [ ] **Step 5: Commit**
-
-```bash
-git add src/content_factory/infra/db/orm.py src/content_factory/domain/models.py \
-        alembic/versions/0015_scores_v2_term_reports.py tests/infra/test_orm.py
-git commit -m "feat(db): migração 0015 — video_scores_v2 e term_reports (R9/R10)"
-```
+- [ ] **Step 1–5:** teste das colunas → FAIL → ORM + migração `0015` (down `0014`) → PASS + `uv run alembic check` sem drift → commit `feat(db): migração 0015 — video_scores_v2 e term_reports (R9/R10)`.
 
 ---
 
-### Task 5: Repositórios do `viral-v2`, do relatório e das populações
+### Task 5: População no corte e atribuições (repositório)
 
 **Files:**
-- Modify: `src/content_factory/app/ports.py`
-- Modify: `src/content_factory/infra/db/repositories.py`
+- Modify: `src/content_factory/domain/models.py`, `src/content_factory/app/ports.py`, `src/content_factory/infra/db/repositories.py`
 - Test: `tests/infra/test_repositories.py` (editar — integração)
 
 **Interfaces:**
 - Produces:
-  - `ViralV2Repository.append_many(rows: Sequence[ViralV2Row]) -> int`
-  - `TermReportRepository.append_many(segment_id: int, rows: Sequence[TermReportRow]) -> int`
-  - `ViralV2PopulationRepository.population(segment_id: int, window_days: int) -> list[ViralV2PopulationRow]` — por vídeo: `video_id`, `platform`, `views`, `likes`, `comments`, `shares`, `saves`, `followers`, `velocity_per_hour` (par de snapshots mais recentes), `title`, `description`, `published_at`
-  - `ViralV2PopulationRepository.attributed_samples(segment_id: int) -> list[TermSampleRow]` — join `video_discoveries` (term, origin) × último `video_scores_v2`
-  - `ViralV2PopulationRepository.hashtag_sources(segment_id: int) -> list[HashtagSourceRow]` — vídeos do YouTube com `raw`, `title`, `description`, último `viral_score_v2`
+  - `class PopulationRow(BaseModel)`: `video_id`, `platform`, `platform_video_id`, `title`, `language: str | None`, `tags: list[str]`, `published_at: datetime | None`, `views`, `likes`, `comments`, `shares`, `saves` (todos `int | None`, da última medição ≤ `as_of`), `captured_at: datetime`, `prev_views: int | None`, `prev_captured_at: datetime | None` (medição anterior com intervalo ≥ 1 h), `followers: int | None` (`followers_at_capture` da última medição, senão `creators.followers_count`), `raw: dict[str, object]`, `description: str`.
+  - `PopulationReader.population(segment_id: int, as_of: datetime, window_days: int) -> list[PopulationRow]`
+  - `PopulationReader.attributions(segment_id: int, platform: str, as_of: datetime) -> list[tuple[int, str, str]]`: pares **distintos** `(video_id, term, origin)` com `discovered_at ≤ as_of` e `origin <> 'unattributed'`.
+  - `ViralV2Repository.append_many(segment_id: int, as_of: datetime, scores: Sequence[ViralScore]) -> int`
+  - `TermReportRepository.append_many(rows: Sequence[TermReportRecord]) -> int`
 
-- [ ] **Step 1: Teste que falha** — integração: `append_many` grava 2 linhas em `video_scores_v2` **sem** tocar `video_scores`; `population` devolve só vídeos dos últimos 30 dias; `attributed_samples` traz termo/origem de `video_discoveries`.
+- [ ] **Step 1: Testes que falham** (integração). Semear 1 segmento com:
+  - vídeo A: medições em t−10 h, t−5 h e t (mesma transação que a coleta: 2 linhas em t) → `prev_*` = a de t−5 h, nunca a de t;
+  - vídeo B: publicado há 40 dias → fora da janela de 30 d;
+  - vídeo C: só medido **depois** do `as_of` → fora;
+  - atribuições: A por "vela" (`seed`) em 3 coletas → **1** par `(A, "vela", "seed")`; A por "vela" com origem `unattributed` → fora.
 
 - [ ] **Step 2: Rodar e ver falhar** — FAIL.
 
-- [ ] **Step 3: Implementar**
+- [ ] **Step 3: Implementar** — `population` em SQL explícito (CTE):
 
-`population` reusa o padrão `DISTINCT ON` de `latest_for_segment` (duas capturas mais recentes por vídeo) e o join com `creators` para `followers_count`:
-
-```python
-    async def population(self, segment_id: int, window_days: int) -> list[ViralV2PopulationRow]:
-        since = datetime.now(UTC) - timedelta(days=window_days)
-        # ... DISTINCT ON (video_id) captura mais recente + rn=2 para a anterior
-        # ... velocity = (views - prev_views) / horas entre capturas
-        # ... JOIN creators em videos.creator_id para followers
-```
-
-`attributed_samples`:
-
-```python
-stmt = (
-    select(
-        VideoDiscoveryRow.term,
-        VideoDiscoveryRow.term_origin,
-        VideoScoreV2Row.viral_score_v2,
-        VideoScoreV2Row.velocity,
-        VideoScoreV2Row.engagement,
-        VideoScoreV2Row.channel_relative,
-        VideoDiscoveryRow.video_id,
-    )
-    .join(VideoScoreV2Row, VideoScoreV2Row.video_id == VideoDiscoveryRow.video_id)
-    .where(VideoDiscoveryRow.segment_id == segment_id)
+```sql
+WITH m AS (
+  SELECT vm.*, row_number() OVER (PARTITION BY vm.video_id ORDER BY vm.captured_at DESC, vm.id DESC) AS rn
+  FROM video_metrics vm
+  JOIN video_segments vs ON vs.video_id = vm.video_id AND vs.segment_id = :segment_id
+  WHERE vm.captured_at <= :as_of
+), last AS (SELECT * FROM m WHERE rn = 1),
+prev AS (
+  SELECT DISTINCT ON (m.video_id) m.video_id, m.views, m.captured_at
+  FROM m JOIN last l ON l.video_id = m.video_id
+  WHERE m.captured_at <= l.captured_at - interval '1 hour'
+  ORDER BY m.video_id, m.captured_at DESC
 )
+SELECT v.id, v.platform, v.platform_video_id, v.title, v.description, v.language, v.raw,
+       v.published_at, l.views, l.likes, l.comments, l.shares, l.saves, l.captured_at,
+       p.views AS prev_views, p.captured_at AS prev_captured_at,
+       coalesce(l.followers_at_capture, c.followers_count) AS followers
+FROM last l
+JOIN videos v ON v.id = l.video_id
+LEFT JOIN prev p ON p.video_id = l.video_id
+LEFT JOIN creators c ON c.id = v.creator_id
+WHERE v.published_at >= :as_of - make_interval(days => :window_days)
+  AND (v.removed_at IS NULL OR v.removed_at > :as_of)
 ```
 
-(com `DISTINCT ON` no par `(video_id, term)` para o score mais recente por vídeo).
+Use `text()` com bind params (nunca f-string). `tags` = `raw.snippet.tags` lido em Python, com `isinstance`.
 
 - [ ] **Step 4: Rodar e ver passar** — PASS.
 
-- [ ] **Step 5: Commit**
-
-```bash
-git add src/content_factory/app/ports.py src/content_factory/infra/db/repositories.py tests/infra/test_repositories.py
-git commit -m "feat(db): repositórios do viral-v2, do relatório e das populações (R9/R10/R11)"
-```
+- [ ] **Step 5: Commit** — `feat(db): população do viral-v2 no corte e atribuições distintas (R9/R10)`.
 
 ---
 
-### Task 6: Use-case `score_v2` + mineração (R9/R11); ligar no `score_job`
+### Task 6: População → `ViralInput` (relevância, velocidade, engajamento)
+
+**Files:**
+- Create: `src/content_factory/app/population.py`
+- Test: `tests/app/test_population.py`
+
+**Interfaces:**
+- Consumes: `PopulationRow`, `Segment`, `contains_phrase`/`word_tokens`, `filter_hashtag`, `scoring.engagement_rate` (mesma fórmula do `fase-h`), `ViralInput`.
+- Produces:
+  - `def is_relevant(row: PopulationRow, segment: Segment) -> bool`: idioma (`language` com prefixo `pt` ou `None`), sem bloqueio no título, e âncora no **título** (palavra inteira) **ou** em alguma tag (`filter_hashtag`). A descrição **não** entra.
+  - `def to_viral_input(row: PopulationRow, segment_id: int) -> ViralInput`: velocidade = `(views − prev_views) / horas` quando houver par (≥ 1 h, `None` caso contrário; negativo vira 0); engajamento = `engagement_rate(VideoMetrics(...))`.
+  - `def build_population(rows, segment) -> tuple[list[ViralInput], int]`: `(entradas relevantes, descartadas por relevância)`.
+
+- [ ] **Step 1: Testes que falham** — casos literais:
+  - título PT do nicho com descrição contendo "Follow me on Instagram for more" → **relevante** (era o falso negativo medido);
+  - `language="en"` → fora;
+  - título sem âncora, mas tag `velasartesanais` → relevante;
+  - título com termo bloqueado → fora;
+  - `prev_*` ausente → `velocity_per_hour is None`.
+
+- [ ] **Step 2–5:** FAIL → implementar → PASS → commit `feat(app): população do viral-v2 — relevância por título/tags e velocidade (R9)`.
+
+---
+
+### Task 7: `score_v2` no worker + mineração de hashtags (R9/R11)
 
 **Files:**
 - Create: `src/content_factory/app/score_v2.py`
@@ -822,23 +835,14 @@ git commit -m "feat(db): repositórios do viral-v2, do relatório e das populaç
 
 **Interfaces:**
 - Produces:
-  - `@dataclass class ScoreV2Deps: populations: ViralV2PopulationRepository; scores_v2: ViralV2Repository; terms: SegmentTermRepository; segment: Segment; clock: Callable[[], datetime] = ...`
-  - `async def score_v2(deps: ScoreV2Deps) -> ScoreV2Outcome` (`scored`, `skipped_relevance`, `insufficient`, `hashtags_pooled`)
-  - `_score_v2_impl` no worker, chamado após o commit do `fase-h` (transação própria).
+  - `@dataclass class ScoreV2Deps: population: PopulationReader; scores_v2: ViralV2Repository; terms: SegmentTermRepository; segment: Segment; clock: Callable[[], datetime]; window_days: int = 30; min_population: int = 5`
+  - `@dataclass class ScoreV2Outcome: scored: int; skipped_relevance: int; insufficient: int; hashtags_active: int; hashtags_stale: int`
+  - `async def score_v2(deps: ScoreV2Deps) -> ScoreV2Outcome`
 
-- [ ] **Step 1: Teste que falha**
-
-```python
-async def test_score_v2_filtra_relevancia_e_grava() -> None:
-    deps = _score_v2_deps(
-        population=[_pop(1, "como fazer vela"), _pop(2, "candle making for beginners")]
-    )
-    out = await score_v2(deps)
-    assert out.scored >= 1
-    assert out.skipped_relevance == 1  # "candle ..." fora do nicho (R1)
-    assert deps.scores_v2.saved  # linhas em video_scores_v2
-    assert deps.terms.pooled_hashtags == []  # sem viral_v2 suficiente, sem hashtags
-```
+- [ ] **Step 1: Testes que falham**
+  - população com 6 relevantes + 1 em inglês → `scored == 6`, `skipped_relevance == 1`, nada gravado em `video_scores`;
+  - top 25% com tags do nicho → `deps.terms` recebe `SegmentTerm(origin="hashtag:youtube", engagement_score=peso, rules_version=HASHTAG_MINE_VERSION)` e `set_status("hashtag:youtube", keep=top10, reason="stale")`;
+  - população abaixo do mínimo → nenhuma hashtag (sem `viral-v2`, sem mineração).
 
 - [ ] **Step 2: Rodar e ver falhar** — FAIL.
 
@@ -846,98 +850,77 @@ async def test_score_v2_filtra_relevancia_e_grava() -> None:
 
 ```python
 async def score_v2(deps: ScoreV2Deps) -> ScoreV2Outcome:
-    window = int(os.getenv("VIRAL_V2_WINDOW_DAYS", str(WINDOW_DAYS)))
-    rows = await deps.populations.population(deps.segment.id, window)
-    seg = deps.segment
+    seg, as_of = deps.segment, deps.clock()
+    rows = await deps.population.population(seg.id, as_of, deps.window_days)
+    inputs, skipped = build_population(rows, seg)
+    scores = score_population(inputs, deps.min_population)
+    await deps.scores_v2.append_many(
+        seg.id, as_of, scores
+    )  # só relevantes; skipped vai no envelope
+    by_id = {r.video_id: r for r in rows}
+    sources = [
+        HashtagSource(
+            video_id=s.video_id,
+            platform=by_id[s.video_id].platform,
+            viral_v2=s.total,
+            raw=by_id[s.video_id].raw,
+            title=by_id[s.video_id].title,
+            description=by_id[s.video_id].description,
+        )
+        for s in scores
+    ]
     cfg = TermFilterConfig(anchors=tuple(seg.anchor_terms), blocked=tuple(seg.blocked_terms))
-    # R9: relevância vira FILTRO — fora do nicho não entra no ranking
-    kept = [r for r in rows if filter_term(f"{r.title} {r.description}", cfg).accepted]
-    skipped_relevance = len(rows) - len(kept)
-    inputs = [
-        ViralInput(
-            video_id=r.video_id,
-            platform=r.platform,
-            segment_id=seg.id,
-            velocity_per_hour=r.velocity_per_hour,
-            engagement_rate=r.engagement_rate,
-            views=r.views,
-            channel_followers=r.followers,
-        )
-        for r in kept
-    ]
-    scores = score_population(inputs)
-    # vídeos filtrados também são gravados (total=None) — a ausência fica auditável
-    all_rows = scores + [
-        ViralScore(
-            video_id=r.video_id,
-            total=None,
-            velocity=None,
-            engagement=None,
-            channel_relative=None,
-            reach=None,
-            population_n=0,
-            explanation={"filtered": "relevance"},
-        )
-        for r in rows
-        if r.video_id not in {s.video_id for s in scores}
-    ]
-    await deps.scores_v2.append_many(_to_v2_rows(all_rows, seg.id, deps.clock()))
-    # R11: hashtags do top 25% voltam ao pool como hashtag:<plataforma>
-    sources = await deps.populations.hashtag_sources(seg.id)
-    mined = mine(sources)
-    pooled = 0
-    for platform in {h.platform for h in mined}:
+    mined = mine(sources, cfg)
+    active = stale = 0
+    for platform in sorted({h.platform for h in mined}):
         tags = [h for h in mined if h.platform == platform]
-        kept_tags, _ = filter_terms([h.tag for h in tags], cfg)
-        kept_set = set(kept_tags)
-        terms = [
-            SegmentTerm(
-                segment_id=seg.id,
-                term=h.tag,
-                origin=f"hashtag:{platform}",
-                engagement_score=h.weight,
-                rules_version=HASHTAG_MINE_VERSION,
-            )
-            for h in tags
-            if h.tag in kept_set
-        ]
-        if terms:
-            pooled += await deps.terms.upsert_many(seg.id, terms)
+        origin = f"hashtag:{platform}"
+        active += await deps.terms.upsert_many(
+            seg.id,
+            [
+                SegmentTerm(
+                    segment_id=seg.id,
+                    term=h.tag,
+                    origin=origin,
+                    engagement_score=h.weight,
+                    rules_version=HASHTAG_MINE_VERSION,
+                )
+                for h in tags
+            ],
+        )
+        stale += await deps.terms.set_status(seg.id, origin, [h.tag for h in tags], "stale")
     return ScoreV2Outcome(
-        scored=len(all_rows),
-        skipped_relevance=skipped_relevance,
+        scored=len(scores),
+        skipped_relevance=skipped,
         insufficient=sum(1 for s in scores if s.total is None),
-        hashtags_pooled=pooled,
+        hashtags_active=active,
+        hashtags_stale=stale,
     )
 ```
 
-No worker, em `run_score_job._one`, após o commit do `fase-h` e fora do `if web_score_enabled`:
+No worker, em `run_score_job._one`, **depois** do commit do `fase-h` e fora do `if web_score_enabled`, em transação própria. É o mesmo padrão do score web: a falha não reverte o `fase-h`.
 
 ```python
             try:
-                await _score_v2_impl(bundle.score_v2)
+                v2 = await _score_v2_impl(bundle.score_v2)
                 await bundle.uow.commit()
             except Exception:
                 logger.exception("score viral-v2 falhou — %s (fase-h mantido)", segment.slug)
                 await bundle.uow.rollback()
+                result["viral_v2"] = "failed"
+            else:
+                result["viral_v2"] = dataclasses.asdict(v2)
 ```
 
-Envs: `VIRAL_V2_WINDOW_DAYS=30`, `VIRAL_V2_MIN_POPULATION=5`.
+Envs: `VIRAL_V2_WINDOW_DAYS=30`, `VIRAL_V2_MIN_POPULATION=5`, lidas na composição. Não usar `os.getenv` dentro do use-case.
 
 - [ ] **Step 4: Rodar e ver passar** — `uv run pytest tests/app/test_score_v2.py tests/infra/queue/ -q` → PASS.
 
-- [ ] **Step 5: Commit**
-
-```bash
-git add src/content_factory/app/score_v2.py src/content_factory/infra/queue/worker.py \
-        src/content_factory/infra/queue/composition.py \
-        tests/app/test_score_v2.py tests/infra/queue/test_worker.py
-git commit -m "feat(score): viral-v2 ao lado do fase-h + mineração de hashtags (R9/R11)"
-```
+- [ ] **Step 5: Commit** — `feat(score): viral-v2 ao lado do fase-h + hashtags no pool (R9/R11)`.
 
 ---
 
-### Task 7: Use-case `term_report` e CLI `cf term-report` (R10)
+### Task 8: `cf term-report` — temas, veredito por origem e top vídeos (R10)
 
 **Files:**
 - Create: `src/content_factory/app/term_report.py`
@@ -946,74 +929,70 @@ git commit -m "feat(score): viral-v2 ao lado do fase-h + mineração de hashtags
 
 **Interfaces:**
 - Produces:
-  - `async def build_term_report(segment_slug: str, platform: str | None, deps: TermReportDeps) -> TermReportOutcome`
-  - `TermReportOutcome.as_counts()` → `{"terms": n, "origins": n, "insufficient": n, "rows_saved": n}`
-  - CLI `cf term-report --segment <slug> [--platform] [--out <csv>]` — grava no banco e devolve só o envelope; `--out` escreve CSV **fora** do repositório.
+  - `async def build_term_report(segment_slug: str, platform: str, as_of: datetime, deps: TermReportDeps) -> TermReportOutcome`
+  - `TermReportOutcome.as_counts()` → `{"terms": n, "terms_ranked": n, "origins": n, "origins_decided": n, "videos": n, "rows_saved": n, "report_id": str}`
+  - CLI: `cf term-report --segment <slug> --as-of <ISO com fuso> [--platform youtube] [--top-videos 20] [--out <csv>]`. `--as-of` é **obrigatório**, com fuso, como o `cf web-eval`. `--out` dentro do repositório é recusado (`out_inside_repo`).
 
-- [ ] **Step 1: Teste que falha**
-
-```python
-async def test_term_report_grava_por_termo_e_por_origem() -> None:
-    deps = _term_report_deps(samples=_samples(...))
-    out = await build_term_report("velas-artesanais", None, deps)
-    assert out.as_counts()["terms"] >= 1 and out.as_counts()["origins"] >= 1
-    assert {r.scope for r in deps.reports.saved} == {"term", "origin"}
-    assert all(r.version == "term-rank-v1" for r in deps.reports.saved)
-```
+- [ ] **Step 1: Testes que falham**
+  - população sintética com 2 origens (40 vídeos `suggest` melhores, 40 `seed`) → linha `scope="origin"`, `report_key="suggest"`, `verdict="better"`, com `diff`, `ci_low > 0`, `baseline_n=40`;
+  - o mesmo vídeo atribuído 16 vezes ao mesmo termo conta `n=1`;
+  - `scope="video"`: 20 linhas, `rank` 1..20, ordenadas por `viral_score_v2` desc, `report_key = platform_video_id`;
+  - mesma entrada e mesmo `as_of` produzem as mesmas linhas (reprodutível; só `report_id`/`computed_at` mudam);
+  - CLI: `--as-of` sem fuso → envelope `{"ok": false, "error": "as_of_without_tz"}`; stdout só com o envelope.
 
 - [ ] **Step 2: Rodar e ver falhar** — FAIL.
 
-- [ ] **Step 3: Implementar**
+- [ ] **Step 3: Implementar** — `build_term_report`:
+  1. `population(as_of)`;
+  2. `build_population`;
+  3. `score_population`, recalculado no corte;
+  4. `attributions(platform, as_of)`;
+  5. `TermSample` por par `(video, term, origin)`, com o `viral-v2`/componentes recalculados;
+  6. `rank_terms`, `compare_origins` e o top N de vídeos;
+  7. `TermReportRecord`s com o mesmo `report_id`, `version=TERM_RANK_VERSION`, `rules_version=f"{TERM_FILTER_VERSION}+{VIRAL_V2_VERSION}"`, e `as_of`;
+  8. `append_many`.
 
-`build_term_report`: lê `attributed_samples(segment_id)` (termo/origem + `viral_v2`/componentes), opcionalmente filtra por plataforma, chama `term_ranking.rank(samples, "term")` e `rank(samples, "origin")`, serializa para `TermReportRow` (como `as_of=deps.clock()`, `version=TERM_RANK_VERSION`, `rules_version=TERM_FILTER_VERSION`) e `append_many`.
-
-CLI segue o padrão de `score-sample` (`_emit`, `exit_code_for`); o CSV é escrito no caminho de `--out` (documentar "fora do repositório — o repositório é público e os títulos são de terceiros").
+  O `engagement_score` dos termos `ranked` também vai para `segment_terms.engagement_score` (R4/R10) das linhas `suggest`/`seed`, com `UPDATE` só desse campo. O CSV (`--out`) traz as três seções, com títulos; ele é para uso local, fora do repositório.
 
 - [ ] **Step 4: Rodar e ver passar** — `uv run pytest tests/app/test_term_report.py tests/cli/ -q` → PASS.
 
-- [ ] **Step 5: Commit**
-
-```bash
-git add src/content_factory/app/term_report.py src/content_factory/cli/main.py \
-        tests/app/test_term_report.py tests/cli/test_term_report.py
-git commit -m "feat(report): cf term-report — ranking por termo e por origem (R10)"
-```
+- [ ] **Step 5: Commit** — `feat(report): cf term-report — temas, veredito por origem e top vídeos no corte (R10)`.
 
 ---
 
-### Task 8: Encerrar o bloco — gates e aceite
+### Task 9: Encerrar o bloco — gates e aceite (Fase B)
 
 - [ ] **Step 1: Gates** — `make gates` verde.
 
-- [ ] **Step 2: Aceite R9**
+- [ ] **Step 2: Deploy da Fase B** (orquestrador; janela sem cron, fila vazia): migração `0015`, imagem, fumaça do `score`. Anotar no pré-registro a **data de início da vaga de hashtag**: é um commit de adendo, sem mudar mais nada.
+
+- [ ] **Step 3: Aceite R9**
 
 ```sql
--- fase-h intocado pelo viral-v2
-SELECT max(formula_version) FROM video_scores;                                  -- esperado: 'fase-h'
-SELECT count(*) FROM video_scores_v2;
-SELECT count(*) FROM video_scores_v2 WHERE explanation->>'insufficient' = 'true';
--- e: explicação por componente presente em 100% das linhas
-SELECT count(*) FROM video_scores_v2 WHERE jsonb_typeof(explanation) = 'object';
+SELECT max(formula_version) FROM video_scores;            -- 'fase-h' (intocado)
+SELECT count(*), count(viral_score_v2) FROM video_scores_v2 WHERE computed_at > now() - interval '6 hours';
+SELECT count(*) FROM video_scores_v2 WHERE jsonb_typeof(explanation) <> 'object';  -- 0
 ```
 
-- [ ] **Step 3: Aceite R10** — `cf term-report --segment velas-artesanais` (D+1, dados reais) devolve envelope com contagens; conferir no banco linhas com `verdict` e `ci_low`/`ci_high`; termo com `n < 5` sai como `insufficient`.
+- [ ] **Step 4: Aceite R10 (D+1 e D+4, dados reais)** — `cf term-report --segment <slug> --as-of <corte>` para os 3 segmentos: envelope com contagens; no banco, linhas `term`/`origin`/`video` do mesmo `report_id`; termo com `n < 5` como `insufficient`; origem com `n < 30` como `insufficient`. **Rodar 2 vezes com o mesmo `--as-of` e comparar** (devem ser idênticas, exceto `report_id`/`computed_at`).
 
-- [ ] **Step 4: Aceite R11**
+- [ ] **Step 5: Aceite R11**
 
 ```sql
-SELECT origin, count(*) FROM segment_terms WHERE origin LIKE 'hashtag:%' GROUP BY origin;
+SELECT origin, status, count(*) FROM segment_terms WHERE origin LIKE 'hashtag:%' GROUP BY 1, 2;
 SELECT term, engagement_score FROM segment_terms
-WHERE origin = 'hashtag:youtube' ORDER BY engagement_score DESC LIMIT 10;
--- esperado: tags filtradas com score, após o 1º score com viral-v2
+WHERE origin = 'hashtag:youtube' AND status = 'active' ORDER BY engagement_score DESC;
+-- esperado: até 10 ativas, todas do nicho; na coleta seguinte, uma busca `hashtag:youtube` com `#tag`
+SELECT term, results FROM search_queries WHERE origin = 'hashtag:youtube' ORDER BY id DESC LIMIT 3;
 ```
 
-- [ ] **Step 5: Commit de encerramento** — `git commit -am "docs(plans): bloco 5 concluído — R9/R10/R11 verificados" || true`
+- [ ] **Step 6: Commit de encerramento** — `git commit -am "docs(plans): bloco 5 concluído — R9/R10/R11 verificados" || true`
 
 ---
 
-## Auto-revisão da spec (R9/R10/R11)
+## Auto-revisão da spec (R9/R10/R11/§6)
 
-- **R9** ✓ componentes normalizados por plataforma+segmento (Task 1), velocidade/engajamento/relativo ao canal/alcance com os pesos pré-registrados, relevância como filtro (Task 6) e recência como janela 30 d (Task 6), `viral-v2` em tabela própria e **nunca** em `video_scores.total` (Tasks 4-6), explicação por componente (Task 1).
-- **R10** ✓ `n`, medianas, fração no top 10%, `engagement_score` versionado no pool (`set_trend_scores`→reuso do pool; aqui gravado por `engagement_score`), IC 95% bootstrap seed fixa, `n < 5` = "insuficiente" (Task 2), por termo **e por origem** (Task 7), CLI que grava no banco e devolve só o envelope, CSV opcional fora do repositório (Task 7).
-- **R11** ✓ top 25% do `viral-v2` (Task 3), YouTube `snippet.tags` + `#` de título/descrição, filtro R1, ranking por frequência ponderada, entrada no pool como `hashtag:<plataforma>` (Tasks 3/6). Instagram só referência e TikTok fora (a mineração por plataforma existe; as fontes dessas plataformas entram quando houver busca/token).
-- Fora deste bloco: R13 (observabilidade) e R14 (idioma) no Bloco 6.
+- **R9** ✓ componentes por plataforma e segmento; pesos pré-registrados; velocidade com intervalo mínimo; relevância como filtro (título + tags + idioma do vídeo) e recência como janela; `viral-v2` em tabela própria, nunca em `video_scores`; explicação por componente (Tasks 1, 4–7).
+- **R10** ✓ `n` de vídeos **únicos**, medianas, top 10%, `engagement_score` no pool, IC por bootstrap com seed fixa, `n < 5` como insuficiente (Task 2); **regra de decisão por origem exatamente como no pré-registro**, com `n ≥ 30` (Task 2); relatório no corte, reprodutível e gravado no banco, com envelope só de contagens e CSV fora do repositório (Task 8).
+- **Objetivo do projeto** ✓ top vídeos por plataforma e segmento no corte (Task 8, escopo `video`).
+- **R11** ✓ top 25% do `viral-v2`; `snippet.tags` + `#` do título e da descrição; R1 em modo hashtag; peso por frequência ponderada; top 10 ativas, demais `stale`; busca como `#tag` (Tasks 3, 7; vaga no Bloco 4).

@@ -27,7 +27,9 @@ Especificação §4 R7 e R12; §5 (cota: remedição = 3×4×10 lotes = 120 unid
 - **YouTube em lotes de 50 ids** (`videos.list`, 1 unidade por lote), teto `REMEDIATION_LIMIT=500` por segmento por coleta (10 lotes).
 - **`RefreshableCollector` é porta separada** de `Collector`: não obriga Instagram/TikTok (nem seus fakes) a implementar `refresh`.
 - **`videos.removed_at`** (coluna nova) marca removido/privado; alvo de remedição é `removed_at IS NULL`.
-- Envs novas: `SCORE_CRON_HOURS` (= collect), `REMEDIATION_WINDOW_DAYS=7`, `REMEDIATION_LIMIT=500`.
+- **Intervalo mínimo entre medições** (revisão QA): o alvo da remedição exclui vídeos com medição nas últimas `REMEDIATION_MIN_GAP_HOURS=3` h. Sem isso, o vídeo que a coleta acabou de gravar é remedido **na mesma transação**; como `now()` no Postgres é a hora de início da transação, as duas medições ficam com o mesmo `captured_at`, o `momentum_score` vê intervalo ≤ 0 e a velocidade sai `None` justamente nos vídeos que estão em alta.
+- **Remedição com o mesmo contrato da coleta** (revisão QA): `limiter.acquire` por lote, `counting()` para a cota, `report_discover` no breaker e uma `CollectRun` `remediate:<plataforma>`. Erro de contrato (cota, rede) vira run `failed` e **não** derruba a coleta já feita na mesma UoW; exceção fora do contrato propaga (como no collect).
+- Envs novas: `SCORE_CRON_HOURS` (= collect), `REMEDIATION_WINDOW_DAYS=7`, `REMEDIATION_LIMIT=500`, `REMEDIATION_MIN_GAP_HOURS=3`.
 
 ## Estrutura de arquivos
 
@@ -189,7 +191,7 @@ git commit -m "feat(db): migração 0013 — videos.removed_at (R7)"
   - `class RefreshResult(BaseModel): candidates: list[CandidateVideo] = []; missing_ids: list[str] = []`
   - `RefreshableCollector` (Protocol): `platform: ClassVar[str]`; `async def refresh(self, targets: Sequence[RemediationTarget]) -> RefreshResult`
   - `RemediationRepository` (Protocol):
-    - `async def remediation_targets(self, segment_id: int, since_days: int, limit: int) -> list[RemediationTarget]`
+    - `async def remediation_targets(self, segment_id: int, since_days: int, limit: int, min_gap_hours: int, platforms: Sequence[str]) -> list[RemediationTarget]`
     - `async def record_metrics(self, target: RemediationTarget, metrics: VideoMetrics, followers_at_capture: int | None) -> None`
     - `async def mark_removed(self, video_ids: Sequence[int]) -> int`
 
@@ -331,10 +333,13 @@ git commit -m "feat(youtube): refresh em lotes de 50 e detecção de removidos (
 - [ ] **Step 1: Teste que falha** (integração)
 
 ```python
-async def test_remediation_targets_exclui_removidos() -> None:
-    # cria segmento + 2 vídeos youtube (v1 removido, v2 ativo) com metrics
-    targets = await repo.remediation_targets(seg_id, since_days=7, limit=500)
-    assert [t.platform_video_id for t in targets] == ["v2"]  # v1 tem removed_at
+async def test_remediation_targets_exclui_removidos_e_medidos_ha_pouco() -> None:
+    # segmento + 3 vídeos youtube: v1 removido; v2 medido há 5 h; v3 medido
+    # AGORA (mesma transação, como a coleta que acabou de gravá-lo)
+    targets = await repo.remediation_targets(
+        seg_id, since_days=7, limit=500, min_gap_hours=3, platforms=["youtube"]
+    )
+    assert [t.platform_video_id for t in targets] == ["v2"]
 ```
 
 - [ ] **Step 2: Rodar e ver falhar** — FAIL.
@@ -343,16 +348,32 @@ async def test_remediation_targets_exclui_removidos() -> None:
 
 ```python
 async def remediation_targets(
-    self, segment_id: int, since_days: int, limit: int
+    self,
+    segment_id: int,
+    since_days: int,
+    limit: int,
+    min_gap_hours: int,
+    platforms: Sequence[str],
 ) -> list[RemediationTarget]:
-    since = datetime.now(UTC) - timedelta(days=since_days)
+    # func.now() (hora da transação), não datetime.now(): a medição que a
+    # coleta gravou NESTA transação tem captured_at = now() e precisa cair.
+    recent = (
+        select(VideoMetricsRow.id)
+        .where(
+            VideoMetricsRow.video_id == VideoRow.id,
+            VideoMetricsRow.captured_at > func.now() - timedelta(hours=min_gap_hours),
+        )
+        .exists()
+    )
     stmt = (
         select(VideoRow.id, VideoRow.platform, VideoRow.platform_video_id)
         .join(VideoSegmentRow, VideoSegmentRow.video_id == VideoRow.id)
         .where(
             VideoSegmentRow.segment_id == segment_id,
-            VideoSegmentRow.discovered_at >= since,
+            VideoSegmentRow.discovered_at >= func.now() - timedelta(days=since_days),
             VideoRow.removed_at.is_(None),
+            VideoRow.platform.in_(list(platforms)),
+            ~recent,
         )
         .order_by(VideoSegmentRow.discovered_at.desc())
         .limit(limit)
@@ -388,7 +409,7 @@ async def mark_removed(self, video_ids: Sequence[int]) -> int:
     return int(result.rowcount or 0)
 ```
 
-> `record_metrics` só adiciona à sessão; o flush/commit é da UoW (mesmo padrão de `VideoMetricsRow` no `upsert_candidates`). Não há savepoint por vídeo aqui: a métrica é só números (sem FK nova) e o lote é da UoW do segmento.
+> `record_metrics` só adiciona à sessão; o flush/commit é da UoW (mesmo padrão de `VideoMetricsRow` no `upsert_candidates`). Não há savepoint por vídeo aqui: a métrica é só números (sem FK nova) e o lote é da UoW do segmento. A remedição **só remede vídeos do YouTube** (o único `refreshable`): filtre `VideoRow.platform.in_(platforms)` no SQL para não gastar o `limit` com alvos do Instagram/TikTok/web — `remediation_targets` ganha o parâmetro `platforms: Sequence[str]` (já na assinatura acima).
 
 - [ ] **Step 4: Rodar e ver passar** — PASS.
 
@@ -405,54 +426,55 @@ git commit -m "feat(db): alvos de remedição, gravação de métricas e mark_re
 
 **Files:**
 - Create: `src/content_factory/app/remediate.py`
-- Test: `tests/app/test_remediate.py` (novo)
+- Test: `tests/app/test_remediate.py` (novo), `tests/stubs.py` (fakes completos e tipados)
 
 **Interfaces:**
-- Consumes: `RemediationRepository`, `RefreshableCollector`, portas de lock/clock.
+- Consumes: `RemediationRepository`, `RefreshableCollector`, `CollectRunRepository`, `RateLimiter`, `PlatformHealth`, `counting`, `report_discover`.
 - Produces:
-  - `@dataclass class RemediationDeps: videos: RemediationRepository; refreshables: dict[str, RefreshableCollector]; clock: Callable[[], datetime] = ...; window_days: int = 7; limit: int = 500`
-  - `@dataclass class RemediationOutcome: targets: int; refreshed: int; metrics_written: int; removed: int; platforms: dict[str, int]`
+  - `@dataclass class RemediationDeps: videos: RemediationRepository; refreshables: dict[str, RefreshableCollector]; runs: CollectRunRepository; limiter: RateLimiter; health: PlatformHealth = field(default_factory=NoPlatformHealth); clock: Callable[[], datetime] = field(default_factory=lambda: _utcnow); window_days: int = 7; limit: int = 500; min_gap_hours: int = 3`
+  - `@dataclass class RemediationOutcome: targets: int = 0; refreshed: int = 0; metrics_written: int = 0; removed: int = 0; failed_platforms: int = 0; quota_used: int = 0` (só `int`: vai direto para o envelope)
   - `async def remediate(segment_id: int, deps: RemediationDeps) -> RemediationOutcome`
 
-- [ ] **Step 1: Teste que falha**
+- [ ] **Step 1: Testes que falham**
 
 ```python
 # tests/app/test_remediate.py
-from content_factory.app.remediate import RemediationDeps, remediate
-
-
-class _FakeRepo:
-    def __init__(self, targets, missing=()): ...
-    async def remediation_targets(self, segment_id, since_days, limit): ...
-    async def record_metrics(self, target, metrics, followers): ...
-    async def mark_removed(self, video_ids): ...
-
-
-class _FakeYouTube:
-    platform = "youtube"
-
-    async def refresh(self, targets):
-        found = [c for c in self._found if c in {t.platform_video_id for t in targets}]
-        missing = [t.platform_video_id for t in targets if t.platform_video_id not in found]
-
-
 async def test_remediate_grava_metricas_e_marca_removidos() -> None:
-    deps = RemediationDeps(
-        videos=_FakeRepo(targets=["v1", "v2"]), refreshables={"youtube": _FakeYouTube(found=["v2"])}
+    repo = FakeRemediationRepo(targets=["v1", "v2"])
+    deps = remediation_deps(repo, refreshables={"youtube": FakeRefresher(found=["v2"])})
+    out = await remediate(segment_id=1, deps=deps)
+    assert (out.targets, out.metrics_written, out.removed) == (2, 1, 1)
+    assert repo.removed == [1]  # video_id do v1
+    assert [r.collector for r in deps.runs.saved] == ["remediate:youtube"]
+
+
+async def test_remediate_sem_alvos_nao_chama_coletor_nem_grava_run() -> None:
+    refresher = FakeRefresher(found=[])
+    deps = remediation_deps(FakeRemediationRepo(targets=[]), refreshables={"youtube": refresher})
+    out = await remediate(segment_id=1, deps=deps)
+    assert out == RemediationOutcome()
+    assert refresher.calls == 0 and deps.runs.saved == []
+
+
+async def test_erro_de_contrato_vira_run_failed_e_nao_levanta() -> None:
+    refresher = FakeRefresher(error=RateLimited("youtube", "quota"))
+    deps = remediation_deps(
+        FakeRemediationRepo(targets=["v1"]), refreshables={"youtube": refresher}
     )
     out = await remediate(segment_id=1, deps=deps)
-    assert out.targets == 2
-    assert out.metrics_written == 1
-    assert out.removed == 1
+    assert out.failed_platforms == 1 and out.removed == 0  # erro NÃO marca removido
+    run = deps.runs.saved[0]
+    assert run.status == "failed" and run.error_code == refresher.error.code
+    assert deps.health.reports == [("youtube", refresher.error.code)]
 
 
-async def test_remediate_sem_alvos_nao_chama_coletor() -> None:
-    out = await remediate(
-        segment_id=1, deps=RemediationDeps(videos=_FakeRepo(targets=[]), refreshables={})
+async def test_cota_da_remedicao_vai_para_a_run() -> None:
+    deps = remediation_deps(
+        FakeRemediationRepo(targets=[f"v{i}" for i in range(120)]),
+        refreshables={"youtube": FakeRefresher(found="all", quota_per_batch=2)},
     )
-    assert out == RemediationOutcome(
-        targets=0, refreshed=0, metrics_written=0, removed=0, platforms={}
-    )
+    out = await remediate(segment_id=1, deps=deps)
+    assert out.quota_used == deps.runs.saved[0].quota_used == 3 * 2  # 3 lotes de 50
 ```
 
 - [ ] **Step 2: Rodar e ver falhar** — FAIL (`ModuleNotFoundError`).
@@ -463,93 +485,69 @@ async def test_remediate_sem_alvos_nao_chama_coletor() -> None:
 """R7 — remede os vídeos do segmento descobertos nos últimos N dias.
 
 Sem isso não há curva de engajamento: hoje um vídeo só é remedido quando a
-busca o encontra de novo (103 de 427 com 2+ medições). Aqui a remedição é
-por LOTE, sobre `video_metrics` apenas — nunca sobrescreve metadados nem
-`discovery_source` (isso é papel do `upsert_candidates` da coleta).
+busca o encontra de novo (103 de 427 com 2+ medições). A remedição grava só
+`video_metrics` — nunca metadados nem `discovery_source` (papel do
+`upsert_candidates`). Mesmo contrato da coleta: limiter, cota por
+`counting()`, breaker e uma `CollectRun` `remediate:<plataforma>`; erro de
+contrato vira run `failed` e não derruba a coleta da mesma UoW.
 """
-
-from collections.abc import Callable
-from dataclasses import dataclass, field
-from datetime import UTC, datetime
-
-from content_factory.app.ports import RefreshableCollector, RemediationRepository
-from content_factory.domain.models import RemediationTarget, VideoMetrics
-
-
-def _utcnow() -> datetime:
-    return datetime.now(UTC)
-
-
-@dataclass
-class RemediationDeps:
-    videos: RemediationRepository
-    refreshables: dict[str, RefreshableCollector]
-    clock: Callable[[], datetime] = field(default_factory=lambda: _utcnow)
-    window_days: int = 7
-    limit: int = 500
-
-
-@dataclass
-class RemediationOutcome:
-    targets: int = 0
-    refreshed: int = 0
-    metrics_written: int = 0
-    removed: int = 0
-    platforms: dict[str, int] = field(default_factory=dict[str, int])
 
 
 async def remediate(segment_id: int, deps: RemediationDeps) -> RemediationOutcome:
-    targets = await deps.videos.remediation_targets(segment_id, deps.window_days, deps.limit)
+    platforms = sorted(deps.refreshables)
+    targets = await deps.videos.remediation_targets(
+        segment_id, deps.window_days, deps.limit, deps.min_gap_hours, platforms
+    )
     out = RemediationOutcome(targets=len(targets))
-    if not targets:
-        return out
-    by_id = {t.video_id: t for t in targets}
     by_platform: dict[str, list[RemediationTarget]] = {}
     for t in targets:
         by_platform.setdefault(t.platform, []).append(t)
 
     missing_video_ids: list[int] = []
-    for platform, group in by_platform.items():
-        refreshable = deps.refreshables.get(platform)
-        if refreshable is None:
-            continue  # plataforma sem remedição (Instagram/TikTok): mantém como está
-        result = await refreshable.refresh(group)
-        for cand in result.candidates:
-            target = next((t for t in group if t.platform_video_id == cand.platform_video_id), None)
-            if target is None:
-                continue
-            await deps.videos.record_metrics(
-                target,
-                VideoMetrics(
-                    views=cand.views,
-                    likes=cand.likes,
-                    comments=cand.comments,
-                    shares=cand.shares,
-                    saves=cand.saves,
-                ),
-                cand.creator_followers,
-            )
-            out.metrics_written += 1
-        for missing in result.missing_ids:
-            target = next((t for t in group if t.platform_video_id == missing), None)
-            if target is not None:
-                missing_video_ids.append(target.video_id)
-        out.platforms[platform] = len(result.candidates)
-    out.refreshed = sum(out.platforms.values())
+    for platform, group in sorted(by_platform.items()):
+        refreshable = deps.refreshables[platform]
+        by_pid = {t.platform_video_id: t for t in group}
+        run = CollectRun(
+            collector=f"remediate:{platform}", segment_id=segment_id, started_at=deps.clock()
+        )
+        with counting() as counters:
+            try:
+                await deps.limiter.acquire(platform)
+                result = await refreshable.refresh(group)
+            except CollectorError as exc:
+                await report_discover(deps.health, platform, exc.code)
+                run.status, run.error_code, run.failed = "failed", exc.code, 1
+                out.failed_platforms += 1
+                result = None
+            else:
+                await report_discover(deps.health, platform, None)
+        run.quota_used = counters.quota_used
+        out.quota_used += counters.quota_used
+        if result is not None:
+            for cand in result.candidates:
+                target = by_pid.get(cand.platform_video_id)
+                if target is None:
+                    continue
+                await deps.videos.record_metrics(target, _metrics_of(cand), cand.creator_followers)
+                out.metrics_written += 1
+            missing_video_ids += [by_pid[m].video_id for m in result.missing_ids if m in by_pid]
+            out.refreshed += len(result.candidates)
+            run.status, run.found, run.updated = "ok", len(group), len(result.candidates)
+        run.finished_at = deps.clock()
+        await deps.runs.record(run)
     out.removed = await deps.videos.mark_removed(missing_video_ids)
-    _ = by_id
     return out
 ```
 
-> `by_id` fica como gancho explícito de leitura (mapa `video_id→target`) — se o lint reclamar de não usado, remova-o; não há comportamento dependente dele.
+> O `limiter.acquire` cobre o pedido inteiro da plataforma (até 10 lotes de `videos.list` de 1 unidade cada + `channels.list`). Se o limitador do YouTube for por requisição, mova o `acquire` para dentro do `refresh` por lote. Decida com o `RateLimiter` real e teste.
 
 - [ ] **Step 4: Rodar e ver passar** — PASS.
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add src/content_factory/app/remediate.py tests/app/test_remediate.py
-git commit -m "feat(app): use-case remediate — métricas por lote e marcação de removidos (R7)"
+git add src/content_factory/app/remediate.py tests/app/test_remediate.py tests/stubs.py
+git commit -m "feat(app): use-case remediate — métricas por lote, removidos, cota e breaker (R7)"
 ```
 
 ---
@@ -601,6 +599,7 @@ def _remediation_deps_from_env(
         refreshables=refreshables,
         window_days=int(os.getenv("REMEDIATION_WINDOW_DAYS", "7")),
         limit=int(os.getenv("REMEDIATION_LIMIT", "500")),
+        min_gap_hours=int(os.getenv("REMEDIATION_MIN_GAP_HOURS", "3")),
     )
 ```
 
@@ -614,7 +613,9 @@ Em `run_collect_job._one`, após `collect(...)` e antes do commit:
         return {**collect_result(out), "remediation": dataclasses.asdict(remediation)}
 ```
 
-Em `composition.py`: `SegmentBundle` monta `remediate=RemediationDeps(videos=VideoRepositoryImpl(session), refreshables={"youtube": youtube_collector}, ...)`. O coletor do YouTube já existe no `AppDeps`; reaproveite a mesma instância.
+Em `composition.py`: `SegmentBundle` monta `remediate=RemediationDeps(videos=VideoRepositoryImpl(session), refreshables={"youtube": youtube_collector}, runs=..., limiter=..., health=...)` — as mesmas instâncias do `CollectDeps` (limiter e breaker compartilhados: a remedição e a busca disputam a mesma cota do YouTube). O coletor do YouTube já existe no `AppDeps`; reaproveite a mesma instância.
+
+**Tempo do job:** `COLLECT_JOB_TIMEOUT_S = 1500`. Com 4 buscas + até 10 lotes por segmento × 3 segmentos, medir no teste da Task 7 (fakes com latência) e, no QA, pelo `ops-report.ticks.wall_ms_max`. Se passar de 50% do timeout, levar ao orquestrador antes de subir o timeout (o catch-up soma os três timeouts).
 
 - [ ] **Step 4: Rodar e ver passar** — `uv run pytest tests/infra/queue/ tests/app/ -q` → PASS.
 
@@ -635,6 +636,13 @@ git commit -m "feat(worker): remedição dentro da coleta (R7)"
 - [ ] **Step 2: Aceite R7 (após 2 coletas ≈ 12 h)**
 
 ```sql
+-- nenhum par de medições do mesmo vídeo a menos de 1 h (o bug da mesma transação)
+SELECT count(*) FROM (
+  SELECT video_id, captured_at - lag(captured_at) OVER (PARTITION BY video_id ORDER BY captured_at) AS gap
+  FROM video_metrics) g WHERE gap < interval '1 hour';  -- esperado: 0
+-- cota e erros da remedição
+SELECT status, count(*), sum(quota_used) FROM collect_runs
+WHERE collector LIKE 'remediate:%' AND started_at > now() - interval '1 day' GROUP BY 1;
 -- ≥ 90% dos vídeos YouTube acompanhados com medição nova na última janela
 SELECT count(DISTINCT vm.video_id) AS remedidos
 FROM video_metrics vm
@@ -662,6 +670,6 @@ WHERE v.removed_at IS NOT NULL AND vm.captured_at > v.removed_at;  -- esperado: 
 
 ## Auto-revisão da spec (R7/R12)
 
-- **R7** ✓ alvos últimos 7 dias com teto 500 (Task 5), `videos.list` em lotes de 50 (Task 4), `video_metrics` por remedição (Tasks 5-6), removido/privado marcado (`removed_at`) e fora dos alvos (Tasks 2/5). Instagram segue mídia própria e TikTok fora (porta separada, `refreshables` só com YouTube).
+- **R7** ✓ alvos últimos 7 dias com teto 500, só YouTube e sem medição nas últimas 3 h (Task 5); contrato de erro/cota/breaker igual ao da coleta (Task 6); `videos.list` em lotes de 50 (Task 4), `video_metrics` por remedição (Tasks 5-6), removido/privado marcado (`removed_at`) e fora dos alvos (Tasks 2/5). Instagram segue mídia própria e TikTok fora (porta separada, `refreshables` só com YouTube).
 - **R12** ✓ collect `02,08,14,20` e score configuráveis por env (Task 1); research 07:00 inalterado; catch-up e cron leem as mesmas envs (Task 1); remedição dentro da coleta, bem abaixo de 6 h.
 - Fora deste bloco: R5 (plano de consulta) e R3 (Trends) no Bloco 4; a remedição não entra no `ops-report` detalhado até R13 (Bloco 6).

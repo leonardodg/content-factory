@@ -1,10 +1,16 @@
-# Bloco 6 — Observabilidade, idioma e pré-registro (R13+R14+§6)
+# Bloco 6 — Observabilidade e idioma (R13+R14)
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Tornar o teste auditável e congelar o pré-registro antes de abrir as campanhas. O `cf ops-report` passa a mostrar cota por origem/coleta, vídeos por origem de termo, cobertura da remedição e o pool com os descartes do filtro; o idioma fica verificado ponta a ponta; e o pré-registro é commitado em `docs/manual/`.
+**Goal:** Tornar o teste auditável. O `cf ops-report` passa a mostrar:
+- cota e rendimento por origem (buscas, buscas vazias, vídeos por busca);
+- vídeos por origem de termo;
+- cobertura da remedição;
+- o pool com os descartes do filtro.
 
-**Architecture:** Tudo é leitura (`OpsReportReader`) agregada por uma função pura (`build_ops_report`) — a CLI só emite o envelope, os dados ficam no banco. R14 é majoritariamente verificação (com um indicador de cobertura de idioma no relatório). O pré-registro é um documento versionado que trava versões, pesos e a divisão de buscas por origem.
+O idioma fica verificado ponta a ponta. Faz parte da **Fase B**, implementada durante o teste. O pré-registro foi para o fim da Fase A (Bloco 4, Task 8): ele precisa estar commitado **antes** do primeiro dado do teste.
+
+**Architecture:** Tudo é leitura (`OpsReportReader`) agregada por uma função pura (`build_ops_report`). A CLI só emite o envelope e os dados ficam no banco. O R14 é quase todo verificação, mais um indicador de cobertura de idioma no relatório. A cota e o rendimento vêm de `search_queries` (Bloco 2), não de `video_discoveries`: busca que volta vazia não gera descoberta, mas gasta 100 unidades e é o dado de rendimento da origem (revisão QA).
 
 **Tech Stack:** Python 3.14, SQLAlchemy 2 async, typer, Markdown/MkDocs, pytest, ruff, pyright strict.
 
@@ -18,15 +24,14 @@
 
 ## Referência
 
-Especificação §4 R13 e R14; §6 (pré-registro, execução, checkpoints). **Depende dos Blocos 1–5** (pool, atribuição, remedição, `viral-v2`, relatório).
+Especificação §4 R13 e R14; §6 (checkpoints). **Depende dos Blocos 1–4** (pool, atribuição, `search_queries`, remedição). Não depende do Bloco 5: pode ser feito em paralelo a ele.
 
 ## Decisões deste bloco
 
 - Nada de comando novo: `cf ops-report` ganha chaves. `build_ops_report` mantém-se **puro** — as agregações novas chegam como parâmetros opcionais (default vazio), preservando as chamadas existentes.
-- Cota por origem sai de `video_discoveries` (agrupando `query_id` distintos por `platform`/`term_origin`) + `collect_runs.quota_used` por plataforma.
+- Cota e rendimento por origem saem de `search_queries` (buscas, buscas vazias, cota, resultados, únicos novos). A cota da remedição sai das runs `remediate:*` de `collect_runs`.
 - Cobertura da remedição = `video_metrics` novos na janela sobre os alvos (descobertos nos últimos `REMEDIATION_WINDOW_DAYS`) + contagem de `videos.removed_at`.
-- **Pré-registro** congela: pergunta, versões (`term-filter-v1`, `kw-rank-v1`, `trends-anchor-v1`, `viral-v2`, `term-rank-v1`, `hashtag-mine-v1`), pesos, janela 30 d, **divisão fixa de buscas por origem** (R5), datas de corte e a regra de decisão por origem.
-- Publicação no MkDocs: se `mkdocs build --strict` acusar arquivo fora do `nav`, acrescentar a página ao `nav` do `mkdocs.yml` (mesma âncora do manual) — não baixar o nível de validação.
+- O pré-registro **não** está neste bloco (está no Bloco 4, Task 8).
 
 ## Estrutura de arquivos
 
@@ -36,8 +41,6 @@ Especificação §4 R13 e R14; §6 (pré-registro, execução, checkpoints). **D
 | `src/content_factory/infra/db/repositories.py` (editar) | SQL das agregações novas. |
 | `src/content_factory/app/ops_report.py` (editar) | Seções novas do relatório (função pura). |
 | `src/content_factory/cli/main.py` (editar) | Passa as agregações ao `build_ops_report` (sem comando novo). |
-| `docs/manual/pre-registro-viral-por-tema.md` (novo) | Pré-registro commitado (§6). |
-| `mkdocs.yml` (editar) | Entrada no `nav` (se necessário). |
 | `docs/HANDOFF.md` (editar) | Estado do épico e próximos passos. |
 | `tests/app/test_ops_report.py`, `tests/infra/...` | TDD. |
 
@@ -52,7 +55,8 @@ Especificação §4 R13 e R14; §6 (pré-registro, execução, checkpoints). **D
 
 **Interfaces:**
 - Produces (em `OpsReportReader`):
-  - `async def quota_by_origin(self, segment_id: int, since: datetime) -> dict[str, int]` — chave `f"{platform}:{origin}"` → nº de buscas distintas (`query_id`)
+  - `async def search_yield(self, segment_id: int, since: datetime) -> dict[str, dict[str, int]]` — chave `f"{platform}:{origin}"` → `{"searches", "empty", "failed", "quota", "results", "kept"}` (de `search_queries`)
+  - `async def remediation_quota(self, segment_id: int, since: datetime) -> int` — soma de `quota_used` das runs `remediate:%`
   - `async def discoveries_by_origin(self, segment_id: int, since: datetime) -> dict[str, int]` — `term_origin` → nº de vídeos distintos
   - `async def remediation_coverage(self, segment_id: int, since: datetime) -> dict[str, int]` — `{"targets": n, "remeasured": n, "removed": n}`
   - `async def pool_by_origin(self, segment_id: int) -> dict[str, dict[str, int]]` — origem → `{"active": n, "excluded": n}`
@@ -60,24 +64,34 @@ Especificação §4 R13 e R14; §6 (pré-registro, execução, checkpoints). **D
   - `async def language_coverage(self, segment_id: int) -> dict[str, dict[str, int]]` — plataforma → `{"videos": n, "with_language": n}`
 
 - [ ] **Step 1: Teste que falha** (integração, com dados sintéticos mínimos)
-Semear 1 coleta com 2 `video_discoveries` de origens distintas, 1 `segment_term` ativo + 1 excluído (`exclude_reason="lang"`), 1 vídeo YouTube com `language` e outro sem, e 1 `video_metrics` novo. Conferir cada agregação.
+Semear 3 `search_queries` (uma vazia, uma com erro), 2 `video_discoveries` de origens distintas, 1 `segment_term` ativo + 1 excluído (`exclude_reason="lang"`), 1 vídeo YouTube com `language` e outro sem, e 1 `video_metrics` novo. Conferir cada agregação.
 
 - [ ] **Step 2: Rodar e ver falhar** — FAIL (`AttributeError`).
 
 - [ ] **Step 3: Implementar** (SQL de agregação; padrão dos leitores existentes)
 
 ```python
-async def quota_by_origin(self, segment_id: int, since: datetime) -> dict[str, int]:
+async def search_yield(self, segment_id: int, since: datetime) -> dict[str, dict[str, int]]:
+    q = SearchQueryRow
     stmt = (
         select(
-            VideoDiscoveryRow.platform,
-            VideoDiscoveryRow.term_origin,
-            func.count(func.distinct(VideoDiscoveryRow.query_id)),
+            q.platform,
+            q.origin,
+            func.count(q.id),
+            func.count(q.id).filter(q.results == 0, q.error_code.is_(None)),
+            func.count(q.id).filter(q.error_code.is_not(None)),
+            func.coalesce(func.sum(q.quota_used), 0),
+            func.coalesce(func.sum(q.results), 0),
+            func.coalesce(func.sum(q.kept), 0),
         )
-        .where(VideoDiscoveryRow.segment_id == segment_id, VideoDiscoveryRow.discovered_at >= since)
-        .group_by(VideoDiscoveryRow.platform, VideoDiscoveryRow.term_origin)
+        .where(q.segment_id == segment_id, q.started_at >= since)
+        .group_by(q.platform, q.origin)
     )
-    return {f"{plat}:{origin}": int(n) for plat, origin, n in (await self._s.execute(stmt)).all()}
+    keys = ("searches", "empty", "failed", "quota", "results", "kept")
+    return {
+        f"{plat}:{origin}": dict(zip(keys, (int(v) for v in vals), strict=True))
+        for plat, origin, *vals in (await self._s.execute(stmt)).all()
+    }
 
 
 async def remediation_coverage(self, segment_id: int, since: datetime) -> dict[str, int]:
@@ -128,8 +142,8 @@ git commit -m "feat(ops): agregações de cota, origem, remedição, pool e idio
 
 **Interfaces:**
 - Consumes: os dicts da Task 1.
-- Produces: `build_ops_report(..., quota_by_origin=None, discoveries_by_origin=None, remediation=None, pool=None, filter_discards=None, language=None)` — novas chaves:
-  - `"search_quota"`: `{"by_origin": {...}, "total": n, "per_collect": {...}}`
+- Produces: `build_ops_report(..., search_yield=None, remediation_quota=0, discoveries_by_origin=None, remediation=None, pool=None, filter_discards=None, language=None)` — novas chaves:
+  - `"search_quota"`: `{"by_origin": {chave: {...contagens..., "videos_per_search": float | None}}, "searches_total": n, "quota_total": n (buscas + remedição), "remediation_quota": n}`
   - `"discovery_origins"`: `{origem: n}`
   - `"remediation"`: `{"targets": n, "remeasured": n, "removed": n, "coverage": float | None}`
   - `"term_pool"`: `{origem: {"active": n, "excluded": n}}`
@@ -147,15 +161,35 @@ def test_ops_report_traz_as_secoes_do_teste_viral() -> None:
         scored=0,
         since=_SINCE,
         until=_UNTIL,
-        quota_by_origin={"youtube:seed": 4, "youtube:suggest_trends": 8},
-        discoveries_by_origin={"seed": 10, "suggest_trends": 25},
+        search_yield={
+            "youtube:seed": {
+                "searches": 4,
+                "empty": 1,
+                "failed": 0,
+                "quota": 408,
+                "results": 30,
+                "kept": 28,
+            },
+            "youtube:suggest": {
+                "searches": 8,
+                "empty": 0,
+                "failed": 1,
+                "quota": 816,
+                "results": 80,
+                "kept": 60,
+            },
+        },
+        remediation_quota=12,
+        discoveries_by_origin={"seed": 10, "suggest": 25},
         remediation={"targets": 100, "remeasured": 95, "removed": 3},
         pool={"seed": {"active": 3, "excluded": 0}, "suggest": {"active": 20, "excluded": 5}},
         filter_discards={"lang": 4, "no_anchor": 1},
         language={"youtube": {"videos": 50, "with_language": 40}},
     )
-    assert rep["search_quota"]["total"] == 12
-    assert rep["discovery_origins"]["suggest_trends"] == 25
+    assert rep["search_quota"]["searches_total"] == 12
+    assert rep["search_quota"]["quota_total"] == 408 + 816 + 12
+    assert rep["search_quota"]["by_origin"]["youtube:seed"]["videos_per_search"] == 7.0
+    assert rep["discovery_origins"]["suggest"] == 25
     assert rep["remediation"]["coverage"] == 0.95
     assert rep["term_pool"]["suggest"]["excluded"] == 5
     assert rep["filter_discards"] == {"lang": 4, "no_anchor": 1}
@@ -176,9 +210,13 @@ def test_ops_report_sem_dados_novos_continua_valido() -> None:
     return {
         # ... chaves atuais (window, collectors, web_empty, web_discards, blocked_runs, ticks, coverage, scored)
         "search_quota": {
-            "by_origin": dict(quota_by_origin or {}),
-            "total": sum((quota_by_origin or {}).values()),
-            "per_collect": (remediation or {}).get("per_collect", {}),
+            "by_origin": {
+                key: {**c, "videos_per_search": _ratio(c["kept"], c["searches"])}
+                for key, c in (search_yield or {}).items()
+            },
+            "searches_total": sum(c["searches"] for c in (search_yield or {}).values()),
+            "quota_total": sum(c["quota"] for c in (search_yield or {}).values()) + remediation_quota,
+            "remediation_quota": remediation_quota,
         },
         "discovery_origins": dict(discoveries_by_origin or {}),
         "remediation": {
@@ -280,85 +318,18 @@ git commit -m "test(lang): videos.language persistido e filtro pt do YouTube (R1
 
 ---
 
-### Task 5: Pré-registro em `docs/manual/` (§6)
-
-**Files:**
-- Create: `docs/manual/pre-registro-viral-por-tema.md`
-- Modify: `mkdocs.yml` (só se `--strict` reclamar), `docs/HANDOFF.md`
-
-**Interfaces:**
-- Produces: documento versionado que trava o desenho antes de qualquer dado do teste novo.
-
-- [ ] **Step 1: Escrever o pré-registro** com, no mínimo:
-
-```markdown
-# Pré-registro — descoberta de conteúdo viral por tema (teste de 4 dias)
-
-Data do pré-registro: <preencher no commit>. Especificação: `docs/ai-plans/2026-10-16-especificacao-viral-por-tema.md`.
-
-## Pergunta
-Os termos vindos da web (Suggest, Trends e hashtags) trazem conteúdo com mais
-engajamento do que as keywords fixas do segmento? Quais temas lideram em cada
-segmento?
-
-## Versões congeladas
-`term-filter-v1`, `kw-rank-v1` (posição 0,5 / recorrência 0,3 / persistência 0,2;
-cap de recorrência 3; janela 7 d), `trends-anchor-v1` (0,7 interesse + 0,3
-inclinação), `viral-v2` (velocidade 0,35 / engajamento 0,25 / relativo ao canal
-0,25 / alcance 0,15; janela 30 d; n mínimo por plataforma e segmento = 5),
-`term-rank-v1` (top10 0,4 / mediana velocidade 0,3 / mediana engajamento 0,3;
-bootstrap seed 20261016, 1.000 reamostragens), `hashtag-mine-v1` (top 25%).
-
-## Divisão fixa de buscas por origem (R5)
-YouTube: 3 buscas/coleta/segmento — 1 `seed`, 1 `suggest`/`trends`, 1
-`hashtag:youtube` (vaga vai para `suggest`/`trends` enquanto o pool de hashtags
-estiver vazio). Sem realocação adaptativa durante o teste.
-
-## Regra de decisão por origem
-A origem X é **melhor** que `seed` em um segmento se a mediana do `viral-v2`
-dos vídeos trazidos por X for maior, com o **limite inferior do IC 95% da
-diferença acima de zero**; IC cruzando zero ⇒ **direcional**; menos de **30
-vídeos atribuídos** ⇒ **insuficiente**.
-
-## Critério de "top temas"
-`engagement_score` do termo com `n >= 5`; termo com `n < 5` sai como
-"insuficiente".
-
-## Datas de corte e checkpoints
-D+0 fumaça (catch-up, 1ª coleta com atribuição, cota); D+1 (filtro por amostra
-manual de 20 termos/segmento, remedição, 1º `cf term-report`); D+2 (velocity não
-nula, hashtags no pool); D+4 (encerramento, backup, relatório final).
-
-## Envs do teste
-`COLLECT_CRON_HOURS=02,08,14,20`, `SCORE_CRON_HOURS=02,08,14,20`,
-`TRENDS_TERMS_PER_DAY=16`, `SEARCHES_PER_COLLECT_YOUTUBE=3`,
-`REMEDIATION_WINDOW_DAYS=7`, `REMEDIATION_LIMIT=500`, `VIRAL_V2_WINDOW_DAYS=30`,
-`VIRAL_V2_MIN_POPULATION=5`, `COLLECT_LIMIT=25`.
-```
-
-- [ ] **Step 2: Publicar** — `uv run --only-group docs mkdocs build --strict`; se acusar arquivo fora do `nav`, acrescentar `- manual/pre-registro-viral-por-tema.md` ao bloco `Manual` do `mkdocs.yml` e repetir.
-
-- [ ] **Step 3: Atualizar `docs/HANDOFF.md`** — estado do épico (blocos 1–6), envs, checklist de deploy (fila vazia, migrações, `cf segment load`, abertura das campanhas de 4 dias).
-
-- [ ] **Step 4: Commit**
-
-```bash
-git add docs/manual/pre-registro-viral-por-tema.md mkdocs.yml docs/HANDOFF.md
-git commit -m "docs(preregistro): congela versões, pesos e divisão de buscas do teste de 4 dias (§6)"
-```
-
----
-
-### Task 6: Encerrar o épico — gates e checklist de aceite
+### Task 5: Encerrar o épico — gates e checklist de aceite
 
 - [ ] **Step 1: Gates completos** — `make gates` verde (pytest, ruff, pyright, `alembic check`, bandit, pip-audit, `mkdocs build --strict`, privacy).
 
 - [ ] **Step 2: Aceite R13 (QA)**
 
 ```sql
--- cota por plataforma/origem/coleta
-SELECT platform, term_origin, count(DISTINCT query_id) FROM video_discoveries
-WHERE discovered_at > now() - interval '1 day' GROUP BY 1, 2 ORDER BY 1, 2;
+-- cota e rendimento por plataforma/origem (inclui buscas vazias e com erro)
+SELECT platform, origin, count(*), count(*) FILTER (WHERE results = 0), sum(quota_used), sum(kept)
+FROM search_queries WHERE started_at > now() - interval '1 day' GROUP BY 1, 2 ORDER BY 1, 2;
+-- cota total do dia (buscas + remedição) contra o teto de 8.000
+SELECT sum(quota_used) FROM collect_runs WHERE started_at > now() - interval '1 day';
 -- vídeos por origem de termo
 SELECT term_origin, count(DISTINCT video_id) FROM video_discoveries
 WHERE discovered_at > now() - interval '1 day' GROUP BY 1;
@@ -373,13 +344,7 @@ E `cf ops-report --segment <slug>` devolvendo `search_quota`, `discovery_origins
 
 - [ ] **Step 3: Aceite R14** — `videos.language` preenchido onde a plataforma informa (YouTube); filtro pt do YouTube (`_language_matches`) mantido; R1 aplicado aos títulos no `viral-v2`.
 
-- [ ] **Step 4: Checklist do deploy (aplicar §6, janela sem cron e fila vazia)**
-
-1. Encerrar as campanhas 856–858 (o teste antigo foi congelado em 16/10 15:40 BRT; backup em `~/content-factory-backups/2026-10-16-teste7d-codigo-antigo/`).
-2. Aplicar as migrações `0011`–`0015`.
-3. `cf segment load` dos 3 segmentos (sobe `probe_terms`, `anchor_terms`, `blocked_terms`).
-4. Definir as envs do pré-registro e `COLLECT_LIMIT=25`.
-5. Abrir as campanhas de **4 dias** dos 3 segmentos.
+- [ ] **Step 4: Deploy (Fase B)** — se este bloco não foi junto com o Bloco 5: imagem nova (sem migração) numa janela sem cron e com a fila vazia, e depois a fumaça do `cf ops-report` nos 3 segmentos.
 
 - [ ] **Step 5: Commit de encerramento do épico**
 
@@ -393,13 +358,19 @@ git commit -am "docs(plans): bloco 6 e épico viral-por-tema concluídos — R13
 
 - **R13** ✓ `ops-report` mostra cota por plataforma/origem/coleta (Tasks 1-3), vídeos por origem de termo, cobertura da remedição, tamanho do pool por origem e descartes do filtro por motivo (Tasks 1-3).
 - **R14** ✓ `videos.language` verificado (Tasks 1/4), filtro pt do YouTube mantido (Task 4), R1 no título/descrição do `viral-v2` (Bloco 5, Task 6).
-- **§6** ✓ pré-registro commitado em `docs/manual/` com versões, pesos, divisão de buscas, regra de decisão e checkpoints (Task 5); deploy único no fim com fila vazia e migrações (Task 6).
+- **§6** ✓ checkpoints D+1..D+4 usam este relatório; o pré-registro está no Bloco 4 (Task 8).
 
 ---
 
-## Como usar estes planos (épico completo)
+## Como usar estes planos (épico completo — revisão QA)
 
-- Ordem de execução: **Bloco 1 → 2 → 3 → 4 → 5 → 6** (§7 da especificação). Os blocos 3, 5 e 6 dependem dos anteriores; 3 e 4 são independentes entre si.
-- Cada bloco: implementar por TDD, rodar `make gates`, revisar e fazer o teste real do QA antes de seguir.
-- **Deploy único no fim** (Bloco 6), numa janela sem cron e com a fila vazia.
-- Migrações na ordem `0011` → `0012` → `0013` → `0014` → `0015`.
+**Pré-requisito:** a F1 web (`db3ad2e`, `4f56a0a`, `9e855a6`) mergeada na `main` e esta branch rebaseada (o Bloco 1 usa `probe_terms`).
+
+| Fase | Blocos | Deploy | Efeito no teste |
+|---|---|---|---|
+| **A — coleta** | 1 → 2 → 3 → 4 (o 3 é independente do 2 e pode ir em paralelo) | 1 deploy ao fim do Bloco 4, depois do **pré-registro** (Bloco 4, Task 8). Migrações `0011`–`0014`. | **Abre o relógio dos 4 dias.** Pool, vagas por origem, atribuição, log de buscas, remedição e coleta a cada 6 h. |
+| **B — análise** | 5 e 6 (em paralelo) | 1 deploy durante o teste. Migração `0015`. | `viral-v2`, `cf term-report` com `--as-of`, top vídeos, `ops-report` novo. Ativa a vaga de hashtag (exploratória, com a data anotada em adendo ao pré-registro). Tudo é recalculável no corte a partir dos dados da Fase A. |
+
+- Cada bloco: TDD, `make gates`, revisão e teste real do QA antes de seguir.
+- Deploy sempre numa janela sem cron e com a fila vazia, com backup do banco antes.
+- O corte final (D+4) é `cf term-report --as-of <início + 96 h>` nos 3 segmentos.

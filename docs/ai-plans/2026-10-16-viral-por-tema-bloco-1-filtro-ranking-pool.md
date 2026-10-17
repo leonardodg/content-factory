@@ -21,6 +21,11 @@
 - `term-filter-v1` é o filtro do pool/hashtags/descoberta. O `filter-v1`/`intent-v3` da branch web fica **só no q1** — os dois convivem, não se substituem.
 - Versões fixas desta entrega: `term-filter-v1`, `kw-rank-v1`.
 
+## Pré-requisito (revisão QA)
+
+- **Rebase sobre a `main` com a F1 web mergeada** (`db3ad2e`, `4f56a0a`, `9e855a6`): este bloco usa `SegmentConfig.probe_terms` e `domain/suggest_probes.py`, que só existem nesses commits, e edita os mesmos arquivos (`research_pipeline.py`, `models.py`, os 3 YAMLs). Implementar sobre a `main` atual gera conflito e quebra o import.
+- As sondas (`probe_terms`) continuam alimentando **só o Suggest**; as frases que elas geram passam pelo R1 como qualquer outra.
+
 ## Referência da especificação
 
 `docs/ai-plans/2026-10-16-especificacao-viral-por-tema.md` §4 (R1, R2, R4) e §2 (estado atual). Ler antes de começar.
@@ -51,28 +56,42 @@
 - Test: `tests/domain/test_term_filter.py`
 
 **Interfaces:**
-- Consumes: `content_factory.domain.text.{contains_phrase, normalize, word_tokens}`.
+- Consumes: `content_factory.domain.text.{contains_phrase, word_tokens}`.
 - Produces:
   - `TERM_FILTER_VERSION: str = "term-filter-v1"`
   - `@dataclass(frozen=True) class TermFilterConfig: anchors: tuple[str, ...] = (); blocked: tuple[str, ...] = ()`
   - `@dataclass(frozen=True) class TermVerdict: accepted: bool; reason: str | None`
-  - `def filter_term(term: str, config: TermFilterConfig) -> TermVerdict`
-  - `def filter_terms(terms: Sequence[str], config: TermFilterConfig) -> tuple[list[str], dict[str, int]]` — devolve `(aceitos, contagem_por_motivo)`.
+  - `def filter_term(term: str, config: TermFilterConfig) -> TermVerdict` — frases (Suggest/Trends).
+  - `def filter_hashtag(tag: str, config: TermFilterConfig) -> TermVerdict` — hashtags (R11): âncora/bloqueio por **substring** da tag normalizada, sem checagem de idioma.
+  - `def filter_terms(terms: Sequence[str], config: TermFilterConfig) -> tuple[list[str], list[tuple[str, str]]]` — `(aceitos, [(termo, motivo)])`.
+
+> **Revisão QA (16/10).** A 1ª versão deste plano reprovava por idioma quando faltava palavra-função PT. Medido com o código do plano: aceitava espanhol (`como hacer velas aromaticas`) e descartava PT curto sem acento (`velas aromaticas`, `vela`, `sabonete natural caseiro`); todas as hashtags (`velaaromatica`) caíam por `lang`. Regra corrigida: **idioma só reprova com evidência positiva** de outra língua (listas fechadas EN + ES); quem segura o nicho é a âncora. O código abaixo foi executado contra estes testes (pytest, pyright strict e ruff limpos).
 
 - [ ] **Step 1: Escrever os testes que falham**
 
 ```python
 # tests/domain/test_term_filter.py
+import pytest
+
 from content_factory.domain.term_filter import (
     TERM_FILTER_VERSION,
     TermFilterConfig,
+    filter_hashtag,
     filter_term,
     filter_terms,
 )
 
 VELAS = TermFilterConfig(
     anchors=("vela", "velas", "pavio", "parafina", "cera"),
-    blocked=("tendencia alcista", "bajista", "grafico", "ignicao", "motor"),
+    blocked=("tendencia alcista", "bajista", "grafico", "ignicao", "motor", "martillo"),
+)
+SABONETES = TermFilterConfig(
+    anchors=("sabonete", "sabonetes", "saboaria", "glicerinada", "saponificacao"),
+    blocked=("natura", "phebo", "dove", "lux", "protex", "granado"),
+)
+RESINA = TermFilterConfig(
+    anchors=("resina", "epoxi", "epoxy"),
+    blocked=("odontologica", "dente", "dentes", "clareia", "dental", "ortodontia", "mdf"),
 )
 
 
@@ -80,59 +99,64 @@ def test_version() -> None:
     assert TERM_FILTER_VERSION == "term-filter-v1"
 
 
-def test_aceita_frase_do_nicho_em_pt() -> None:
-    assert filter_term("como fazer vela aromática", VELAS).accepted
+# Casos REAIS do Suggest (QA de 16/10, sondas probe-v2) + PT curto sem acento,
+# que o Suggest devolve com frequência e NÃO pode cair por idioma.
+@pytest.mark.parametrize(
+    ("cfg", "term"),
+    [
+        (VELAS, "velas aromaticas"),
+        (VELAS, "vela aromática"),
+        (VELAS, "vela"),
+        (VELAS, "como fazer vela de soja"),
+        (VELAS, "pavio de madeira para vela"),
+        (VELAS, "velas decorativas para casamento"),
+        (SABONETES, "sabonete natural caseiro"),
+        (SABONETES, "sabonete artesanal como fazer"),
+        (RESINA, "resina epoxi para iniciantes"),
+        (RESINA, "mesa de resina"),
+    ],
+)
+def test_aceita_pt_do_nicho(cfg: TermFilterConfig, term: str) -> None:
+    assert filter_term(term, cfg).accepted
 
 
-def test_aceita_ancora_com_acento_normalizado() -> None:
-    assert filter_term("velas artesanais passo a passo", VELAS).accepted
-
-
-def test_rejeita_ingles_com_marcador() -> None:
-    v = filter_term("candle making for beginners", VELAS)
-    assert v.accepted is False
-    assert v.reason == "lang"
-
-
-def test_rejeita_espanhol_com_marcador() -> None:
-    v = filter_term("vela aromatica con cera de soja", VELAS)
-    assert v.reason == "lang"
-
-
-def test_rejeita_frase_sem_palavra_pt() -> None:
-    # nenhum marcador de língua, nenhum diacrítico, nenhuma palavra-função PT
-    v = filter_term("wick trimmer scissors", VELAS)
-    assert v.reason == "lang"
-
-
-def test_rejeita_sem_ancora() -> None:
-    v = filter_term("presente de aniversário original", VELAS)
-    assert v.accepted is False
-    assert v.reason == "no_anchor"
-
-
-def test_rejeita_bloqueado_com_precedencia() -> None:
-    v = filter_term("vela grafico tendencia alcista", VELAS)
-    assert v.reason == "blocked"
-
-
-def test_ancora_casa_palavra_inteira_nao_substring() -> None:
-    # "envelope" NÃO contém "vela"; "revelar" NÃO contém "vela"
-    assert filter_term("envelope revelar", VELAS).reason == "no_anchor"
+@pytest.mark.parametrize(
+    ("cfg", "term", "reason"),
+    [
+        (VELAS, "como hacer velas aromaticas", "lang"),  # espanhol com "como"
+        (VELAS, "velas caseras faciles paso a paso", "lang"),
+        (VELAS, "vela martillo en tendencia bajista", "blocked"),  # bloqueio vence
+        (VELAS, "candle making for beginners", "lang"),
+        (VELAS, "significado espiritual da cor", "no_anchor"),
+        (VELAS, "envelope revelar", "no_anchor"),  # palavra inteira, não substring
+        (SABONETES, "sabonete natura ekos", "blocked"),
+        (SABONETES, "handmade soap for beginners", "lang"),
+        (RESINA, "resina nao clareia", "blocked"),
+        (RESINA, "resin art for beginners tutorial", "lang"),
+        (RESINA, "artesanato em mdf", "blocked"),
+    ],
+)
+def test_rejeita_com_motivo(cfg: TermFilterConfig, term: str, reason: str) -> None:
+    verdict = filter_term(term, cfg)
+    assert verdict.accepted is False
+    assert verdict.reason == reason
 
 
 def test_sem_ancoras_configuradas_nao_reprova_ancora() -> None:
-    cfg = TermFilterConfig(anchors=(), blocked=())
-    assert filter_term("qualquer coisa em portugues", cfg).accepted
+    assert filter_term("qualquer coisa em portugues", TermFilterConfig()).accepted
 
 
-def test_filter_terms_conta_motivos() -> None:
-    aceitos, motivos = filter_terms(
-        ["como fazer vela", "candle making for beginners", "presente original"],
-        VELAS,
-    )
-    assert aceitos == ["como fazer vela"]
-    assert motivos == {"lang": 1, "no_anchor": 1}
+def test_filter_terms_devolve_rejeitados_com_motivo() -> None:
+    aceitos, rejeitados = filter_terms(["vela", "candle for x", "presente"], VELAS)
+    assert aceitos == ["vela"]
+    assert rejeitados == [("candle for x", "lang"), ("presente", "no_anchor")]
+
+
+def test_hashtag_casa_ancora_por_substring_sem_idioma() -> None:
+    assert filter_hashtag("velaaromatica", VELAS).accepted
+    assert filter_hashtag("#VelasArtesanais", VELAS).accepted
+    assert filter_hashtag("decoracao", VELAS).reason == "no_anchor"
+    assert filter_hashtag("sabonetenatura", SABONETES).reason == "blocked"
 ```
 
 - [ ] **Step 2: Rodar e ver falhar**
@@ -146,9 +170,16 @@ Expected: FAIL — `ModuleNotFoundError: content_factory.domain.term_filter`.
 # src/content_factory/domain/term_filter.py
 """Filtro de termos `term-filter-v1` (R1) — puro, sem I/O.
 
-Ordem de precedência DOCUMENTADA do motivo (como o `INTENT_ORDER` do q1):
-`blocked` → `lang` → `no_anchor`. Listas fechadas e versionadas; sem
-heurística opaca.
+Precedência DOCUMENTADA do motivo: `blocked` → `lang` → `no_anchor`.
+
+Idioma só reprova com EVIDÊNCIA POSITIVA de outra língua (listas fechadas de
+inglês e espanhol). Ausência de palavra-função PT NÃO reprova: o Suggest
+devolve frases curtas sem acento ("velas aromaticas"), que são PT. Quem
+segura o nicho é a âncora.
+
+Hashtags (`filter_hashtag`) não têm espaços nem palavras-função: âncora e
+bloqueio casam por SUBSTRING da tag normalizada e não há checagem de idioma
+(o idioma vem do vídeo de origem, R14).
 
 O `filter-v1`/`intent-v3` da branch web NÃO é substituído por este: aquele
 vive só no protocolo q1; este governa pool, hashtags e descoberta.
@@ -162,48 +193,32 @@ from content_factory.domain.text import contains_phrase, word_tokens
 TERM_FILTER_VERSION = "term-filter-v1"
 REASON_ORDER: tuple[str, ...] = ("blocked", "lang", "no_anchor")
 
-# marcadores de OUTRO idioma (lista fechada). Casam como palavra/frase inteira.
-NON_PT_MARKER_WORDS = frozenset(
-    {"for", "the", "and", "with", "en", "con", "los", "las", "del", "of"}
+# Marcadores de OUTRA língua — palavras que não existem (normalizadas) em PT.
+EN_MARKERS = frozenset(
+    {"for", "the", "and", "with", "of", "how", "to", "make", "making", "diy", "best", "easy"}
 )
-NON_PT_MARKER_PHRASES: tuple[str, ...] = ("para la", "de la")
-
-# evidência POSITIVA de português: diacríticos ou palavras-função PT.
-_PT_DIACRITICS = "áàâãéêíóôõúüç"
-PT_FUNCTION_WORDS = frozenset(
+ES_MARKERS = frozenset(
     {
-        "de",
-        "da",
-        "do",
-        "das",
-        "dos",
-        "para",
-        "como",
-        "com",
-        "que",
-        "e",
-        "a",
-        "o",
-        "as",
-        "os",
-        "um",
-        "uma",
-        "na",
-        "no",
-        "nas",
-        "nos",
-        "em",
-        "por",
-        "se",
-        "ao",
-        "sobre",
-        "sem",
-        "mais",
-        "sao",
-        "essa",
-        "esse",
+        "y",
+        "el",
+        "los",
+        "las",
+        "del",
+        "con",
+        "en",
+        "hacer",
+        "caseras",
+        "caseros",
+        "faciles",
+        "paso",
+        "una",
+        "jabon",
+        "jabones",
+        "veladora",
+        "veladoras",
     }
 )
+NON_PT_PHRASES: tuple[str, ...] = ("de la", "para la", "para el", "en la")
 
 
 @dataclass(frozen=True)
@@ -218,54 +233,69 @@ class TermVerdict:
     reason: str | None  # None | "blocked" | "lang" | "no_anchor"
 
 
-def _is_other_language(term: str, words: list[str]) -> bool:
-    phrase = " ".join(words)
-    if any(w in NON_PT_MARKER_WORDS for w in words):
+def _is_other_language(words: list[str]) -> bool:
+    if any(w in EN_MARKERS or w in ES_MARKERS for w in words):
         return True
-    if any(contains_phrase(words, p) for p in NON_PT_MARKER_PHRASES):
-        return True
-    if any(ch in term.casefold() for ch in _PT_DIACRITICS):
-        return False
-    return not any(w in PT_FUNCTION_WORDS for w in words)
+    return any(contains_phrase(words, p) for p in NON_PT_PHRASES)
+
+
+def _verdict(checks: dict[str, bool]) -> TermVerdict:
+    reason = next((r for r in REASON_ORDER if checks.get(r, False)), None)
+    return TermVerdict(accepted=reason is None, reason=reason)
 
 
 def filter_term(term: str, config: TermFilterConfig) -> TermVerdict:
     words = word_tokens(term)
-    checks: dict[str, bool] = {
-        "blocked": any(contains_phrase(words, b) for b in config.blocked),
-        "lang": _is_other_language(term, words),
-        "no_anchor": bool(config.anchors)
-        and not any(contains_phrase(words, a) for a in config.anchors),
-    }
-    reason = next((r for r in REASON_ORDER if checks[r]), None)
-    return TermVerdict(accepted=reason is None, reason=reason)
+    return _verdict(
+        {
+            "blocked": any(contains_phrase(words, b) for b in config.blocked),
+            "lang": _is_other_language(words),
+            "no_anchor": bool(config.anchors)
+            and not any(contains_phrase(words, a) for a in config.anchors),
+        }
+    )
+
+
+def _compact(text: str) -> str:
+    return "".join(word_tokens(text))
+
+
+def filter_hashtag(tag: str, config: TermFilterConfig) -> TermVerdict:
+    compact = _compact(tag)
+    return _verdict(
+        {
+            "blocked": any(_compact(b) in compact for b in config.blocked),
+            "no_anchor": bool(config.anchors)
+            and not any(_compact(a) in compact for a in config.anchors),
+        }
+    )
 
 
 def filter_terms(
     terms: Sequence[str], config: TermFilterConfig
-) -> tuple[list[str], dict[str, int]]:
+) -> tuple[list[str], list[tuple[str, str]]]:
+    """(aceitos, [(termo, motivo)] dos rejeitados) — ordem de entrada preservada."""
     accepted: list[str] = []
-    reasons: dict[str, int] = {}
+    rejected: list[tuple[str, str]] = []
     for term in terms:
         verdict = filter_term(term, config)
-        if verdict.accepted:
+        if verdict.reason is None:
             accepted.append(term)
         else:
-            assert verdict.reason is not None
-            reasons[verdict.reason] = reasons.get(verdict.reason, 0) + 1
-    return accepted, reasons
+            rejected.append((term, verdict.reason))
+    return accepted, rejected
 ```
 
 - [ ] **Step 4: Rodar e ver passar**
 
 Run: `uv run pytest tests/domain/test_term_filter.py -q`
-Expected: PASS (11 passed).
+Expected: PASS (25 passed).
 
 - [ ] **Step 5: Commit**
 
 ```bash
 git add src/content_factory/domain/term_filter.py tests/domain/test_term_filter.py
-git commit -m "feat(domain): term-filter-v1 — idioma, âncora e bloqueio (R1)"
+git commit -m "feat(domain): term-filter-v1 — idioma por evidência, âncora e bloqueio (R1)"
 ```
 
 ---
@@ -343,7 +373,7 @@ Substitui o peso fixo 0,5. Peso em [0,1] = média ponderada de:
 
 - **posição**: média de `1/posição` entre as sementes que trouxeram a frase;
 - **recorrência**: nº de sementes distintas / cap;
-- **persistência**: nº de dias distintos (últimos 7) / 7.
+- **persistência**: nº de dias distintos (últimos 7, **incluindo hoje** — o app grava o dia de hoje ANTES de ler) / 7.
 
 Pesos da combinação são constantes versionadas: bumpar `KW_RANK_VERSION`
 quando mudarem.
@@ -507,7 +537,7 @@ def test_segmentos_pt_tem_ancoras_e_bloqueios() -> None:
 `segments/velas-artesanais.yaml`:
 ```yaml
 anchor_terms: [vela, velas, pavio, parafina, cera]
-blocked_terms: [tendencia alcista, bajista, grafico, ignicao, motor]
+blocked_terms: [tendencia alcista, bajista, grafico, ignicao, motor, martillo]
 ```
 `segments/sabonetes-artesanais.yaml`:
 ```yaml
@@ -516,9 +546,11 @@ blocked_terms: [natura, phebo, dove, lux, protex, granado]
 ```
 `segments/resina-artesanal.yaml`:
 ```yaml
-anchor_terms: [resina, epoxi, molde, pigmento, encapsulada]
-blocked_terms: [odontologica, dente, clareia, dental, ortodontia]
+anchor_terms: [resina, epoxi, epoxy]
+blocked_terms: [odontologica, dente, dentes, clareia, dental, ortodontia, mdf]
 ```
+
+> Âncoras de resina sem `molde`/`pigmento`/`encapsulada`: são genéricas (`molde de silicone para bolo` passaria). `mdf` e `clareia` vêm do QA real de 16/10 (consultas fora do nicho no sorteio cego). Os YAMLs já têm `probe_terms` (F1 web) — acrescentar, não substituir.
 
 - [ ] **Step 4: Rodar e ver passar** — o teste acima PASS.
 
@@ -537,7 +569,7 @@ git commit -m "feat(segments): anchor_terms e blocked_terms nos 3 segmentos PT (
 **Files:**
 - Modify: `src/content_factory/infra/collectors/web_suggest.py`
 - Modify: `src/content_factory/app/ports.py`
-- Modify: `src/content_factory/app/research_pipeline.py` (cpp do tipo; comportamento completo na Task 9)
+- Modify: `src/content_factory/app/research_pipeline.py` (ajuste do tipo; comportamento completo na Task 8)
 - Test: `tests/infra/collectors/test_web_suggest.py` (editar)
 
 **Interfaces:**
@@ -621,7 +653,7 @@ class KeywordExpander(Protocol):
     async def expand(self, seeds: list[str], depth: int) -> list[SuggestHit]: ...
 ```
 
-- [ ] **Step 4: Rodar e ver passar** — o teste novo PASS. Em `research_pipeline.py`, ajuste mínimo para o novo tipo (o ciclo completo vem na Task 9): a fase web passa a receber `list[SuggestHit]`.
+- [ ] **Step 4: Rodar e ver passar** — o teste novo PASS. Em `research_pipeline.py`, ajuste mínimo para o novo tipo (o ciclo completo vem na Task 8): a fase web passa a receber `list[SuggestHit]`.
 
 - [ ] **Step 5: Commit**
 
@@ -678,11 +710,17 @@ Em `orm.py`:
 
 ```python
 class SegmentTermRow(Base):
-    """Pool de termos do segmento (R4). Único por (segment_id, term)."""
+    """Pool de termos do segmento (R4). Único por (segment_id, term, origin).
+
+    A origem faz parte da chave: a mesma frase pode ser seed E sugestão (o
+    Suggest devolve a própria seed), e uma hashtag pode coincidir com um termo.
+    Com chave só em (segment_id, term) o upsert trocava a origem e rebaixava a
+    seed (revisão QA).
+    """
 
     __tablename__ = "segment_terms"
     __table_args__ = (
-        UniqueConstraint("segment_id", "term", name="uq_segment_term"),
+        UniqueConstraint("segment_id", "term", "origin", name="uq_segment_term"),
         Index("ix_segment_terms_segment_status", "segment_id", "status"),
         Index("ix_segment_terms_segment_origin", "segment_id", "origin"),
     )
@@ -766,7 +804,7 @@ def upgrade() -> None:
         sa.Column("rules_version", sa.String(length=32), nullable=False),
         sa.ForeignKeyConstraint(["segment_id"], ["segments.id"]),
         sa.PrimaryKeyConstraint("id"),
-        sa.UniqueConstraint("segment_id", "term", name="uq_segment_term"),
+        sa.UniqueConstraint("segment_id", "term", "origin", name="uq_segment_term"),
     )
     op.create_index("ix_segment_terms_segment_status", "segment_terms", ["segment_id", "status"])
     op.create_index("ix_segment_terms_segment_origin", "segment_terms", ["segment_id", "origin"])
@@ -814,11 +852,11 @@ git commit -m "feat(db): migração 0011 — segment_terms e keyword_signal_days
 **Interfaces:**
 - Produces:
   - `KeywordSignalRepository.record_days(segment_id: int, keywords: Sequence[str], source: str, day: date) -> int`
-  - `KeywordSignalRepository.days_seen(segment_id: int, source: str, days: int) -> dict[str, int]`
-  - `SegmentTermRepository` (Protocol): `upsert_many(segment_id, terms: Sequence[SegmentTerm]) -> int`; `top_by_origin(segment_id, origin, limit) -> list[SegmentTerm]`; `counts_by_origin(segment_id) -> dict[str, int]`; `all_for_segment(segment_id, status: str | None = None) -> list[SegmentTerm]`
+  - `KeywordSignalRepository.days_seen(segment_id: int, source: str, days: int, today: date) -> dict[str, int]`
+  - `SegmentTermRepository` (Protocol): `upsert_many(segment_id, terms: Sequence[SegmentTerm]) -> int` (devolve linhas gravadas); `top_by_origin(segment_id, origin, limit, order_by: Literal["kw_rank", "trend_score", "engagement_score"] = "kw_rank") -> list[SegmentTerm]` (só `active`, NULL por último, desempate por `term`); `counts_by_origin(segment_id) -> dict[str, int]`; `all_for_segment(segment_id, status: str | None = None) -> list[SegmentTerm]`; `set_status(segment_id, origin, keep: Sequence[str], reason: str) -> int` (marca `excluded` com `reason` os termos ativos da origem fora de `keep` — usado pelas hashtags no Bloco 5)
 
 - [ ] **Step 1: Teste que falha** (repositório em memória já existe? não — teste o SQL)
-Adicione um teste de integração que: cria segmento, faz `upsert_many` de 2 termos (1 ativo, 1 excluído com motivo), lê `counts_by_origin` e `all_for_segment`, e confere que `upsert_many` de novo atualiza `last_seen_at`/scores sem duplicar (`uq_segment_term`).
+Adicione um teste de integração (`@pytest.mark.integration`, banco `TEST_DATABASE_URL` descartável) que: cria segmento, faz `upsert_many` de 3 termos (1 ativo, 1 excluído com motivo, e a MESMA frase como `seed` e `suggest`), lê `counts_by_origin` e `all_for_segment`, confere que a seed continua `seed` (2 linhas para a frase), que `upsert_many` de novo atualiza `last_seen_at`/scores sem duplicar, que **`first_seen_at` não muda** no conflito, e que `top_by_origin(..., order_by="engagement_score")` ordena por esse campo.
 
 - [ ] **Step 2: Rodar e ver falhar** — `uv run pytest tests/infra/test_repositories.py -q -k segment_term` → FAIL.
 
@@ -848,9 +886,8 @@ class SegmentTermRepositoryImpl(SegmentTermRepository):
                 rules_version=t.rules_version,
             )
             stmt = stmt.on_conflict_do_update(
-                index_elements=["segment_id", "term"],
+                index_elements=["segment_id", "term", "origin"],
                 set_={
-                    "origin": stmt.excluded.origin,
                     "kw_rank": stmt.excluded.kw_rank,
                     "trend_score": stmt.excluded.trend_score,
                     "engagement_score": stmt.excluded.engagement_score,
@@ -864,7 +901,21 @@ class SegmentTermRepositoryImpl(SegmentTermRepository):
         await self._s.flush()
         return len(terms)
 
-    async def top_by_origin(self, segment_id: int, origin: str, limit: int) -> list[SegmentTerm]:
+    async def top_by_origin(
+        self,
+        segment_id: int,
+        origin: str,
+        limit: int,
+        order_by: Literal["kw_rank", "trend_score", "engagement_score"] = "kw_rank",
+    ) -> list[SegmentTerm]:
+        # A ordem depende da origem: suggest por kw_rank, a vaga trends por
+        # trend_score, hashtags por engagement_score (sem isso as hashtags
+        # sairiam em ordem ALFABÉTICA — revisão QA).
+        column = {
+            "kw_rank": SegmentTermRow.kw_rank,
+            "trend_score": SegmentTermRow.trend_score,
+            "engagement_score": SegmentTermRow.engagement_score,
+        }[order_by]
         stmt = (
             select(SegmentTermRow)
             .where(
@@ -872,11 +923,7 @@ class SegmentTermRepositoryImpl(SegmentTermRepository):
                 SegmentTermRow.origin == origin,
                 SegmentTermRow.status == "active",
             )
-            .order_by(
-                SegmentTermRow.kw_rank.desc().nullslast(),
-                SegmentTermRow.trend_score.desc().nullslast(),
-                SegmentTermRow.term,
-            )
+            .order_by(column.desc().nullslast(), SegmentTermRow.term)
             .limit(limit)
         )
         return [_segment_term(r) for r in (await self._s.execute(stmt)).scalars().all()]
@@ -899,7 +946,7 @@ class SegmentTermRepositoryImpl(SegmentTermRepository):
         return [_segment_term(r) for r in rows]
 ```
 
-Adicione o helper `_segment_term(row) -> SegmentTerm` e, em `KeywordSignalRepositoryImpl`:
+Implemente também `set_status` (UPDATE ... `status='excluded'`, `exclude_reason=reason` WHERE origem = `origin`, ativo e `term NOT IN keep`). Adicione o helper `_segment_term(row) -> SegmentTerm` e, em `KeywordSignalRepositoryImpl`:
 
 ```python
 async def record_days(
@@ -916,8 +963,9 @@ async def record_days(
     return len(keywords)
 
 
-async def days_seen(self, segment_id: int, source: str, days: int) -> dict[str, int]:
-    since = datetime.now(UTC).date() - timedelta(days=days - 1)
+async def days_seen(self, segment_id: int, source: str, days: int, today: date) -> dict[str, int]:
+    # `today` vem do clock do app (determinismo em teste), não de datetime.now
+    since = today - timedelta(days=days - 1)
     stmt = (
         select(KeywordSignalDayRow.keyword, func.count(func.distinct(KeywordSignalDayRow.seen_on)))
         .where(
@@ -947,104 +995,122 @@ git commit -m "feat(db): repositórios do pool de termos e dos dias do Suggest (
 
 **Files:**
 - Modify: `src/content_factory/app/research_pipeline.py`
+- Modify: `src/content_factory/app/ports.py` (`NoOpSegmentTermRepository`)
 - Modify: `src/content_factory/infra/queue/composition.py`
-- Test: `tests/app/test_research_pipeline.py` (editar)
+- Test: `tests/app/test_research_pipeline.py` (editar), `tests/stubs.py` (fakes)
 
 **Interfaces:**
-- Consumes: `filter_terms`, `rank_suggestions`, `SuggestHit`, `TermFilterConfig`, `SegmentTerm`, as portas `KeywordSignalRepository.record_days/days_seen` e `SegmentTermRepository`.
-- Produces: `ResearchDeps.terms: SegmentTermRepository` (novo campo, com default no-op para chamadas existentes); o envelope do research ganha `"terms_active"`, `"terms_excluded"`, `"filter_discards"` (dict motivo→n).
+- Consumes: `filter_terms`, `rank_suggestions`, `SuggestHit`, `TermFilterConfig`, `SegmentTerm`, `KeywordSignalRepository.record_days/days_seen`, `SegmentTermRepository`.
+- Produces:
+  - `ResearchDeps.terms: SegmentTermRepository = field(default_factory=NoOpSegmentTermRepository)`.
+  - Counts **planos** (o tipo é `dict[str, int | bool]` — um `dict` aninhado não passa no pyright strict): `terms_active`, `terms_excluded`, `filter_discards_blocked`, `filter_discards_lang`, `filter_discards_no_anchor`.
 
-- [ ] **Step 1: Teste que falha**
+- [ ] **Step 1: Testes que falham** (fakes em `tests/stubs.py`: `FakeSegmentTerms` com `.saved`, `FakeKeywordSignals` com `.days` — sem `...`, fakes completos e tipados)
 
 ```python
-# tests/app/test_research_pipeline.py  (adicionar, no estilo dos testes existentes)
 async def test_research_filtra_ranqueia_e_grava_o_pool() -> None:
-    deps = _research_deps_com_fakes(
+    deps = research_deps(  # helper existente do arquivo, estendido com terms/signals fakes
         suggest_hits=[
             SuggestHit("como fazer vela aromática", "velas", 1),  # aceita
             SuggestHit("candle making for beginners", "velas", 2),  # lang
             SuggestHit("presente original", "velas", 3),  # no_anchor
         ],
-        segment=Segment(
-            id=1,
-            slug="velas-artesanais",
-            name="Velas",
-            platforms=["youtube"],
-            keywords=["vela artesanal"],
-            anchor_terms=["vela"],
-            blocked_terms=["grafico"],
-        ),
+        segment=_segment(anchor_terms=["vela"], blocked_terms=["grafico"]),
     )
     out = await run_research_cycle("velas-artesanais", DepthConfig(), deps)
-    assert out.counts["terms_active"] >= 1  # a seed + a frase aceita
-    assert out.counts["filter_discards"] == {"lang": 1, "no_anchor": 1}
-    # a sugestão aceita ficou com peso != 0,5 e origem "suggest"
-    gravados = {t.term: t for t in deps.terms.saved}
-    assert gravados["como fazer vela aromática"].origin == "suggest"
-    assert gravados["como fazer vela aromática"].kw_rank != 0.5
+    assert out.counts["filter_discards_lang"] == 1
+    assert out.counts["filter_discards_no_anchor"] == 1
+    by_key = {(t.term, t.origin): t for t in deps.terms.saved}
+    aceita = by_key[("como fazer vela aromática", "suggest")]
+    assert aceita.status == "active" and aceita.kw_rank is not None and aceita.kw_rank != 0.5
+    excluida = by_key[("presente original", "suggest")]
+    assert excluida.status == "excluded" and excluida.exclude_reason == "no_anchor"
+    assert all(t.status == "active" for t in deps.terms.saved if t.origin == "seed")
+
+
+async def test_research_grava_o_dia_antes_de_ler_a_persistencia() -> None:
+    deps = research_deps(suggest_hits=[SuggestHit("vela de soja", "velas", 1)])
+    await run_research_cycle("velas-artesanais", DepthConfig(), deps)
+    # o termo de hoje conta 1 dia na persistência (não 0, nem "default 1" sem gravar)
+    assert deps.signals.days[("vela de soja", deps.clock().date())] == 1
+
+
+async def test_research_so_manda_ao_trends_e_as_redes_termos_aceitos() -> None:
+    deps = research_deps(suggest_hits=[SuggestHit("candle for beginners", "velas", 1)])
+    await run_research_cycle("velas-artesanais", DepthConfig(), deps)
+    assert "candle for beginners" not in deps.trends.requested_keywords
 ```
 
-- [ ] **Step 2: Rodar e ver falhar** — `uv run pytest tests/app/test_research_pipeline.py -k pool -q` → FAIL.
+- [ ] **Step 2: Rodar e ver falhar** — `uv run pytest tests/app/test_research_pipeline.py -q` → FAIL.
 
-- [ ] **Step 3: Implementar**
-
-No `run_research_cycle`, substituir a construção de `trend_keywords`/`keywords_for_social` por (pseudocódigo preciso):
+- [ ] **Step 3: Implementar** — ordem dentro de `run_research_cycle`, logo após `web_raw`:
 
 ```python
-# 1) ranking do Suggest (posição + recorrência + persistência)
-days_seen = await deps.signals.days_seen(segment.id, "web_suggest", 7)
-term_weights = rank_suggestions(web_raw, days_seen)
 today = deps.clock().date()
-await deps.signals.record_days(segment.id, list(term_weights), "web_suggest", today)
-
-# 2) filtro R1
 cfg = TermFilterConfig(anchors=tuple(segment.anchor_terms), blocked=tuple(segment.blocked_terms))
-accepted, discards = filter_terms(list(term_weights), cfg)
+
+# 1) persistência: grava HOJE antes de ler (senão o dia corrente nunca conta)
+distinct_terms = list(dict.fromkeys(h.term for h in web_raw))
+await deps.signals.record_days(segment.id, distinct_terms, "web_suggest", today)
+days_seen = await deps.signals.days_seen(segment.id, "web_suggest", 7, today)
+weights = rank_suggestions(web_raw, days_seen)
+
+# 2) filtro R1 ANTES de truncar, do Trends e das redes
+accepted, rejected = filter_terms(list(weights), cfg)
+web_signals = deps.guard.truncate(
+    [KeywordSignal(keyword=t, source="web_suggest", weight=weights[t]) for t in accepted],
+    "web",
+)  # agora o truncate (por peso) tem sentido: antes todo peso era 0,5
+counts["web_found"] = len(web_signals)
+
 terms = [
     SegmentTerm(
         segment_id=segment.id,
-        term=t,
+        term=s.keyword,
         origin="suggest",
-        kw_rank=term_weights[t],
-        rules_version=TERM_FILTER_VERSION,
+        kw_rank=s.weight,
+        rules_version=f"{TERM_FILTER_VERSION}+{KW_RANK_VERSION}",
     )
-    for t in accepted
+    for s in web_signals
 ]
 terms += [
     SegmentTerm(
         segment_id=segment.id,
-        term=t,
+        term=term,
         origin="suggest",
+        kw_rank=weights[term],
         status="excluded",
-        exclude_reason=r,
+        exclude_reason=reason,
         rules_version=TERM_FILTER_VERSION,
     )
-    for t, r in _excluded(term_weights, cfg)
+    for term, reason in rejected
 ]
-terms += [
+terms += [  # seeds nunca são excluídas (R4)
     SegmentTerm(segment_id=segment.id, term=k, origin="seed", rules_version=TERM_FILTER_VERSION)
     for k in segment.keywords
 ]
 await deps.terms.upsert_many(segment.id, terms)
-counts["terms_active"] = len(accepted) + len(segment.keywords)
-counts["filter_discards"] = discards
+counts["terms_active"] = len(web_signals) + len(segment.keywords)
+counts["terms_excluded"] = len(rejected)
+for reason in ("blocked", "lang", "no_anchor"):
+    counts[f"filter_discards_{reason}"] = sum(1 for _, r in rejected if r == reason)
 ```
 
 Ajustes obrigatórios decorrentes:
-- `web_signals` de `all_signals` deixa de ser `KeywordSignal` para o Suggest: construa `KeywordSignal(weight=term_weights[t])` só para gravar `keyword_signals` (retrocompatível com `top_for_segment` do q1) — mantendo `trend_signals` como está.
-- `keywords_for_social` passa a usar `segment.keywords` (seeds) **+ os termos aceitos do pool** (origem `suggest`), como hoje.
-- `ResearchDeps` ganha `terms: SegmentTermRepository`; em `composition.py`, adicione `terms=SegmentTermRepositoryImpl(session)` ao `ResearchDeps(...)` e crie um `NoOpSegmentTermRepository` default em `ports.py` (como `NoOpWebHitRepository`) para testes/uso avulso.
-- Helper puro local `_excluded(weights, cfg)` devolve `[(term, reason)]` para os rejeitados.
+- O bloco do Trends **continua** com os 5 de maior peso (o Bloco 4 troca por lotes com âncora), mas agora sobre `web_signals` **aceitos e ranqueados**.
+- `keyword_signals` grava só os aceitos, com `weight = kw_rank` (o `top_for_segment` do q1 web continua funcionando e passa a ver pesos distintos).
+- `keywords_for_social` = seeds + aceitos (como hoje, só que filtrados). O Bloco 2 decide o que a fase social do research faz no teste.
+- `NoOpSegmentTermRepository` em `ports.py` (padrão do `NoOpWebHitRepository`), e `terms=SegmentTermRepositoryImpl(session)` no `ResearchDeps(...)` de `composition.py`.
 
 - [ ] **Step 4: Rodar e ver passar**
 
-Run: `uv run pytest tests/app/test_research_pipeline.py -q` → PASS (todos, inclusive os antigos).
+Run: `uv run pytest tests/app/test_research_pipeline.py tests/app/test_research_pipeline_e2e.py -q` → PASS (todos, inclusive os antigos).
 
 - [ ] **Step 5: Commit**
 
 ```bash
 git add src/content_factory/app/research_pipeline.py src/content_factory/app/ports.py \
-        src/content_factory/infra/queue/composition.py tests/app/test_research_pipeline.py
+        src/content_factory/infra/queue/composition.py tests/app/test_research_pipeline.py tests/stubs.py
 git commit -m "feat(research): filtra, ranqueia e grava o pool de termos (R1/R2/R4)"
 ```
 
@@ -1068,13 +1134,15 @@ FROM keyword_signals WHERE source = 'web_suggest';
 
 - [ ] **Step 3: Aceite de R1 (amostra real do dia seguinte)**
 
-Checar no pool: ≤1 em 13 termos fora do nicho/idioma por segmento; nenhuma classe do q1 vazia por causa do filtro (se acontecer, **reportar**, não afrouxar o filtro).
+Checar no pool: ≤1 em 13 termos fora do nicho/idioma por segmento (amostra cega de 13 termos ativos `suggest` por segmento, sorteio com seed fixa); e o inverso — descartes `lang`/`no_anchor` revisados à mão: PT do nicho descartado é falso negativo e também conta. Se falhar, **reportar** com os termos (não afrouxar nem apertar o filtro sem nova versão).
 
 - [ ] **Step 4: Aceite de R4**
 
 ```sql
 SELECT origin, status, count(*) FROM segment_terms GROUP BY 1, 2 ORDER BY 1, 2;
 -- esperado: seeds ativas + termos suggest ativos + excluídos COM exclude_reason não nulo
+SELECT count(*) FROM segment_terms WHERE status = 'excluded' AND exclude_reason IS NULL;  -- 0
+SELECT count(*) FROM segment_terms WHERE origin = 'seed' AND status <> 'active';         -- 0
 ```
 
 - [ ] **Step 5: Commit de encerramento (se sobrou doc)**
@@ -1087,7 +1155,7 @@ git commit -am "docs(plans): bloco 1 concluído — R1/R2/R4 verificados" || tru
 
 ## Auto-revisão da spec (R1/R2/R4)
 
-- **R1** ✓ `term-filter-v1` puro (idioma lista fechada, âncora palavra inteira, bloqueio por segmento, motivo registrado) — Tasks 1, 4, 8. *Integração com o `q1` fica com a branch web* (decisão: dois filtros convivem); o filtro é reutilizável e exportado por `domain/term_filter.py`.
+- **R1** ✓ `term-filter-v1` puro (idioma só por evidência positiva EN/ES, âncora palavra inteira, bloqueio por segmento, modo hashtag por substring, motivo registrado) — Tasks 1, 4, 8; casos reais do QA de 16/10 como teste literal. *Integração com o `q1` fica com a branch web* (decisão: dois filtros convivem); o filtro é reutilizável e exportado por `domain/term_filter.py`.
 - **R2** ✓ posição exposta (Task 5), ranking puro (Task 2), persistência entre dias via `keyword_signal_days` (Tasks 6-7), peso no `keyword_signals` (Task 8).
-- **R4** ✓ `segment_terms` (Task 6), repo (Task 7), seeds nunca excluídas e excluídos sempre com motivo (Task 8).
+- **R4** ✓ `segment_terms` com chave `(segment_id, term, origin)` (Task 6), repo com ordem por origem (Task 7), seeds nunca excluídas e excluídos sempre com motivo (Task 8).
 - Fora deste bloco: R3 (Trends aplicado, Bloco 4) preenche `trend_score`; R5/R6 (Bloco 2/4) consomem o pool.
