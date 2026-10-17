@@ -84,3 +84,25 @@ def test_hashtag_casa_ancora_por_substring_sem_idioma() -> None:
     assert filter_hashtag("#VelasArtesanais", VELAS).accepted
     assert filter_hashtag("decoracao", VELAS).reason == "no_anchor"
     assert filter_hashtag("sabonetenatura", SABONETES).reason == "blocked"
+
+
+# Revisão QA do PR #50: inglês sem palavra-função caía como `no_anchor`
+# (descarte certo, motivo errado). Substantivos EN do nicho marcam o idioma.
+@pytest.mark.parametrize(
+    ("cfg", "term"),
+    [
+        (VELAS, "soy wax candles"),
+        (VELAS, "candle wick too short"),
+        (SABONETES, "handmade soap bars"),
+        (SABONETES, "homemade soap gift ideas"),
+        (RESINA, "resin tray mould"),
+        (RESINA, "resin art workshop"),
+    ],
+)
+def test_ingles_sem_palavra_funcao_cai_por_idioma(cfg: TermFilterConfig, term: str) -> None:
+    assert filter_term(term, cfg).reason == "lang"
+
+
+def test_substantivo_ingles_nao_casa_dentro_de_palavra_pt() -> None:
+    # "resin" ≠ "resina", "wax" não aparece em PT: casamento por palavra inteira
+    assert filter_term("resina para mesa", RESINA).accepted

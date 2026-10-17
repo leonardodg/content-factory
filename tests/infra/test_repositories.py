@@ -1741,7 +1741,8 @@ async def test_segment_terms_pool_roundtrip() -> None:
         assert sug.kw_rank == 0.95
         assert sug.rules_version == "v2"
         assert sug.first_seen_at == before["suggest"]  # first_seen NÃO muda no conflito
-        assert sug.last_seen_at is not None and sug.last_seen_at >= sug.first_seen_at  # type: ignore[operator]
+        assert sug.first_seen_at is not None and sug.last_seen_at is not None
+        assert sug.last_seen_at >= sug.first_seen_at
 
         await repo.upsert_many(
             seg.id,
@@ -1772,6 +1773,64 @@ async def test_segment_terms_pool_roundtrip() -> None:
             ("b", "irrelevante"),
             ("fora do nicho", "lang"),
         }
+    await engine.dispose()
+
+
+@requires_infra
+async def test_upsert_do_pool_preserva_trend_e_engagement_quando_vem_none() -> None:
+    """Revisão QA do bloco 1: o research reupserta o termo sem scores e NÃO pode
+    apagar o trend_score (Bloco 4) nem o engagement_score (Bloco 5)."""
+    engine = create_async_engine(os.environ["TEST_DATABASE_URL"])
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    async with factory() as s:
+        await s.rollback()
+        seg = await SegmentRepositoryImpl(s).upsert(
+            SegmentConfig(
+                slug=f"teste-coalesce-{uuid4().hex[:8]}",
+                name="Coalesce",
+                platforms=["youtube"],
+                keywords=["k"],
+            )
+        )
+        repo = SegmentTermRepositoryImpl(s)
+        await repo.upsert_many(
+            seg.id,
+            [
+                SegmentTerm(
+                    segment_id=seg.id,
+                    term="vela a",
+                    origin="suggest",
+                    kw_rank=0.9,
+                    trend_score=0.8,
+                    engagement_score=0.7,
+                )
+            ],
+        )
+        # research do dia seguinte: kw_rank novo, sem trend/engagement
+        await repo.upsert_many(
+            seg.id,
+            [SegmentTerm(segment_id=seg.id, term="vela a", origin="suggest", kw_rank=0.85)],
+        )
+        (row,) = await repo.all_for_segment(seg.id)
+        assert row.kw_rank == 0.85  # kw_rank é recalculado a cada research
+        assert row.trend_score == 0.8
+        assert row.engagement_score == 0.7
+        # valor novo (não nulo) continua sobrescrevendo
+        await repo.upsert_many(
+            seg.id,
+            [
+                SegmentTerm(
+                    segment_id=seg.id,
+                    term="vela a",
+                    origin="suggest",
+                    kw_rank=0.85,
+                    trend_score=0.1,
+                    engagement_score=0.2,
+                )
+            ],
+        )
+        (row,) = await repo.all_for_segment(seg.id)
+        assert (row.trend_score, row.engagement_score) == (0.1, 0.2)
     await engine.dispose()
 
 
