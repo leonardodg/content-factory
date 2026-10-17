@@ -1,9 +1,13 @@
 from datetime import UTC, datetime
 
 from content_factory.domain.models import (
+    CandidateVideo,
     DepthConfig,
+    Discovery,
     KeywordSignal,
     ResearchCampaign,
+    SearchQuery,
+    SearchQueryRun,
     SegmentConfig,
     SegmentTerm,
     TrendPoint,
@@ -64,3 +68,36 @@ def test_segment_term_valores_por_padrao() -> None:
     assert t.status == "active"
     assert t.exclude_reason is None
     assert t.kw_rank is None
+
+
+def test_search_query_discovery_e_run() -> None:
+    q = SearchQuery(term="vela artesanal", origin="seed", query_id="search-plan-v1:0:0:seed")
+    cand = CandidateVideo(
+        platform="youtube",
+        platform_video_id="v1",
+        url="u",
+        creator_handle="c",
+        creator_platform_id="UC1",
+    )
+    d = Discovery(
+        candidate=cand,
+        term=q.term,
+        origin=q.origin,
+        query_id=q.query_id,
+        result_position=1,
+        run_kind="collect",
+    )
+    now = datetime(2026, 10, 20, tzinfo=UTC)
+    run = SearchQueryRun(
+        platform="youtube",
+        query_id=q.query_id,
+        term=q.term,
+        origin=q.origin,
+        results=0,
+        kept=0,
+        quota_used=100,
+        started_at=now,
+        finished_at=now,
+    )
+    assert d.candidate.creator_platform_id == "UC1"
+    assert run.results == 0 and run.error_code is None  # busca vazia é registrada

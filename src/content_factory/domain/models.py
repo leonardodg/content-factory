@@ -54,6 +54,9 @@ class CandidateVideo(BaseModel):
     url: str
     creator_handle: str
     creator_followers: int | None = None
+    # id do canal na plataforma (YouTube: channelId) — base do vínculo com
+    # `creators` (R8). None = a plataforma não expôs o id.
+    creator_platform_id: str | None = None
     title: str = ""
     description: str = ""
     published_at: datetime | None = None
@@ -227,3 +230,37 @@ class SegmentTerm(BaseModel):
     first_seen_at: datetime | None = None
     last_seen_at: datetime | None = None
     rules_version: str = ""
+
+
+class SearchQuery(BaseModel):
+    """Uma busca a executar: o termo ENVIADO à API, a origem e o id do plano (R6)."""
+
+    term: str
+    origin: str
+    query_id: str
+
+
+class Discovery(BaseModel):
+    """Vídeo encontrado por uma busca — qual termo/posição o trouxe (R6)."""
+
+    candidate: CandidateVideo
+    term: str
+    origin: str
+    query_id: str | None = None
+    result_position: int | None
+    run_kind: str  # collect
+
+
+class SearchQueryRun(BaseModel):
+    """Log de cada busca executada, inclusive as vazias (R6/R13)."""
+
+    platform: str
+    query_id: str
+    term: str
+    origin: str
+    results: int
+    kept: int
+    quota_used: int
+    error_code: str | None = None
+    started_at: datetime
+    finished_at: datetime
