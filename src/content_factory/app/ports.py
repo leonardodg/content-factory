@@ -15,6 +15,7 @@ from content_factory.domain.models import (
     ResearchCampaign,
     ScoreResult,
     SearchQuery,
+    SearchQueryRun,
     Segment,
     SegmentConfig,
     SegmentTerm,
@@ -267,6 +268,36 @@ class NoOpSegmentTermRepository:
     ) -> int:
         _ = segment_id, origin, keep, reason
         return 0
+
+
+class DiscoveryRepository(Protocol):
+    """R6: grava qual termo/posição trouxe cada vídeo (uma linha por busca)."""
+
+    async def record(self, segment_id: int, discoveries: Sequence[Discovery]) -> int:
+        """Devolve as linhas gravadas; descoberta de vídeo não persistido é pulada."""
+        ...
+
+
+class SearchQueryRepository(Protocol):
+    """R13: log de cada busca executada, inclusive as vazias e as que falharam."""
+
+    async def record_many(self, segment_id: int, runs: Sequence[SearchQueryRun]) -> int: ...
+
+
+class NoOpDiscoveryRepository:
+    """Default de `CollectDeps` quando o chamador não grava atribuição (testes)."""
+
+    async def record(self, segment_id: int, discoveries: Sequence[Discovery]) -> int:
+        _ = segment_id
+        return len(discoveries)
+
+
+class NoOpSearchQueryRepository:
+    """Default de `CollectDeps` quando o chamador não grava o log (testes)."""
+
+    async def record_many(self, segment_id: int, runs: Sequence[SearchQueryRun]) -> int:
+        _ = segment_id
+        return len(runs)
 
 
 class CollectRunRepository(Protocol):

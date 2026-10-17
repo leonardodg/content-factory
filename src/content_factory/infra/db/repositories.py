@@ -4,7 +4,7 @@ from collections.abc import Sequence
 from datetime import UTC, date, datetime, timedelta
 from typing import Any, Literal, cast
 
-from sqlalchemy import CursorResult, func, select, text, update
+from sqlalchemy import CursorResult, func, select, text, tuple_, update
 from sqlalchemy.dialects.postgresql import distinct_on
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.exc import DataError, IntegrityError
@@ -13,12 +13,14 @@ from sqlalchemy.orm import aliased
 
 from content_factory.app.ports import (
     CollectRunRepository,
+    DiscoveryRepository,
     JobRunReader,
     KeywordSignalRepository,
     OpsReportReader,
     ResearchCampaignRepository,
     ScoreRepository,
     ScoreUpsertRow,
+    SearchQueryRepository,
     SegmentRepository,
     SegmentTermRepository,
     TrendObservationRepository,
@@ -32,10 +34,12 @@ from content_factory.domain.errors import SegmentNotFound
 from content_factory.domain.models import (
     CandidateVideo,
     CollectRun,
+    Discovery,
     KeywordSignal,
     MetricCoverage,
     ResearchCampaign,
     ScoreResult,
+    SearchQueryRun,
     Segment,
     SegmentConfig,
     SegmentTerm,
@@ -55,9 +59,11 @@ from content_factory.infra.db.orm import (
     KeywordSignalDayRow,
     KeywordSignalRow,
     ResearchCampaignRow,
+    SearchQueryRow,
     SegmentRow,
     SegmentTermRow,
     TrendObservationRow,
+    VideoDiscoveryRow,
     VideoMetricsRow,
     VideoRow,
     VideoScoreRow,
@@ -988,6 +994,74 @@ class WebHitRepositoryImpl(WebHitRepository):
             saved += 1
         await self._s.flush()
         return saved
+
+
+class DiscoveryRepositoryImpl(DiscoveryRepository):
+    """R6 — atribui cada vídeo ao termo/posição que o trouxe nesta coleta."""
+
+    def __init__(self, session: AsyncSession) -> None:
+        self._s = session
+
+    async def record(self, segment_id: int, discoveries: Sequence[Discovery]) -> int:
+        if not discoveries:
+            return 0
+        # 1 consulta para todos os vídeos: uma por descoberta seria N+1
+        keys = {(d.candidate.platform, d.candidate.platform_video_id) for d in discoveries}
+        rows = await self._s.execute(
+            select(VideoRow.platform, VideoRow.platform_video_id, VideoRow.id).where(
+                tuple_(VideoRow.platform, VideoRow.platform_video_id).in_(list(keys))
+            )
+        )
+        ids = {(p, pid): vid for p, pid, vid in rows.all()}
+        written = 0
+        for d in discoveries:
+            video_id = ids.get((d.candidate.platform, d.candidate.platform_video_id))
+            if video_id is None:
+                continue  # candidato não persistiu (savepoint): sem linha órfã
+            self._s.add(
+                VideoDiscoveryRow(
+                    video_id=video_id,
+                    segment_id=segment_id,
+                    platform=d.candidate.platform,
+                    term=d.term,
+                    term_origin=d.origin,
+                    query_id=d.query_id,
+                    result_position=d.result_position,
+                    run_kind=d.run_kind,
+                )
+            )
+            written += 1
+        await self._s.flush()
+        return written
+
+
+class SearchQueryRepositoryImpl(SearchQueryRepository):
+    """R13 — log append-only de cada busca (inclusive vazia/falha)."""
+
+    def __init__(self, session: AsyncSession) -> None:
+        self._s = session
+
+    async def record_many(self, segment_id: int, runs: Sequence[SearchQueryRun]) -> int:
+        self._s.add_all(
+            [
+                SearchQueryRow(
+                    segment_id=segment_id,
+                    platform=r.platform,
+                    query_id=r.query_id,
+                    term=r.term,
+                    origin=r.origin,
+                    results=r.results,
+                    kept=r.kept,
+                    quota_used=r.quota_used,
+                    error_code=r.error_code,
+                    started_at=r.started_at,
+                    finished_at=r.finished_at,
+                )
+                for r in runs
+            ]
+        )
+        await self._s.flush()
+        return len(runs)
 
 
 class WebScoreRepositoryImpl(WebScoreRepository):

@@ -1884,3 +1884,97 @@ async def test_upsert_sem_channel_id_nao_cria_criador() -> None:
             await s.execute(select(CreatorRow).where(CreatorRow.username == handle))
         ).scalar_one_or_none() is None
     await engine.dispose()
+
+
+@requires_infra
+async def test_discovery_repository_grava_vinculos_e_pula_video_ausente() -> None:
+    """R6: 1 linha por (busca, vídeo); vídeo não persistido não gera órfã."""
+    from content_factory.domain.models import Discovery
+    from content_factory.infra.db.orm import VideoDiscoveryRow
+    from content_factory.infra.db.repositories import DiscoveryRepositoryImpl
+
+    engine = create_async_engine(os.environ["TEST_DATABASE_URL"])
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    async with factory() as s:
+        await s.rollback()
+        seg = await SegmentRepositoryImpl(s).upsert(
+            SegmentConfig(
+                slug=f"teste-disc-{uuid4().hex[:8]}",
+                name="Teste discoveries",
+                platforms=["youtube"],
+                keywords=["k"],
+            )
+        )
+        c = candidate(7)
+        await VideoRepositoryImpl(s).upsert_candidates(seg.id, "youtube", [c])
+        fantasma = CandidateVideo(
+            platform="youtube",
+            platform_video_id=f"fantasma-{uuid4().hex[:12]}",
+            url="https://youtu.be/f",
+            creator_handle="u",
+        )
+        made = Discovery(
+            candidate=c,
+            term="vela artesanal",
+            origin="seed",
+            query_id="provisional:0",
+            result_position=1,
+            run_kind="collect",
+        )
+        missing = Discovery(
+            candidate=fantasma,
+            term="vela artesanal",
+            origin="seed",
+            query_id="provisional:0",
+            result_position=2,
+            run_kind="collect",
+        )
+        written = await DiscoveryRepositoryImpl(s).record(seg.id, [made, missing])
+        assert written == 1  # a fantasma foi pulada
+        row = (
+            await s.execute(select(VideoDiscoveryRow).where(VideoDiscoveryRow.segment_id == seg.id))
+        ).scalar_one()
+        assert (row.term, row.term_origin, row.result_position) == ("vela artesanal", "seed", 1)
+        assert row.query_id == "provisional:0" and row.run_kind == "collect"
+    await engine.dispose()
+
+
+@requires_infra
+async def test_search_query_repository_registra_busca_vazia() -> None:
+    """R13: a busca que voltou vazia é logada (results=0) com a cota gasta."""
+    from content_factory.domain.models import SearchQueryRun
+    from content_factory.infra.db.orm import SearchQueryRow
+    from content_factory.infra.db.repositories import SearchQueryRepositoryImpl
+
+    engine = create_async_engine(os.environ["TEST_DATABASE_URL"])
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    async with factory() as s:
+        await s.rollback()
+        seg = await SegmentRepositoryImpl(s).upsert(
+            SegmentConfig(
+                slug=f"teste-sq-{uuid4().hex[:8]}",
+                name="Teste search log",
+                platforms=["youtube"],
+                keywords=["k"],
+            )
+        )
+        now = datetime.now(UTC)
+        run = SearchQueryRun(
+            platform="youtube",
+            query_id="provisional:1",
+            term="vela de soja",
+            origin="seed",
+            results=0,
+            kept=0,
+            quota_used=102,
+            started_at=now,
+            finished_at=now,
+        )
+        n = await SearchQueryRepositoryImpl(s).record_many(seg.id, [run])
+        assert n == 1
+        row = (
+            await s.execute(select(SearchQueryRow).where(SearchQueryRow.segment_id == seg.id))
+        ).scalar_one()
+        assert row.results == 0 and row.quota_used == 102 and row.error_code is None
+        assert row.term == "vela de soja" and row.origin == "seed"
+    await engine.dispose()
