@@ -7,6 +7,8 @@ import httpx
 
 from content_factory.app.call_counters import record_quota
 from content_factory.domain.errors import AuthExpired, NetworkError, RateLimited, UpstreamChanged
+from content_factory.domain.language import language_matches as _language_matches
+from content_factory.domain.language import wanted_language
 from content_factory.domain.models import (
     CandidateVideo,
     Discovery,
@@ -291,9 +293,7 @@ class YoutubeCollector:
             ((position[str(v["id"])], self._map(v, followers)) for v in stats_by_id.values()),
             key=lambda pc: pc[0],
         )
-        wanted = (
-            (search.accepted_language or search.relevance_language) if search is not None else None
-        )
+        wanted = wanted_language(search)
         return [(p, c) for p, c in ranked if _language_matches(c.language, wanted)]
 
     async def _search(
@@ -324,27 +324,6 @@ class YoutubeCollector:
             language=sn.get("defaultAudioLanguage") or sn.get("defaultLanguage") or None,
             raw=v,
         )
-
-
-def _language_matches(declared: str | None, wanted: str | None) -> bool:
-    """Filtro pós-busca do idioma (T3, 2026-10-16).
-
-    `relevanceLanguage` é só preferência na API: frases exatas sem resultado em
-    pt voltam completadas com vídeos em en/es. Descarta o vídeo cujo idioma
-    DECLARADO tem outro prefixo (pt-BR ≈ pt). Sem idioma declarado, mantém:
-    não há evidência para descartar.
-
-    `wanted` com região (`pt-BR`, de `accepted_language`): declarado com região
-    tem de ser igual (`pt-PT` sai); declarado só com o idioma (`pt`) fica —
-    não há evidência de outra região.
-    """
-    if not wanted or not declared:
-        return True
-    want_lang, _, want_region = wanted.casefold().partition("-")
-    decl_lang, _, decl_region = declared.casefold().partition("-")
-    if decl_lang != want_lang:
-        return False
-    return not (want_region and decl_region) or decl_region == want_region
 
 
 class SearchBoundYoutube:
