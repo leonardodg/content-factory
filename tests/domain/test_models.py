@@ -5,6 +5,7 @@ from content_factory.domain.models import (
     KeywordSignal,
     ResearchCampaign,
     SegmentConfig,
+    SegmentTerm,
     TrendPoint,
 )
 
@@ -50,3 +51,16 @@ def test_research_campaign_defaults() -> None:
     now = datetime.now(UTC)
     c = ResearchCampaign(id=1, segment_id=2, started_at=now, ends_at=now)
     assert c.active is True
+
+
+def test_segment_config_tem_ancoras_e_bloqueios_por_padrao() -> None:
+    cfg = SegmentConfig(slug="s", name="S", platforms=["youtube"], keywords=["k"])
+    assert cfg.anchor_terms == []
+    assert cfg.blocked_terms == []
+
+
+def test_segment_term_valores_por_padrao() -> None:
+    t = SegmentTerm(segment_id=1, term="vela", origin="suggest")
+    assert t.status == "active"
+    assert t.exclude_reason is None
+    assert t.kw_rank is None

@@ -31,6 +31,11 @@ class SegmentConfig(BaseModel):
     # termos-cabeca para sondar o Suggest pela intencao (opcao (a) da revisao
     # 16/10). Vazio = sem sondas. Ver `domain/suggest_probes.py`.
     probe_terms: list[str] = Field(default_factory=list)
+    # R1: âncoras do nicho (ex.: vela, pavio, cera). Frase sem nenhuma âncora
+    # é descartada. Vazio = checagem de âncora desligada para o segmento.
+    anchor_terms: list[str] = Field(default_factory=list)
+    # R1: lista curta de bloqueio por segmento (marcas/termos fora do nicho).
+    blocked_terms: list[str] = Field(default_factory=list)
     subnichos: dict[str, list[str]] = Field(default_factory=dict)
     audience: list[str] = Field(default_factory=list)  # vai p/ segments.config JSONB
     research: DepthConfig | None = None  # guard-rail do pipeline de pesquisa
@@ -206,3 +211,19 @@ class ResearchCampaign(BaseModel):
     started_at: datetime
     ends_at: datetime
     active: bool = True
+
+
+class SegmentTerm(BaseModel):
+    """Termo do pool do segmento (R4) — fonte única das buscas."""
+
+    segment_id: int
+    term: str
+    origin: str  # seed | suggest | trends | hashtag:youtube | hashtag:instagram | hashtag:tiktok
+    kw_rank: float | None = None
+    trend_score: float | None = None
+    engagement_score: float | None = None
+    status: str = "active"  # active | excluded
+    exclude_reason: str | None = None
+    first_seen_at: datetime | None = None
+    last_seen_at: datetime | None = None
+    rules_version: str = ""
