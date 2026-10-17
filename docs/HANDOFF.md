@@ -28,8 +28,13 @@ Especificação `ai-plans/2026-10-16-especificacao-viral-por-tema.md`; planos
   Chromium da imagem e da busca na TikTokApi v7 no PR #54.
 
 
-_**Relevância web e potencial de conteúdo (2026-10-16, branch
-`docs/plano-web-relevancia`).**_ Plano:
+_**Relevância web e potencial de conteúdo (2026-10-16; a branch
+`docs/plano-web-relevancia` foi mergeada na `main` via #46/#48 e apagada —
+o código está na `main`).**_ Estado em 2026-10-17: os protocolos
+`segments/web-queries/<slug>.q1.yaml` **ainda não existem** (foram removidos
+para regenerar depois do 1º research com sondas); a web coleta no modo
+legado de 1 consulta (`WEB_QUERIES_REQUIRED=0`). Léxico corrigido para
+`intent-v4`/`filter-v2` antes de gerar os `q1` (revisão externa). Plano:
 `ai-plans/2026-10-16-web-relevancia-potencial.md` (F0–F6). Dados, versão e
 relatório **próprios** — nada muda em `viral_score`/`FORMULA_VERSION`/
 `video_scores`/critérios do B3.
