@@ -1,0 +1,53 @@
+segment: velas-artesanais
+version: q1
+seed: 20261017
+lexicon_version: intent-v4
+filter_version: filter-v2
+queries:
+- id: q1:aprender:00
+  query: como fazer vela aromatizada com perfume
+  intent: aprender
+- id: q1:aprender:01
+  query: como fazer pavio
+  intent: aprender
+- id: q1:aprender:02
+  query: como fazer velas com parafina
+  intent: aprender
+- id: q1:resolver:00
+  query: pavio da vela nao acende
+  intent: resolver
+- id: q1:resolver:01
+  query: pavio que nao queima
+  intent: resolver
+- id: q1:resolver:02
+  query: pavio de madeira nao acende
+  intent: resolver
+- id: q1:tendencia:00
+  query: aroma de vela mais vendido
+  intent: tendencia
+- id: q1:tendencia:01
+  query: velas aromaticas tendencia
+  intent: tendencia
+- id: q1:tendencia:02
+  query: velas de aniversário tendencia
+  intent: tendencia
+- id: q1:comercial:00
+  query: vela preço
+  intent: comercial
+- id: q1:comercial:01
+  query: vela artesanal preço
+  intent: comercial
+- id: q1:comercial:02
+  query: pavio para velas onde comprar
+  intent: comercial
+- id: q1:seed:00
+  query: vela artesanal OR velas artesanais OR fabricação de velas aromáticas
+  intent: seed
+missing: {}
+vetoes:
+  vela não queimou toda umbanda: 'fora do nicho: vela de aniversario industrial'
+  preco velas 7 dias: 'fora do nicho: vela de aniversario industrial'
+  vela de aniversario tendencia 2025: 'fora do nicho: vela de aniversario industrial'
+  como fazer pavio para lamparina a óleo: 'fora do nicho: vela de aniversario industrial'
+  como fazer pavio para lamparina: 'fora do nicho: vela de aniversario industrial'
+  vela de aniversario tendencia: 'fora do nicho: vela de aniversario industrial'
