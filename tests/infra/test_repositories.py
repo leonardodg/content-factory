@@ -2242,6 +2242,184 @@ async def test_trend_scores_no_pool_e_historico_por_dia() -> None:
 
 
 @requires_infra
+async def test_populacao_no_corte_e_atribuicoes_distintas() -> None:
+    """R9/R10 (Bloco 5 Task 5): a população do viral-v2 no corte.
+
+    - A: medições em t-10 h, t-5 h e 2 em t (mesma transação) → última = t e
+      anterior = t-5 h (nunca a outra de t: intervalo < 1 h);
+    - B: publicado há 40 dias → fora da janela de 30 d;
+    - C: só medido DEPOIS do corte → fora;
+    - atribuições: A por "vela"/seed em 3 coletas → 1 par; `unattributed` fora.
+    """
+    from datetime import timedelta
+
+    from content_factory.domain.models import Discovery
+    from content_factory.infra.db.repositories import (
+        DiscoveryRepositoryImpl,
+        PopulationReaderImpl,
+    )
+
+    engine = create_async_engine(os.environ["TEST_DATABASE_URL"])
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    as_of = datetime(2026, 10, 20, 12, tzinfo=UTC)
+    async with factory() as s:
+        await s.rollback()
+        seg = await SegmentRepositoryImpl(s).upsert(
+            SegmentConfig(
+                slug=f"teste-pop-{uuid4().hex[:8]}",
+                name="Pop",
+                platforms=["youtube"],
+                keywords=["vela"],
+            )
+        )
+        videos = VideoRepositoryImpl(s)
+        cands = [
+            candidate(i).model_copy(
+                update={
+                    "published_at": as_of - timedelta(days=age),
+                    "title": f"vela {i}",
+                    "language": "pt-BR",
+                    "raw": {"snippet": {"tags": ["velaartesanal"]}},
+                }
+            )
+            for i, age in ((1, 2), (2, 40), (3, 1))
+        ]
+        await videos.upsert_candidates(seg.id, "youtube", cands)
+        ids = {
+            c.platform_video_id: (
+                await s.execute(
+                    select(VideoRow.id).where(VideoRow.platform_video_id == c.platform_video_id)
+                )
+            ).scalar_one()
+            for c in cands
+        }
+        a, b, c3 = (ids[c.platform_video_id] for c in cands)
+        await s.execute(delete(VideoMetricsRow).where(VideoMetricsRow.video_id.in_([a, b, c3])))
+        for vid, hours_before, views in (
+            (a, 10, 100),
+            (a, 5, 200),
+            (a, 0, 500),
+            (a, 0, 510),
+            (b, 1, 50),
+            (c3, -2, 70),  # depois do corte
+        ):
+            s.add(
+                VideoMetricsRow(
+                    video_id=vid,
+                    views=views,
+                    likes=10,
+                    comments=1,
+                    captured_at=as_of - timedelta(hours=hours_before),
+                )
+            )
+        await s.flush()
+        disc = DiscoveryRepositoryImpl(s)
+        for origin, term in (
+            ("seed", "vela"),
+            ("seed", "vela"),
+            ("seed", "vela"),
+            ("unattributed", ""),
+        ):
+            await disc.record(
+                seg.id,
+                [
+                    Discovery(
+                        candidate=cands[0],
+                        term=term,
+                        origin=origin,
+                        query_id="q",
+                        result_position=1,
+                        run_kind="collect",
+                    )
+                ],
+            )
+        await s.execute(
+            update(VideoDiscoveryRow)
+            .where(VideoDiscoveryRow.segment_id == seg.id)
+            .values(discovered_at=as_of - timedelta(hours=1))
+        )
+        reader = PopulationReaderImpl(s)
+        pop = await reader.population(seg.id, as_of, 30)
+        assert [r.video_id for r in pop] == [a]
+        row = pop[0]
+        assert row.views in (500, 510) and row.prev_views == 200
+        assert row.captured_at == as_of
+        assert row.prev_captured_at == as_of - timedelta(hours=5)
+        assert row.tags == ["velaartesanal"] and row.language == "pt-BR"
+        assert await reader.attributions(seg.id, "youtube", as_of) == [(a, "vela", "seed")]
+        await s.rollback()
+    await engine.dispose()
+
+
+@requires_infra
+async def test_viral_v2_e_relatorio_gravam_sem_tocar_video_scores() -> None:
+    """R9/R10: `video_scores_v2` e `term_reports` recebem as linhas; a tabela
+    do fase-h (`video_scores`) continua exatamente como estava."""
+    from content_factory.domain.models import TermReportRecord
+    from content_factory.domain.viral_v2 import ViralScore
+    from content_factory.infra.db.orm import TermReportRow, VideoScoreV2Row
+    from content_factory.infra.db.repositories import (
+        TermReportRepositoryImpl,
+        ViralV2RepositoryImpl,
+    )
+
+    engine = create_async_engine(os.environ["TEST_DATABASE_URL"])
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    as_of = datetime(2026, 10, 20, 12, tzinfo=UTC)
+    async with factory() as s:
+        await s.rollback()
+        seg = await SegmentRepositoryImpl(s).upsert(
+            SegmentConfig(
+                slug=f"teste-v2-{uuid4().hex[:8]}", name="V2", platforms=["youtube"], keywords=["k"]
+            )
+        )
+        await VideoRepositoryImpl(s).upsert_candidates(seg.id, "youtube", [candidate(1)])
+        vid = (await s.execute(select(VideoRow.id).order_by(VideoRow.id.desc()))).scalars().first()
+        assert vid is not None
+        before = await s.scalar(select(func.count()).select_from(VideoScoreRow))
+        n = await ViralV2RepositoryImpl(s).append_many(
+            seg.id,
+            as_of,
+            [ViralScore(vid, 0.7, 0.9, 0.5, None, 0.4, 6, {"components_used": ["velocity"]})],
+            30,
+        )
+        record = TermReportRecord(
+            report_id="r-1",
+            segment_id=seg.id,
+            platform="youtube",
+            scope="origin",
+            report_key="suggest",
+            n=40,
+            baseline_n=40,
+            diff=0.1,
+            ci_low=0.02,
+            ci_high=0.2,
+            overlap=3,
+            verdict="better",
+            version="term-rank-v1",
+            rules_version="term-filter-v1+viral-v2",
+            as_of=as_of,
+        )
+        m = await TermReportRepositoryImpl(s).append_many([record])
+        assert (n, m) == (1, 1)
+        v2 = (
+            await s.execute(select(VideoScoreV2Row).where(VideoScoreV2Row.segment_id == seg.id))
+        ).scalar_one()
+        assert (v2.viral_score_v2, v2.channel_relative, v2.formula_version) == (
+            0.7,
+            None,
+            "viral-v2",
+        )
+        rep = (
+            await s.execute(select(TermReportRow).where(TermReportRow.segment_id == seg.id))
+        ).scalar_one()
+        assert (rep.scope, rep.verdict, rep.ci_low) == ("origin", "better", 0.02)
+        assert await s.scalar(select(func.count()).select_from(VideoScoreRow)) == before
+        await s.rollback()
+    await engine.dispose()
+
+
+@requires_infra
 async def test_leituras_do_ops_report_do_teste_viral() -> None:
     """Bloco 6 (R13/R14): rendimento por origem (inclusive busca vazia e com
     erro), cota da remedição, vídeos por origem, cobertura da remedição só dos
