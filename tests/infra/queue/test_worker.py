@@ -8,7 +8,12 @@ from typing import Any, ClassVar, cast
 import pytest
 
 from content_factory.app.collect import CollectDeps, collect
-from content_factory.app.ports import Collector, UpsertReport
+from content_factory.app.ports import (
+    Collector,
+    NoOpDiscoveryRepository,
+    NoOpSearchQueryRepository,
+    UpsertReport,
+)
 from content_factory.app.research_pipeline import ResearchDeps
 from content_factory.app.score import ScoreDeps, ScoreOutcome
 from content_factory.domain.errors import SegmentNotFound
@@ -1158,6 +1163,9 @@ async def test_worker_segments_share_platform_slots_capping_tiktok(
             runs=repos.runs,
             limiter=FakeLimiter(),
             lock=FakeLock(),
+            # atribuição/log reais exigiriam sessão de banco — não é o alvo aqui
+            discoveries=NoOpDiscoveryRepository(),
+            search_log=NoOpSearchQueryRepository(),
         )
         out = await collect(slug, platforms, limit, test_deps)
 

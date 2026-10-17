@@ -11,12 +11,16 @@ from datetime import date, datetime
 from math import ceil
 from typing import Any, ClassVar, Literal
 
+from content_factory.app.call_counters import record_quota
 from content_factory.app.ports import (
     Collector,
     CollectRunRepository,
+    DiscoveryRepository,
     KeywordSignalRepository,
+    SearchQueryRepository,
     SegmentRepository,
     SegmentTermRepository,
+    TermSearcher,
     TrendObservationRepository,
     VideoRepository,
     WebScoreRepository,
@@ -25,7 +29,10 @@ from content_factory.domain.errors import CollectorError
 from content_factory.domain.models import (
     CandidateVideo,
     CollectRun,
+    Discovery,
     KeywordSignal,
+    SearchQuery,
+    SearchQueryRun,
     Segment,
     SegmentConfig,
     SegmentTerm,
@@ -62,6 +69,81 @@ def FakeCollector(platform: str, n: int = 3, fail: CollectorError | None = None)
             ]
 
     return Impl()
+
+
+def FakeTermSearcher(
+    hits: dict[str, list[str]],
+    *,
+    quota_per_call: int = 0,
+    fail_on: str | None = None,
+    error: CollectorError | None = None,
+) -> TermSearcher:
+    """`TermSearcher` determinístico: `{termo: [ids de vídeo]}` (R6).
+
+    `search_term` devolve `Discovery` com posição 1-based. `quota_per_call`
+    é somado via `record_quota` (o contador ativo é o `counting()` de cada
+    busca). `fail_on` levanta `error` naquele termo (interrompe as buscas
+    seguintes, como o contrato real).
+    """
+    mapping = dict(hits)
+    quota = quota_per_call
+    fail_term = fail_on
+    fail_error = error
+
+    class Impl:
+        platform: ClassVar[str] = "youtube"
+
+        async def search_term(
+            self, segment: SegmentConfig, query: SearchQuery, limit: int
+        ) -> list[Discovery]:
+            _ = segment, limit
+            if quota:
+                record_quota(quota)
+            if fail_term is not None and query.term == fail_term:
+                raise fail_error or CollectorError("failed", "youtube")
+            return [
+                Discovery(
+                    candidate=CandidateVideo(
+                        platform="youtube",
+                        platform_video_id=vid,
+                        url=f"https://youtu.be/{vid}",
+                        creator_handle="stub",
+                        title=vid,
+                    ),
+                    term=query.term,
+                    origin=query.origin,
+                    query_id=query.query_id,
+                    result_position=position,
+                    run_kind="collect",
+                )
+                for position, vid in enumerate(mapping.get(query.term, []), start=1)
+            ]
+
+    return Impl()
+
+
+class FakeDiscoveries(DiscoveryRepository):
+    """Grava as descobertas em memória e devolve quantas entraram (R6)."""
+
+    def __init__(self) -> None:
+        self.saved: list[Discovery] = []
+
+    async def record(self, segment_id: int, discoveries: Sequence[Discovery]) -> int:
+        _ = segment_id
+        self.saved.extend(discoveries)
+        return len(discoveries)
+
+
+class FakeSearchLog(SearchQueryRepository):
+    """Grava o log de buscas em memória e devolve quantas entraram (R13)."""
+
+    def __init__(self) -> None:
+        self.saved: list[SearchQueryRun] = []
+
+    async def record_many(self, segment_id: int, runs: Sequence[SearchQueryRun]) -> int:
+        _ = segment_id
+        self.saved.extend(runs)
+        return len(runs)
 
 
 class FakeLimiter:
@@ -104,11 +186,13 @@ class _FakeVideos:
         self._updates_only = updates_only
         self._skipped = skipped
         self.upserts: list[tuple[int, str, int]] = []
+        self.upserted: list[CandidateVideo] = []  # candidatos que chegaram ao upsert
 
     async def upsert_candidates(
         self, segment_id: int, source: str, candidates: Sequence[CandidateVideo]
     ) -> UpsertStats:
         self.upserts.append((segment_id, source, len(candidates)))
+        self.upserted.extend(candidates)
         if self._updates_only:  # re-execução idempotente: tudo já existe
             return UpsertStats(
                 inserted=0, updated=len(candidates) - self._skipped, skipped=self._skipped

@@ -10,6 +10,7 @@ from collections.abc import AsyncGenerator, Awaitable, Callable
 from contextlib import AsyncExitStack, asynccontextmanager
 from dataclasses import dataclass
 from datetime import datetime
+from typing import cast
 
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
@@ -23,6 +24,7 @@ from content_factory.app.ports import (
     RateLimiter,
     ResearchCampaignRepository,
     SocialDiscoverer,
+    TermSearcher,
     TrendsProvider,
 )
 from content_factory.app.research_pipeline import ResearchDeps
@@ -146,8 +148,10 @@ class AppDeps(SegmentDepsFactory):
         from content_factory.infra.db.base import SessionUnitOfWork, session_scope
         from content_factory.infra.db.repositories import (
             CollectRunRepositoryImpl,
+            DiscoveryRepositoryImpl,
             KeywordSignalRepositoryImpl,
             ScoreRepositoryImpl,
+            SearchQueryRepositoryImpl,
             SegmentRepositoryImpl,
             SegmentTermRepositoryImpl,
             TrendObservationRepositoryImpl,
@@ -162,6 +166,13 @@ class AppDeps(SegmentDepsFactory):
             videos = VideoRepositoryImpl(session)
             segments = SegmentRepositoryImpl(session)
             runs = CollectRunRepositoryImpl(session)
+            # R6: coletores que buscam por termo (YouTube) — a coleta deixa de
+            # ser UM `discover()` e vira uma busca por termo, com atribuição.
+            term_searchers = {
+                collector.platform: cast(TermSearcher, collector)
+                for collector in shared.collectors
+                if hasattr(collector, "search_term")
+            }
             yield SegmentDepsBundle(
                 uow=SessionUnitOfWork(session),
                 collect=CollectDeps(
@@ -176,6 +187,9 @@ class AppDeps(SegmentDepsFactory):
                     platform_slots=shared.platform_slots,
                     health=shared.health,
                     web_hits=WebHitRepositoryImpl(session),
+                    term_searchers=term_searchers,
+                    discoveries=DiscoveryRepositoryImpl(session),
+                    search_log=SearchQueryRepositoryImpl(session),
                 ),
                 score=ScoreDeps(
                     videos=videos,
