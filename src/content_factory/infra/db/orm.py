@@ -396,6 +396,26 @@ class ResearchCampaignRow(Base):
     active: Mapped[bool] = mapped_column(Boolean, default=True)
 
 
+class TermTrendDayRow(Base):
+    """R3: `trend_score` por termo e dia, já normalizado pela âncora.
+
+    O valor corrente fica em `segment_terms.trend_score`; aqui fica o
+    histórico (um por dia — refazer o research no mesmo dia atualiza).
+    """
+
+    __tablename__ = "term_trend_days"
+    __table_args__ = (UniqueConstraint("segment_id", "term", "day", name="uq_term_trend_day"),)
+    id: Mapped[int] = mapped_column(primary_key=True)
+    segment_id: Mapped[int] = mapped_column(ForeignKey("segments.id"))
+    term: Mapped[str] = mapped_column(String(200))
+    day: Mapped[date] = mapped_column(Date)
+    trend_score: Mapped[float | None] = mapped_column(Float)  # None = sem âncora comparável
+    interest_mean: Mapped[float | None] = mapped_column(Float)
+    slope: Mapped[float | None] = mapped_column(Float)
+    anchor: Mapped[str] = mapped_column(String(200))
+    rules_version: Mapped[str] = mapped_column(String(32))
+
+
 class TrendObservationRow(Base):
     """Série temporal do Google Trends — upsert por período (Fase H: mesmo
     período medido de novo atualiza a observação, não duplica)."""

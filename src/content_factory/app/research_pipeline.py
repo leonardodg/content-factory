@@ -12,11 +12,13 @@ from content_factory.app.ports import (
     KeywordSignalRepository,
     Lock,
     NoOpSegmentTermRepository,
+    NoOpTermTrendRepository,
     PlatformHealth,
     RateLimiter,
     SegmentRepository,
     SegmentTermRepository,
     SocialDiscoverer,
+    TermTrendRepository,
     TrendObservationRepository,
     TrendsProvider,
     VideoRepository,
@@ -31,16 +33,27 @@ from content_factory.domain.models import (
     KeywordSignal,
     Segment,
     SegmentTerm,
+    TermTrendDay,
     TrendPoint,
 )
 from content_factory.domain.suggest_probes import suggest_probes
 from content_factory.domain.term_filter import TERM_FILTER_VERSION, TermFilterConfig, filter_terms
+from content_factory.domain.trends_rank import (
+    TRENDS_RANK_VERSION,
+    Batch,
+    plan_trend_batches,
+    relative_interest,
+    trend_score,
+)
 
 logger = logging.getLogger(__name__)
 
 
 def _utcnow() -> datetime:
     return datetime.now(UTC)
+
+
+TRENDS_TERMS_PER_DAY = 16  # top-N do pool medidos no Trends por research (R3)
 
 
 @dataclass
@@ -60,6 +73,10 @@ class ResearchDeps:
     # as do segmento (comportamento atual); `frozenset()` = nenhuma (só
     # Suggest/Trends/pool). A composição lê `RESEARCH_SOCIAL_PLATFORMS`.
     social_platforms: frozenset[str] | None = None
+    # R3 (Bloco 4): histórico do trend_score por termo e dia, e quantos termos
+    # do pool vão ao Trends por research (env `TRENDS_TERMS_PER_DAY`).
+    trend_days: TermTrendRepository = field(default_factory=NoOpTermTrendRepository)
+    trends_terms_per_day: int = TRENDS_TERMS_PER_DAY
     # Pool de termos do segmento (R4). Default NoOp: chamadas existentes
     # (worker/CLI/testes) continuam funcionando sem mudança; a composição
     # injeta o repositório real.
@@ -149,9 +166,10 @@ async def _discover_social_one(
 
 TRENDS_SOURCE = "trends"  # chave do limiter e sufixo da run `research:trends`
 # Período VÁLIDO do Google Trends ("week" não existe → HTTP 400 em toda run,
-# 2026-10-13→15). 12 meses devolve pontos semanais, que é a granularidade que
-# o provider grava (`period_granularity="week"`).
-TRENDS_TIMEFRAME = "today 12-m"
+# 2026-10-13→15). R3 (Bloco 4): 3 meses devolve pontos DIÁRIOS — a média de 7
+# dias e a inclinação (7 d x 21 d anteriores) precisam deles; com 12 meses
+# (semanal) os "7 dias" eram 1 ponto. O provider grava a granularidade real.
+TRENDS_TIMEFRAME = "today 3-m"
 
 
 def _dedupe(keywords: list[str]) -> list[str]:
@@ -164,9 +182,6 @@ def _dedupe(keywords: list[str]) -> list[str]:
             seen.add(key)
             out.append(k)
     return out
-
-
-TRENDS_MAX_KEYWORDS = 5  # limite do Google Trends por consulta
 
 
 async def _run_source[T](
@@ -316,24 +331,64 @@ async def run_research_cycle(
         for reason in ("blocked", "lang", "no_anchor"):
             counts[f"filter_discards_{reason}"] = sum(1 for _, r in rejected if r == reason)
 
-        # Google Trends: até 5 termos por consulta, normalizados entre si —
-        # vão os 5 de maior peso do Suggest (antes: todos, ~145, e 400)
-        trend_keywords: list[str] = []
-        for sig in sorted(web_signals, key=lambda s: s.weight, reverse=True):
-            if len(trend_keywords) >= TRENDS_MAX_KEYWORDS:
-                break
-            if deps.guard.admit(sig.keyword, 1):
-                trend_keywords.append(sig.keyword)
+        # R3: Trends mede os top-N do pool (já aceitos pelo R1 e ordenados por
+        # kw_rank) em lotes de 4 + uma âncora FIXA — o Trends normaliza dentro
+        # de cada consulta, e a âncora comum torna os lotes comparáveis. Cada
+        # lote é uma fonte própria: um lote que falha não descarta os outros.
+        anchor = segment.trends_anchor or segment.keywords[0]
+        ranked = [s.keyword for s in sorted(web_signals, key=lambda s: s.weight, reverse=True)]
+        batches = plan_trend_batches(ranked, anchor, max_terms=deps.trends_terms_per_day)
+        counts["trend_batches"] = len(batches)
+        batch_points: list[tuple[Batch, list[TrendPoint]]] = []
+        failed_batches = 0
+        for batch in batches:
 
-        async def _trends() -> list[TrendPoint]:
-            await deps.limiter.acquire(TRENDS_SOURCE)
-            return await deps.trends.interest_over_time(trend_keywords, TRENDS_TIMEFRAME)
+            async def _one(b: Batch = batch) -> list[TrendPoint]:
+                await deps.limiter.acquire(TRENDS_SOURCE)  # pausa entre lotes
+                return await deps.trends.interest_over_time([b.anchor, *b.terms], TRENDS_TIMEFRAME)
 
-        trend_points, trends_failed = await _run_source(TRENDS_SOURCE, segment, deps, _trends)
+            got, batch_failed = await _run_source(TRENDS_SOURCE, segment, deps, _one)
+            failed_batches += int(batch_failed)
+            if not batch_failed:
+                batch_points.append((batch, got))
+        trends_failed = bool(batches) and failed_batches == len(batches)
+        counts["trend_batches_failed"] = failed_batches
+
+        # Score DENTRO de cada lote: a âncora tem escala diferente em cada
+        # consulta, então não se misturam pontos de lotes diferentes.
+        today = deps.clock().date()
+        day_rows: list[TermTrendDay] = []
+        scores: dict[str, float | None] = {}
+        for batch, points in batch_points:
+            by_keyword: dict[str, list[TrendPoint]] = {}
+            for point in points:
+                by_keyword.setdefault(point.keyword, []).append(point)
+            anchor_points = by_keyword.get(batch.anchor, [])
+            for term in batch.terms:
+                mean, slope = relative_interest(by_keyword.get(term, []), anchor_points)
+                score = trend_score(mean, slope)
+                scores[term] = score
+                day_rows.append(
+                    TermTrendDay(
+                        term=term,
+                        day=today,
+                        trend_score=score,
+                        interest_mean=mean,
+                        slope=slope,
+                        anchor=batch.anchor,
+                        rules_version=TRENDS_RANK_VERSION,
+                    )
+                )
+        if day_rows:
+            await deps.trend_days.record_many(segment.id, day_rows)
+            await deps.terms.set_trend_scores(segment.id, scores)
+        counts["trend_terms_scored"] = sum(1 for s in scores.values() if s is not None)
+
         trend_signals = deps.guard.truncate(
             [
-                KeywordSignal(keyword=p.keyword, source="trends", weight=p.interest / 100, depth=1)
-                for p in trend_points
+                KeywordSignal(keyword=term, source="trends", weight=score, depth=1)
+                for term, score in scores.items()
+                if score is not None
             ],
             "trends",
         )
@@ -343,9 +398,19 @@ async def run_research_cycle(
         source_errors = int(web_failed) + int(trends_failed)
         counts["source_errors"] = source_errors
 
-        # Fase F3: gravar série temporal append-only (separada do signal
-        # de descoberta que faz upsert e sobrescreve o peso anterior)
-        await deps.trend_observations.record_many(segment.id, trend_points)
+        # Fase F3: série temporal (upsert por período). A âncora vem em TODOS
+        # os lotes, cada um normalizado à sua maneira: fica a do 1º lote — um
+        # INSERT com chave repetida falharia no Postgres. O valor gravado é
+        # relativo ao lote; o normalizado vai para `term_trend_days`.
+        seen_points: set[tuple[str, datetime]] = set()
+        observations: list[TrendPoint] = []
+        for _, points in batch_points:
+            for point in points:
+                key = (point.keyword, point.period_start)
+                if key not in seen_points:
+                    seen_points.add(key)
+                    observations.append(point)
+        await deps.trend_observations.record_many(segment.id, observations)
 
         all_signals = web_signals + trend_signals
         counts["signals_saved"] = await deps.signals.upsert_many(segment.id, all_signals)

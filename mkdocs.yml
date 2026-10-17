@@ -47,6 +47,7 @@ nav:
       - manual/anotacao-web.md
       - manual/validacao-web.md
       - manual/evidencia-sondas-suggest.md
+      - manual/pre-registro-viral-por-tema.md
   - Produto:
       - Ideia inicial (verbatim): produto/ideia-inicial.md
       - PRD: produto/prd.md

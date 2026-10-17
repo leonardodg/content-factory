@@ -1,6 +1,6 @@
 import hashlib
 import logging
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from datetime import UTC, date, datetime, timedelta
 from typing import Any, Literal, cast
 
@@ -24,6 +24,7 @@ from content_factory.app.ports import (
     SearchQueryRepository,
     SegmentRepository,
     SegmentTermRepository,
+    TermTrendRepository,
     TrendObservationRepository,
     UpsertReport,
     VideoRepository,
@@ -45,6 +46,7 @@ from content_factory.domain.models import (
     Segment,
     SegmentConfig,
     SegmentTerm,
+    TermTrendDay,
     TrendPoint,
     UpsertStats,
     VideoMetrics,
@@ -64,6 +66,7 @@ from content_factory.infra.db.orm import (
     SearchQueryRow,
     SegmentRow,
     SegmentTermRow,
+    TermTrendDayRow,
     TrendObservationRow,
     VideoDiscoveryRow,
     VideoMetricsRow,
@@ -903,6 +906,61 @@ class SegmentTermRepositoryImpl(SegmentTermRepository):
         result = cast("CursorResult[Any]", await self._s.execute(stmt))
         await self._s.flush()
         return int(result.rowcount)
+
+    async def set_trend_scores(self, segment_id: int, scores: Mapping[str, float | None]) -> int:
+        # R3: só linhas `suggest` que já existem — Trends reordena o pool do
+        # Suggest, não cria termo. `last_seen_at` fica como está (significa
+        # "visto no Suggest", não "pontuado no Trends").
+        updated = 0
+        for term, value in scores.items():
+            result = cast(
+                "CursorResult[Any]",
+                await self._s.execute(
+                    update(SegmentTermRow)
+                    .where(
+                        SegmentTermRow.segment_id == segment_id,
+                        SegmentTermRow.origin == "suggest",
+                        SegmentTermRow.term == term,
+                    )
+                    .values(trend_score=value)
+                ),
+            )
+            updated += int(result.rowcount)
+        await self._s.flush()
+        return updated
+
+
+class TermTrendRepositoryImpl(TermTrendRepository):
+    """R3: `term_trend_days` — um por (segmento, termo, dia); mesmo dia atualiza."""
+
+    def __init__(self, session: AsyncSession) -> None:
+        self._s = session
+
+    async def record_many(self, segment_id: int, rows: Sequence[TermTrendDay]) -> int:
+        for r in rows:
+            stmt = pg_insert(TermTrendDayRow).values(
+                segment_id=segment_id,
+                term=r.term,
+                day=r.day,
+                trend_score=r.trend_score,
+                interest_mean=r.interest_mean,
+                slope=r.slope,
+                anchor=r.anchor,
+                rules_version=r.rules_version,
+            )
+            stmt = stmt.on_conflict_do_update(
+                index_elements=["segment_id", "term", "day"],
+                set_={
+                    "trend_score": stmt.excluded.trend_score,
+                    "interest_mean": stmt.excluded.interest_mean,
+                    "slope": stmt.excluded.slope,
+                    "anchor": stmt.excluded.anchor,
+                    "rules_version": stmt.excluded.rules_version,
+                },
+            )
+            await self._s.execute(stmt)
+        await self._s.flush()
+        return len(rows)
 
 
 def _campaign_model(row: ResearchCampaignRow) -> ResearchCampaign:

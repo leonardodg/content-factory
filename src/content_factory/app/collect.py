@@ -1,5 +1,5 @@
 import logging
-from collections.abc import Callable
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 
@@ -13,11 +13,13 @@ from content_factory.app.ports import (
     Lock,
     NoOpDiscoveryRepository,
     NoOpSearchQueryRepository,
+    NoOpSegmentTermRepository,
     NoOpWebHitRepository,
     PlatformHealth,
     RateLimiter,
     SearchQueryRepository,
     SegmentRepository,
+    SegmentTermRepository,
     TermSearcher,
     VideoRepository,
     WebHitRepository,
@@ -29,8 +31,15 @@ from content_factory.domain.models import (
     Discovery,
     SearchQuery,
     SearchQueryRun,
+    Segment,
     SegmentConfig,
     WebSearchHit,
+)
+from content_factory.domain.search_plan import (
+    PoolSnapshot,
+    plan_queries,
+    run_index_for,
+    searches_per_collect,
 )
 from content_factory.domain.web_hits import discard_counts, partition_web
 
@@ -78,6 +87,11 @@ class CollectDeps:
     # (search_queries); defaults no-op mantêm testes/uso avulso.
     discoveries: DiscoveryRepository = field(default_factory=NoOpDiscoveryRepository)
     search_log: SearchQueryRepository = field(default_factory=NoOpSearchQueryRepository)
+    # R5 (Bloco 4): pool de termos de onde saem as buscas (vagas por origem) e
+    # o env da cota `SEARCHES_PER_COLLECT_<PLATAFORMA>`. Defaults: pool vazio
+    # (só a seed do segmento) e cota padrão; a composição injeta os reais.
+    terms: SegmentTermRepository = field(default_factory=NoOpSegmentTermRepository)
+    env: Mapping[str, str] = field(default_factory=dict[str, str])
 
 
 @dataclass
@@ -113,19 +127,6 @@ class CollectOutcome:
     partial: bool
     counts: dict[str, int | bool]  # bool só no caso {"ja_em_execucao": True}
     runs: list[CollectRun] = field(default_factory=list[CollectRun])
-
-
-def provisional_queries(segment: SegmentConfig) -> list[SearchQuery]:
-    """Buscas de partida: as 3 primeiras keywords do segmento (R6).
-
-    PROVISÓRIO: substituído no Bloco 4 por `plan_queries` (uma vaga por
-    origem incl. trends/hashtags). NÃO fazer deploy com ele — a coleta não
-    reflete o plano completo de busca do segmento.
-    """
-    return [
-        SearchQuery(term=term, origin="seed", query_id=f"provisional:{i}")
-        for i, term in enumerate(segment.keywords[:3])
-    ]
 
 
 def _query_run(
@@ -256,8 +257,34 @@ async def _search_queries(
     return quota, None
 
 
+async def _pool_snapshot(segment: Segment, platform: str, deps: CollectDeps) -> PoolSnapshot:
+    """Retrato do pool para as vagas (R5): cada lista na ordem do seu critério.
+
+    Pool sem seeds (1ª coleta antes do 1º research) usa as keywords do
+    segmento. As seeds do pool não têm `kw_rank`: ordem alfabética, estável
+    (pré-registrada).
+    """
+    terms = deps.terms
+    seeds = [t.term for t in await terms.top_by_origin(segment.id, "seed", 200)]
+    by_trend = await terms.top_by_origin(segment.id, "suggest", 50, order_by="trend_score")
+    hashtags = await terms.top_by_origin(
+        segment.id, f"hashtag:{platform}", 50, order_by="engagement_score"
+    )
+    return PoolSnapshot(
+        seeds=tuple(seeds or segment.keywords),
+        suggest_by_rank=tuple(t.term for t in await terms.top_by_origin(segment.id, "suggest", 50)),
+        suggest_by_trend=tuple(t.term for t in by_trend if t.trend_score is not None),
+        hashtags=tuple(t.term for t in hashtags),
+    )
+
+
 async def _discover_one(
-    collector: Collector, segment: SegmentConfig, limit: int, deps: CollectDeps
+    collector: Collector,
+    segment: SegmentConfig,
+    limit: int,
+    deps: CollectDeps,
+    *,
+    queries: Sequence[SearchQuery] = (),
 ) -> DiscoverResult:
     """Fase de rede para uma plataforma: limiter.acquire + discover/busca.
 
@@ -295,7 +322,7 @@ async def _discover_one(
                     quota, error = await _search_queries(
                         searcher,
                         segment,
-                        provisional_queries(segment),
+                        list(queries),
                         limit,
                         deps,
                         discoveries,
@@ -364,10 +391,30 @@ async def collect(
         # própria fronteira — nenhuma exceção esperada escapa para cancelar
         # as irmãs; só cancelamento externo aborta o grupo.
         wanted = [c for c in deps.collectors if c.platform in platforms]
+        # R5: as buscas de cada plataforma com `TermSearcher` saem das vagas do
+        # pool, montadas ANTES da fase de rede (leitura na mesma sessão, em
+        # série — a fase concorrente não toca o banco).
+        run_index = run_index_for(deps.clock())
+        queries_by_platform: dict[str, list[SearchQuery]] = {}
+        for c in wanted:
+            if c.platform in deps.term_searchers:
+                queries_by_platform[c.platform] = plan_queries(
+                    await _pool_snapshot(segment, c.platform, deps),
+                    c.platform,
+                    run_index,
+                    searches_per_collect(c.platform, deps.env),
+                )
+        counts["searches_planned"] = sum(len(q) for q in queries_by_platform.values())
         discoveries = await bounded_gather(
             wanted,
             deps.max_concurrent_discoveries,
-            lambda collector: _discover_one(collector, segment, limit, deps),
+            lambda collector: _discover_one(
+                collector,
+                segment,
+                limit,
+                deps,
+                queries=queries_by_platform.get(collector.platform, ()),
+            ),
         )
         # Fase de persistência (sempre sequencial: mesma sessão Postgres).
         for result in discoveries:

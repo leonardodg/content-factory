@@ -389,6 +389,7 @@ async def create_app_deps(settings: Settings) -> AppDeps:
         max_concurrent_discoveries=int(_load_settings()["max_concurrency"]),
         platform_limits=_platform_max_concurrency_from_env(),
         social_platforms=parse_social_platforms(os.getenv("RESEARCH_SOCIAL_PLATFORMS")),
+        trends_terms_per_day=_int_env("TRENDS_TERMS_PER_DAY", 16),
         remediation_window_days=_int_env("REMEDIATION_WINDOW_DAYS", 7),
         remediation_limit=_int_env("REMEDIATION_LIMIT", 500),
         remediation_min_gap_hours=_int_env("REMEDIATION_MIN_GAP_HOURS", 3),

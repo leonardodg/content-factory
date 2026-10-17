@@ -1,4 +1,5 @@
 import os
+from typing import cast
 
 import pytest
 from sqlalchemy import Engine, create_engine, inspect
@@ -26,6 +27,7 @@ def test_all_tables_exist() -> None:
         "published_videos",
         "performance_metrics",
         "collect_runs",
+        "term_trend_days",
     }
     assert expected <= names
 
@@ -127,3 +129,30 @@ def test_videos_tem_removed_at() -> None:
 
     col = VideoRow.__table__.columns["removed_at"]
     assert col.nullable is True
+
+
+def test_term_trend_days_tem_colunas_e_unique() -> None:
+    from content_factory.infra.db.orm import TermTrendDayRow
+
+    assert TermTrendDayRow.__tablename__ == "term_trend_days"
+    assert {c.name for c in TermTrendDayRow.__table__.columns} >= {
+        "id",
+        "segment_id",
+        "term",
+        "day",
+        "trend_score",
+        "interest_mean",
+        "slope",
+        "anchor",
+        "rules_version",
+    }
+    # upsert por (segment_id, term, day): refazer o research no mesmo dia atualiza
+    from sqlalchemy import Table, UniqueConstraint
+
+    table = cast(Table, TermTrendDayRow.__table__)
+    uniques = {
+        tuple(c.name for c in con.columns)
+        for con in table.constraints
+        if isinstance(con, UniqueConstraint)
+    }
+    assert ("segment_id", "term", "day") in uniques

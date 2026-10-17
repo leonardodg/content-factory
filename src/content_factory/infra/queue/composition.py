@@ -6,6 +6,7 @@ variáveis no startup e passa os valores.
 """
 
 import logging
+import os
 from collections.abc import AsyncGenerator, Awaitable, Callable, Iterable
 from contextlib import AsyncExitStack, asynccontextmanager
 from dataclasses import dataclass
@@ -164,6 +165,8 @@ class SharedDeps:
     # segmento). Lida 1x no startup pelo worker (`RESEARCH_SOCIAL_PLATFORMS`).
     social_platforms: frozenset[str] | None = None
     # R7: janela/teto/gap da remedição (`REMEDIATION_*`), lidos 1x no startup.
+    # R3 (Bloco 4): termos do pool medidos no Trends por research
+    trends_terms_per_day: int = 16
     remediation_window_days: int = 7
     remediation_limit: int = 500
     remediation_min_gap_hours: int = 3
@@ -206,6 +209,7 @@ class AppDeps(SegmentDepsFactory):
             SearchQueryRepositoryImpl,
             SegmentRepositoryImpl,
             SegmentTermRepositoryImpl,
+            TermTrendRepositoryImpl,
             TrendObservationRepositoryImpl,
             VideoRepositoryImpl,
             WebHitRepositoryImpl,
@@ -238,6 +242,9 @@ class AppDeps(SegmentDepsFactory):
                     term_searchers=term_searchers,
                     discoveries=DiscoveryRepositoryImpl(session),
                     search_log=SearchQueryRepositoryImpl(session),
+                    # R5: buscas pelas vagas do pool; cota por env
+                    terms=SegmentTermRepositoryImpl(session),
+                    env=os.environ,
                 ),
                 score=ScoreDeps(
                     videos=videos,
@@ -261,6 +268,8 @@ class AppDeps(SegmentDepsFactory):
                     platform_slots=shared.platform_slots,
                     health=shared.health,
                     social_platforms=shared.social_platforms,
+                    trend_days=TermTrendRepositoryImpl(session),
+                    trends_terms_per_day=shared.trends_terms_per_day,
                 ),
                 web=WebScoreRepositoryImpl(session),
                 remediate=RemediationDeps(
@@ -312,6 +321,7 @@ async def compose_app_deps(
     max_concurrent_discoveries: int,
     platform_limits: dict[str, int],
     social_platforms: frozenset[str] | None = None,
+    trends_terms_per_day: int = 16,
     remediation_window_days: int = 7,
     remediation_limit: int = 500,
     remediation_min_gap_hours: int = 3,
@@ -387,6 +397,7 @@ async def compose_app_deps(
                 platform_slots=PlatformSlots(platform_limits),
                 max_concurrent_discoveries=max_concurrent_discoveries,
                 social_platforms=social_platforms,
+                trends_terms_per_day=trends_terms_per_day,
                 remediation_window_days=remediation_window_days,
                 remediation_limit=remediation_limit,
                 remediation_min_gap_hours=remediation_min_gap_hours,

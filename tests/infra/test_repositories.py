@@ -18,6 +18,7 @@ from content_factory.domain.models import (
     ScoreResult,
     SegmentConfig,
     SegmentTerm,
+    TermTrendDay,
     TrendPoint,
     VideoMetrics,
     WebPageScoreRow,
@@ -41,6 +42,7 @@ from content_factory.infra.db.repositories import (
     ScoreSampleRepositoryImpl,
     SegmentRepositoryImpl,
     SegmentTermRepositoryImpl,
+    TermTrendRepositoryImpl,
     TrendObservationRepositoryImpl,
     VideoRepositoryImpl,
     WebHitRepositoryImpl,
@@ -2170,4 +2172,69 @@ async def test_record_metrics_grava_snapshot_sem_tocar_metadados() -> None:
         ).scalar_one()
         assert removed_after is not None
         assert await repo.mark_removed([]) == 0  # lista vazia não abre UPDATE
+    await engine.dispose()
+
+
+@requires_infra
+async def test_trend_scores_no_pool_e_historico_por_dia() -> None:
+    """R3 (Bloco 4 Task 5): `set_trend_scores` grava só nas linhas `suggest`,
+    não cria termo novo nem mexe em `last_seen_at`; `term_trend_days` é um
+    por (termo, dia) — refazer o research no mesmo dia atualiza."""
+    from datetime import date
+
+    from sqlalchemy import func, select
+
+    from content_factory.infra.db.orm import TermTrendDayRow
+
+    engine = create_async_engine(os.environ["TEST_DATABASE_URL"])
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    async with factory() as s:
+        await s.rollback()
+        seg = await SegmentRepositoryImpl(s).upsert(
+            SegmentConfig(
+                slug=f"teste-trend-{uuid4().hex[:8]}",
+                name="Trend",
+                platforms=["youtube"],
+                keywords=["vela"],
+            )
+        )
+        terms = SegmentTermRepositoryImpl(s)
+        await terms.upsert_many(
+            seg.id,
+            [
+                SegmentTerm(segment_id=seg.id, term="vela de soja", origin="suggest", kw_rank=0.5),
+                SegmentTerm(segment_id=seg.id, term="vela de soja", origin="seed"),
+            ],
+        )
+        before = {(t.term, t.origin): t.last_seen_at for t in await terms.all_for_segment(seg.id)}
+        n = await terms.set_trend_scores(seg.id, {"vela de soja": 0.42, "fora do pool": 0.9})
+        assert n == 1  # só a linha suggest existente
+        rows = {(t.term, t.origin): t for t in await terms.all_for_segment(seg.id)}
+        assert rows[("vela de soja", "suggest")].trend_score == 0.42
+        assert rows[("vela de soja", "seed")].trend_score is None
+        assert ("fora do pool", "suggest") not in rows
+        assert rows[("vela de soja", "suggest")].last_seen_at == before[("vela de soja", "suggest")]
+
+        days = TermTrendRepositoryImpl(s)
+        day = date(2026, 10, 20)
+        row = TermTrendDay(
+            term="vela de soja",
+            day=day,
+            trend_score=0.3,
+            interest_mean=0.5,
+            slope=0.1,
+            anchor="vela",
+            rules_version="trends-anchor-v1",
+        )
+        await days.record_many(seg.id, [row])
+        await days.record_many(seg.id, [row.model_copy(update={"trend_score": 0.6})])
+        count = await s.scalar(
+            select(func.count())
+            .select_from(TermTrendDayRow)
+            .where(TermTrendDayRow.segment_id == seg.id)
+        )
+        stored = await s.scalar(
+            select(TermTrendDayRow.trend_score).where(TermTrendDayRow.segment_id == seg.id)
+        )
+        assert (count, stored) == (1, 0.6)
     await engine.dispose()
