@@ -1,0 +1,52 @@
+segment: sabonetes-artesanais
+version: q1
+seed: 20261017
+lexicon_version: intent-v4
+filter_version: filter-v2
+queries:
+- id: q1:aprender:00
+  query: como fazer sabonete caseiro
+  intent: aprender
+- id: q1:aprender:01
+  query: sabonete artesanal para iniciantes
+  intent: aprender
+- id: q1:aprender:02
+  query: como fazer sabonete artesanal de alecrim
+  intent: aprender
+- id: q1:resolver:00
+  query: saboaria artesanal legislação
+  intent: resolver
+- id: q1:resolver:01
+  query: sabonete nao faz espuma
+  intent: resolver
+- id: q1:resolver:02
+  query: saboaria artesanal anvisa
+  intent: resolver
+- id: q1:tendencia:00
+  query: sabonetes artesanais mais vendidos no brasil
+  intent: tendencia
+- id: q1:tendencia:01
+  query: sabonete mais vendido no brasil
+  intent: tendencia
+- id: q1:tendencia:02
+  query: sabonetes artesanais mais vendidos
+  intent: tendencia
+- id: q1:comercial:00
+  query: base glicerinada nossa terra atacado
+  intent: comercial
+- id: q1:comercial:01
+  query: como fazer sabonetes para vender
+  intent: comercial
+- id: q1:comercial:02
+  query: preco sabonetes artesanais
+  intent: comercial
+- id: q1:seed:00
+  query: sabonete artesanal OR sabonetes artesanais OR saboaria artesanal
+  intent: seed
+missing: {}
+vetoes:
+  sabonetes intimos mais vendidos: 'fora do nicho: produto industrial'
+  sabonetes liquidos mais vendidos: 'fora do nicho: produto industrial'
+  sabonetes mais vendidos no brasil: 'fora do nicho: produto industrial'
+  sabonete mais vendido: 'fora do nicho: produto industrial'
+  sabonete liquido mais vendido: 'fora do nicho: produto industrial'
