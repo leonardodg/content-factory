@@ -1,4 +1,5 @@
 import re
+from collections.abc import Sequence
 from datetime import UTC, datetime, timedelta
 from typing import Any, ClassVar, cast
 
@@ -9,6 +10,8 @@ from content_factory.domain.errors import AuthExpired, NetworkError, RateLimited
 from content_factory.domain.models import (
     CandidateVideo,
     Discovery,
+    RefreshResult,
+    RemediationTarget,
     SearchConfig,
     SearchQuery,
     SegmentConfig,
@@ -191,6 +194,42 @@ class YoutubeCollector:
             )
             for position, cand in ranked
         ]
+
+    async def refresh(self, targets: Sequence[RemediationTarget]) -> RefreshResult:
+        """R7: `videos.list` em lotes de 50 + `channels.list`; ids ausentes = removidos.
+
+        Cota: 1 unidade por lote de `videos.list` + 1 por `channels.list`
+        (mesmo `COST_LIST` do `_search_ranked`). Id que a plataforma não
+        devolveu = removido/privado (marca-se `removed_at` fora daqui).
+        """
+        found: list[CandidateVideo] = []
+        missing: list[str] = []
+        ids = [t.platform_video_id for t in targets]
+        for start in range(0, len(ids), 50):
+            chunk = ids[start : start + 50]
+            stats = await self._get(
+                "videos",
+                {"part": "statistics,snippet,contentDetails", "id": ",".join(chunk)},
+            )
+            record_quota(self.COST_LIST)
+            stats_by_id = {str(v["id"]): v for v in stats.get("items", [])}
+            missing += [i for i in chunk if i not in stats_by_id]
+            if not stats_by_id:
+                continue
+            channels = await self._get(
+                "channels",
+                {
+                    "part": "statistics",
+                    "id": ",".join({v["snippet"]["channelId"] for v in stats_by_id.values()}),
+                },
+            )
+            record_quota(self.COST_LIST)
+            followers = {
+                str(c["id"]): int(c["statistics"].get("subscriberCount", 0))
+                for c in channels.get("items", [])
+            }
+            found += [self._map(v, followers) for v in stats_by_id.values()]
+        return RefreshResult(candidates=found, missing_ids=missing)
 
     async def _search_ranked(
         self, q: str, limit: int, search: SearchConfig | None = None
