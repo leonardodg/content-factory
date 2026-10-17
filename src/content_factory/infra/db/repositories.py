@@ -937,6 +937,27 @@ class SegmentTermRepositoryImpl(SegmentTermRepository):
         await self._s.flush()
         return updated
 
+    async def set_engagement_scores(self, segment_id: int, scores: Mapping[str, float]) -> int:
+        # R10: engagement_score do relatório no corte, só em seed/suggest — o
+        # das hashtags é o peso da mineração (R11) e não é sobrescrito aqui.
+        updated = 0
+        for term, value in scores.items():
+            result = cast(
+                "CursorResult[Any]",
+                await self._s.execute(
+                    update(SegmentTermRow)
+                    .where(
+                        SegmentTermRow.segment_id == segment_id,
+                        SegmentTermRow.origin.in_(["seed", "suggest"]),
+                        SegmentTermRow.term == term,
+                    )
+                    .values(engagement_score=value)
+                ),
+            )
+            updated += int(result.rowcount)
+        await self._s.flush()
+        return updated
+
 
 class TermTrendRepositoryImpl(TermTrendRepository):
     """R3: `term_trend_days` — um por (segmento, termo, dia); mesmo dia atualiza."""

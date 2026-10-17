@@ -287,6 +287,11 @@ class SegmentTermRepository(Protocol):
         não mexe em `last_seen_at`, que significa "visto no Suggest")."""
         ...
 
+    async def set_engagement_scores(self, segment_id: int, scores: Mapping[str, float]) -> int:
+        """R10: grava o `engagement_score` do relatório nas linhas `seed`/`suggest`
+        existentes (o das hashtags é o peso da mineração e não é tocado)."""
+        ...
+
 
 class TermTrendRepository(Protocol):
     """R3: histórico do `trend_score` por termo e dia (`term_trend_days`)."""
@@ -336,6 +341,10 @@ class NoOpSegmentTermRepository:
         return 0
 
     async def set_trend_scores(self, segment_id: int, scores: Mapping[str, float | None]) -> int:
+        _ = segment_id
+        return len(scores)
+
+    async def set_engagement_scores(self, segment_id: int, scores: Mapping[str, float]) -> int:
         _ = segment_id
         return len(scores)
 
