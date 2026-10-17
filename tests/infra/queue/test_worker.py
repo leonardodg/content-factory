@@ -1783,3 +1783,14 @@ async def test_startup_failure_after_registry_closes_collectors(
 def test_parse_social_platforms(raw: str | None, expected: frozenset[str] | None) -> None:
     """R5: unset → todas; `none` → nenhuma; lista → conjunto."""
     assert w.parse_social_platforms(raw) == expected
+
+
+def test_term_searchers_from_so_pega_quem_busca_por_termo() -> None:
+    """R6: um helper só decide quem busca por termo (worker e CLI usam o mesmo)."""
+    from content_factory.infra.queue.composition import term_searchers_from
+    from tests.stubs import FakeCollector, FakeTermSearcher
+
+    youtube = FakeTermSearcher({})
+    instagram = FakeCollector("instagram")
+    out = term_searchers_from([cast(Any, youtube), instagram])
+    assert out == {"youtube": youtube}

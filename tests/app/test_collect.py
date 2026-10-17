@@ -907,3 +907,45 @@ async def test_plataforma_sem_term_searcher_usa_discover_legado_sem_atribuicao()
     discoveries, _ = _saved(deps)
     assert all(d.origin == "unattributed" and d.term == "" for d in discoveries)
     assert all(d.query_id is None and d.result_position is None for d in discoveries)
+
+
+async def test_excecao_fora_do_contrato_numa_busca_deduplica_e_loga() -> None:
+    """Revisão QA do bloco 2: bug no `search_term` (exceção fora do contrato)
+    depois de buscas que trouxeram o mesmo vídeo. Antes: candidatos SEM
+    dedupe no upsert (2 medições do mesmo vídeo na mesma transação → mesmo
+    captured_at → velocidade nula) e a busca que quebrou sumia do log."""
+    searcher = FakeTermSearcher(
+        {"vela artesanal": ["v1", "v2"], "vela de soja": ["v2", "v3"]},
+        fail_on="vela x",
+        error=ValueError("bug no parser"),
+    )
+    deps = collect_deps(
+        term_searchers={"youtube": searcher},
+        segment=_segment(keywords=["vela artesanal", "vela de soja", "vela x"]),
+    )
+    out = await collect("candles", ["youtube"], 25, deps)
+    videos = cast(FakeVideos, deps.videos)
+    assert sorted(c.platform_video_id for c in videos.upserted) == ["v1", "v2", "v3"]
+    _, search_log = _saved(deps)
+    assert [(r.term, r.error_code) for r in search_log] == [
+        ("vela artesanal", None),
+        ("vela de soja", None),
+        ("vela x", "internal_error"),
+    ]
+    assert {r.term: r.kept for r in search_log}["vela de soja"] == 1
+    assert out.ok is False and out.partial is True
+    assert out.runs[0].error_code == "internal_error"
+
+
+async def test_searches_empty_nao_conta_busca_que_falhou() -> None:
+    """`searches_empty` = busca que respondeu SEM resultado; falha é outra coisa."""
+    searcher = FakeTermSearcher(
+        {"vela artesanal": []}, fail_on="vela de soja", error=RateLimited("youtube", "q")
+    )
+    deps = collect_deps(
+        term_searchers={"youtube": searcher},
+        segment=_segment(keywords=["vela artesanal", "vela de soja"]),
+    )
+    out = await collect("candles", ["youtube"], 25, deps)
+    assert out.counts["searches"] == 2
+    assert out.counts["searches_empty"] == 1

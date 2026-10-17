@@ -45,3 +45,4 @@ search:
   relevance_language: pt
   region_code: BR
   order: relevance
+  accepted_language: pt-BR  # público BR: pt-PT sai (API só aceita 'pt' acima)

@@ -292,6 +292,8 @@ def test_language_do_youtube_e_persistido_e_filtrado() -> None:
     assert _language_matches("pt-BR", "pt") is True
     assert _language_matches("en", "pt") is False
     assert _language_matches(None, "pt") is True  # sem evidência, mantém
+    assert _language_matches("pt-PT", "pt-BR") is False  # público BR (17/10)
+    assert _language_matches("pt", "pt-BR") is True  # sem região: sem evidência
 ```
 
 ```python
