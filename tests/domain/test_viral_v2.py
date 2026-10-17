@@ -57,3 +57,16 @@ def test_componente_ausente_renormaliza_pesos() -> None:
     assert out[99].total is not None and out[99].velocity is None
     used = out[99].explanation["components_used"]
     assert isinstance(used, list) and "velocity" not in used
+
+
+def test_velocidade_zero_e_valor_nao_ausencia() -> None:
+    """QA real (17/10): `_log1p` devolvia None para 0 — o vídeo PARADO perdia o
+    componente de velocidade, os pesos renormalizavam e ele podia pontuar
+    acima de quem cresceu pouco. Zero é medida (o pior percentil), não falta."""
+    rows = [_row(1, velocity=0.0), *(_row(i, velocity=float(i)) for i in range(2, 7))]
+    out = {s.video_id: s for s in score_population(rows)}
+    assert out[1].velocity == 0.0  # presente, no pior percentil
+    used = out[1].explanation["components_used"]
+    assert isinstance(used, list) and "velocity" in used
+    # parado < quem cresceu, com o resto igual
+    assert (out[1].total or 0.0) < (out[2].total or 0.0)
