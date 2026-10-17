@@ -1,4 +1,5 @@
 import os
+from typing import cast
 
 import pytest
 from sqlalchemy import Engine, create_engine, inspect
@@ -146,9 +147,12 @@ def test_term_trend_days_tem_colunas_e_unique() -> None:
         "rules_version",
     }
     # upsert por (segment_id, term, day): refazer o research no mesmo dia atualiza
+    from sqlalchemy import Table, UniqueConstraint
+
+    table = cast(Table, TermTrendDayRow.__table__)
     uniques = {
         tuple(c.name for c in con.columns)
-        for con in TermTrendDayRow.__table__.constraints
-        if con.__class__.__name__ == "UniqueConstraint"
+        for con in table.constraints
+        if isinstance(con, UniqueConstraint)
     }
     assert ("segment_id", "term", "day") in uniques

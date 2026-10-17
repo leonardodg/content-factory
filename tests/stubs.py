@@ -39,6 +39,7 @@ from content_factory.domain.models import (
     Segment,
     SegmentConfig,
     SegmentTerm,
+    TermTrendDay,
     TrendPoint,
     UpsertStats,
     VideoMetrics,
@@ -531,6 +532,7 @@ class FakeSegmentTerms(SegmentTermRepository):
     def __init__(self) -> None:
         self.saved: list[SegmentTerm] = []
         self.status_calls: list[tuple[int, str, list[str], str]] = []
+        self.trend_scores: dict[str, float | None] = {}
 
     async def upsert_many(self, segment_id: int, terms: Sequence[SegmentTerm]) -> int:
         self.saved.extend(terms)
@@ -561,6 +563,11 @@ class FakeSegmentTerms(SegmentTermRepository):
     ) -> int:
         self.status_calls.append((segment_id, origin, list(keep), reason))
         return 0
+
+    async def set_trend_scores(self, segment_id: int, scores: Mapping[str, float | None]) -> int:
+        _ = segment_id
+        self.trend_scores.update(scores)
+        return len(scores)
 
 
 class FakeTrendObservations(TrendObservationRepository):
@@ -717,3 +724,15 @@ class FakeHealth:
 
     async def record_success(self, platform: str) -> None:
         self.successes.append(platform)
+
+
+class FakeTermTrendDays:
+    """`TermTrendRepository` em memória (R3): acumula para assert."""
+
+    def __init__(self) -> None:
+        self.saved: list[TermTrendDay] = []
+
+    async def record_many(self, segment_id: int, rows: Sequence[TermTrendDay]) -> int:
+        _ = segment_id
+        self.saved.extend(rows)
+        return len(rows)

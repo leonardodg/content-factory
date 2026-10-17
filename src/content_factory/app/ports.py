@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import date, datetime
 from typing import ClassVar, Literal, Protocol
@@ -21,6 +21,7 @@ from content_factory.domain.models import (
     Segment,
     SegmentConfig,
     SegmentTerm,
+    TermTrendDay,
     TrendPoint,
     UpsertStats,
     VideoMetrics,
@@ -278,6 +279,25 @@ class SegmentTermRepository(Protocol):
         """Marca `excluded` (com `reason`) os termos ativos da origem fora de `keep`."""
         ...
 
+    async def set_trend_scores(self, segment_id: int, scores: Mapping[str, float | None]) -> int:
+        """R3: grava `trend_score` nas linhas `suggest` existentes (não cria termo,
+        não mexe em `last_seen_at`, que significa "visto no Suggest")."""
+        ...
+
+
+class TermTrendRepository(Protocol):
+    """R3: histórico do `trend_score` por termo e dia (`term_trend_days`)."""
+
+    async def record_many(self, segment_id: int, rows: Sequence[TermTrendDay]) -> int: ...
+
+
+class NoOpTermTrendRepository:
+    """Default de `ResearchDeps` quando o chamador não grava o histórico (testes)."""
+
+    async def record_many(self, segment_id: int, rows: Sequence[TermTrendDay]) -> int:
+        _ = segment_id
+        return len(rows)
+
 
 class NoOpSegmentTermRepository:
     """Default de `ResearchDeps` quando o chamador não grava o pool (testes)."""
@@ -311,6 +331,10 @@ class NoOpSegmentTermRepository:
     ) -> int:
         _ = segment_id, origin, keep, reason
         return 0
+
+    async def set_trend_scores(self, segment_id: int, scores: Mapping[str, float | None]) -> int:
+        _ = segment_id
+        return len(scores)
 
 
 class DiscoveryRepository(Protocol):

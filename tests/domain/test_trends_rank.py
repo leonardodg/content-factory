@@ -1,3 +1,4 @@
+from collections.abc import Sequence
 from datetime import UTC, datetime, timedelta
 
 from content_factory.domain.models import TrendPoint
@@ -12,7 +13,7 @@ from content_factory.domain.trends_rank import (
 DAY = datetime(2026, 10, 20, tzinfo=UTC)
 
 
-def _daily(kw: str, values: list[float]) -> list[TrendPoint]:
+def _daily(kw: str, values: Sequence[float]) -> list[TrendPoint]:
     """Série diária terminando em DAY (último valor = DAY)."""
     n = len(values)
     return [
