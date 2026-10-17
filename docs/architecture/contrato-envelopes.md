@@ -68,9 +68,11 @@ O `collect_job` remede os vídeos já conhecidos do segmento logo depois do
   alvos devolvidos pelo repositório;
 - `metrics_written`: linhas gravadas em `video_metrics`;
 - `removed`: vídeos que a plataforma não devolveu (removido/privado) e foram
-  marcados em `videos.removed_at`. Só conta id ausente numa resposta VÁLIDA:
-  lote com `{"items": []}` é `upstream_changed` (a remediação não marca o lote
-  inteiro como removido nem inventa remoção em cima de erro);
+  marcados em `videos.removed_at`. `{"items": []}` é resposta VÁLIDA — nenhum
+  id do lote existe mais, então o lote inteiro entra em `removed` (cota
+  estourada no YouTube é HTTP 403 → `rate_limited`). Já `items` AUSENTE (ou com
+  tipo que não é lista) é contrato quebrado: a plataforma levanta
+  `upstream_changed`, a run fica `failed` e **nada** é marcado como removido;
 - `failed_platforms`: plataformas cuja remedição falhou — vira uma `CollectRun`
   `remediate:<plataforma>` `failed` e **não** derruba a coleta;
 - **lotes de 50** (`RemediationDeps.batch_size`, o teto do `videos.list`): cada

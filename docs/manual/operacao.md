@@ -198,8 +198,11 @@ pt-PT) deixa de ser remedido; `pt` sem região e idioma não declarado ficam.
 A remediação pede os alvos em **lotes de 50** (`videos.list`): cada lote é
 gravado antes do próximo, então o erro de um lote não custa as métricas dos
 anteriores (a run `remediate:<plataforma>` fica `failed` com o `error_code`).
-Erro fora do contrato grava `internal_error` e **não** derruba a coleta; lote
-sem items (`{"items": []}`) é `upstream_changed` — nunca vira remoção em massa.
+Erro fora do contrato grava `internal_error` e **não** derruba a coleta.
+Resposta com `items: []` significa que nenhum id do lote existe mais (todos
+viram `removed_at`); chave `items` ausente é contrato quebrado
+(`upstream_changed`) e não marca remoção — cota estourada no YouTube é HTTP 403
+(`rate_limited`), não resposta vazia.
 
 Fixos no código (não são env):
 
