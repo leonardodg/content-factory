@@ -19,6 +19,11 @@ Especificação `ai-plans/2026-10-16-especificacao-viral-por-tema.md`; planos
   segment load` dos 3 segmentos; envs do pré-registro; campanhas de 4 dias;
   fumaça research → collect → score; adendo com a data de início no
   pré-registro.
+- **Meta do produto e roadmap pós-corte** (17/10): especificação §10 — três
+  rankings (pesquisas, vídeos, oportunidades), níveis de evidência
+  (`discovered` → `viral_validated`), D+4 reportado como "desempenho acima do
+  observado"; depois do corte: `viral-v3` (relativo ao criador), ranking de
+  oportunidades, relatório explicado, limpeza de vocabulário, `q1` (#62).
 - **Fase B (análise) — blocos 5–6:** bloco 5 (`viral-v2`, `cf term-report
   --as-of`, top vídeos, hashtags; migração `0015`) no PR #57; bloco 6
   (`ops-report` com cota/rendimento por origem, remedição, pool, descartes e

@@ -402,3 +402,76 @@ Deploy sempre numa janela sem cron e com a fila vazia.
   e engajamento. A leitura de longo prazo fica como direcional.
 - **Normalização por percentil com poucos vídeos:** exigir `n` mínimo por
   plataforma e segmento antes de comparar.
+
+## 10. Meta do produto e roadmap depois do teste (registrado em 2026-10-17)
+
+### Meta do produto
+
+> Identificar, dentro de um segmento, conteúdos de alto desempenho comprovado
+> e tendências de interesse, cruzar essas evidências e priorizar oportunidades
+> de conteúdo original com potencial de alcançar e engajar o maior público
+> relevante possível.
+
+É a mesma direção do objetivo da §1, nas palavras do usuário: "buscar conteúdo
+viral de qualidade, quem atinge a melhor quantidade de pessoas a partir de um
+segmento". A formulação acima deixa explícitas duas situações que o sistema
+precisa **distinguir**: vídeos que já tiveram sucesso e temas emergentes que
+ainda podem crescer.
+
+### Três tipos de evidência, três rankings
+
+| Evidência | Responde | Não comprova | Ranking |
+|---|---|---|---|
+| Suggest e Trends | as pessoas buscam o tema? o interesse cresce? | que um vídeo sobre o tema viralizou | **pesquisas** (pool: `kw_rank`, `trend_score`) |
+| Métricas do conteúdo publicado | o vídeo alcançou e engajou? | que foi excepcional sem parâmetro de comparação | **vídeos** (`viral-v2`; `viral-v3` depois) |
+| As duas cruzadas | onde há demanda e conteúdo que funciona (ou demanda sem oferta boa)? | — | **oportunidades** (a construir) |
+
+O ranking de pesquisas e o de vídeos são diferentes e não se confundem. O de
+oportunidades nasce do cruzamento dos dois.
+
+### Níveis de evidência por item
+
+| Nível | Critério |
+|---|---|
+| `discovered` | encontrado por uma busca do plano (`video_discoveries`) |
+| `relevant` | passa no filtro de relevância (idioma pt-BR, âncora, sem bloqueio) |
+| `engagement_observed` | tem métricas oficiais com data de coleta (views, curtidas, comentários) |
+| `above_observed` | `viral-v2` alto na população do segmento — **"desempenho acima do observado"** |
+| `viral_validated` | desempenho acima do **normal do próprio criador**, com dados comparáveis (exige `viral-v3`) |
+
+Regras: métrica ausente fica `NULL`, nunca zero (o YouTube não expõe
+compartilhamentos); toda métrica tem o instante da coleta; número absoluto não
+basta (100 mil views em 6 h ≠ 100 mil em 2 anos; o mesmo número é excepcional
+para um canal pequeno e mediano para um grande).
+
+### O que o teste atual (D+4) valida e o que não
+
+O teste de 4 dias valida a **coleta**, a **descoberta**, a **mensuração** e o
+**ranking** no YouTube. O top de vídeos do relatório do D+4 é reportado como
+**"conteúdo com desempenho acima do observado"** (`above_observed`), não como
+"viral validado". Instagram e TikTok ficam fora da mensuração quantitativa sem
+mudar a meta: muda a cobertura de fontes, não o objetivo.
+
+### Roadmap depois do corte (21/10) — nada disto muda o teste em andamento
+
+1. **`viral-v3` — desempenho relativo ao criador.** Índice = views do vídeo ÷
+   mediana de views dos vídeos comparáveis do mesmo canal (mesma faixa de
+   idade/formato), via a lista de uploads do canal no YouTube (1 unidade por
+   50 vídeos). Substitui views÷inscritos e habilita o nível `viral_validated`.
+   Versão nova da fórmula, com pré-registro próprio.
+2. **Ranking de oportunidades.** Por tema: cruzar demanda (Trends, inclinação)
+   com desempenho (`viral-v2`/`viral-v3` dos vídeos atribuídos), separando
+   "já performa" de "demanda crescendo com pouca oferta boa".
+3. **Relatório explicado.** Além da lista: para cada item, a evidência que o
+   sustenta, o que parece ter funcionado (tema, formato, gancho) e a
+   oportunidade sugerida para conteúdo original.
+4. **Limpeza de vocabulário do pool.** Levar ao `blocked_terms` os sentidos
+   fora do nicho achados na revisão dos `q1` (aniversário, umbanda, 7 dias,
+   lamparina, sabonete industrial), com versão nova do filtro.
+5. **Web `q1`.** Veto final dos resíduos, ativação e amostra (PR #62).
+6. **Fontes adicionais** (só por caminho oficial): Instagram com App Review
+   (busca por hashtag); TikTok sem API oficial para empresa — fica fora até
+   haver acesso.
+
+Ordem sugerida: 1 → 2 → 3, porque o ranking de oportunidades e o relatório
+explicado dependem de um ranking de vídeos com parâmetro de comparação.
