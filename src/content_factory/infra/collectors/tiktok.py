@@ -12,7 +12,9 @@ MAX_ATTEMPTS = 5
 class _SearchEndpoint:
     """Adapta client.search p/ o contrato .videos(count=) do _call_with_backoff.
 
-    TikTokApi v6: client.search.videos(query, count=N) → gerador async de Video.
+    TikTokApi v7: client.search.search_type(query, "item", count=N) → gerador
+    async de Video. A v6 tinha `search.videos(query, count=)`, removido na v7
+    — a busca por keyword quebrava com AttributeError (QA 17/10).
     """
 
     def __init__(self, client: Any, query: str) -> None:
@@ -20,7 +22,7 @@ class _SearchEndpoint:
         self._query = query
 
     def videos(self, count: int = 30, **kw: object) -> Any:
-        return self._search.videos(self._query, count=count)
+        return self._search.search_type(self._query, "item", count=count)
 
 
 def _raw(item: Any) -> dict[str, Any]:
