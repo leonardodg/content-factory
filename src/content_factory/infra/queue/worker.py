@@ -10,6 +10,7 @@ Hooks (`_collect_impl`, `_score_impl`, `_research_impl`, `_load_settings`)
 existem para o teste trocar por fakes sem tocar no arq/banco (fronteira = mock).
 """
 
+import dataclasses
 import logging
 import os
 from collections.abc import Awaitable, Callable
@@ -41,6 +42,7 @@ from content_factory.app.results import (
     score_result,
 )
 from content_factory.app.score import score
+from content_factory.app.score_v2 import score_v2
 from content_factory.app.web_rank import web_rank
 from content_factory.config import Settings, get_settings
 from content_factory.domain.models import DepthConfig, Segment
@@ -194,6 +196,7 @@ async def _gather_segments(
 # hooks de teste: monkeypatch troca por fakes sem tocar no arq/banco
 _collect_impl: Callable[..., Awaitable[Any]] = collect
 _remediate_impl: Callable[..., Awaitable[Any]] = remediate
+_score_v2_impl: Callable[..., Awaitable[Any]] = score_v2
 _score_impl: Callable[..., Awaitable[Any]] = score
 _research_impl: Callable[..., Awaitable[Any]] = run_research_cycle
 _web_rank_impl: Callable[..., Awaitable[Any]] = web_rank
@@ -253,6 +256,7 @@ async def run_score_job(ctx: dict[str, Any]) -> dict[str, Any]:
 
     async def _one(segment: Segment) -> dict[str, Any]:
         web_failed = False
+        viral_v2: dict[str, int] | str | None = None
         async with app_deps.create_segment_deps(segment) as bundle:
             out = await _score_impl(bundle.score)
             # o score de vídeos é commitado ANTES do web: o experimento nunca
@@ -269,10 +273,23 @@ async def run_score_job(ctx: dict[str, Any]) -> dict[str, Any]:
                     web_failed = True
                     logger.exception("score web falhou — %s (vídeos mantidos)", segment.slug)
                     await bundle.uow.rollback()
+            # R9/R11 (Bloco 5): viral-v2 + hashtags, atrás de VIRAL_V2_ENABLED.
+            # Transação própria DEPOIS do fase-h: falha só reverte esta parte.
+            if get_settings().viral_v2_enabled:
+                try:
+                    v2 = await _score_v2_impl(bundle.score_v2)
+                    await bundle.uow.commit()
+                    viral_v2 = dataclasses.asdict(v2)
+                except Exception:
+                    viral_v2 = "failed"
+                    logger.exception("viral-v2 falhou — %s (fase-h mantido)", segment.slug)
+                    await bundle.uow.rollback()
         # R5/C3: só contagens/categorias (a mensagem fica no log, redigida)
         result = score_result(out)
         if web_failed:
             result["web_score"] = "failed"
+        if viral_v2 is not None:
+            result["viral_v2"] = viral_v2
         return result
 
     return await _gather_segments(active, _max_segments_from_env(), _one, "score")
@@ -390,6 +407,8 @@ async def create_app_deps(settings: Settings) -> AppDeps:
         platform_limits=_platform_max_concurrency_from_env(),
         social_platforms=parse_social_platforms(os.getenv("RESEARCH_SOCIAL_PLATFORMS")),
         trends_terms_per_day=_int_env("TRENDS_TERMS_PER_DAY", 16),
+        viral_v2_window_days=_int_env("VIRAL_V2_WINDOW_DAYS", 30),
+        viral_v2_min_population=_int_env("VIRAL_V2_MIN_POPULATION", 5),
         remediation_window_days=_int_env("REMEDIATION_WINDOW_DAYS", 7),
         remediation_limit=_int_env("REMEDIATION_LIMIT", 500),
         remediation_min_gap_hours=_int_env("REMEDIATION_MIN_GAP_HOURS", 3),
