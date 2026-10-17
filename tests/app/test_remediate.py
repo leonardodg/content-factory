@@ -25,6 +25,7 @@ def remediation_deps(
     runs: FakeRuns | None = None,
     health: FakeHealth | None = None,
     limit: int = 500,
+    accepted_language: str | None = None,
 ) -> RemediationDeps:
     """`RemediationDeps` com clock fixo e portas em memória (R7).
 
@@ -40,6 +41,7 @@ def remediation_deps(
         health=health if health is not None else FakeHealth(),
         clock=_clock,
         limit=limit,
+        accepted_language=accepted_language,
     )
 
 
@@ -91,3 +93,50 @@ async def test_cota_da_remedicao_vai_para_a_run() -> None:
     )
     out = await remediate(segment_id=1, deps=deps)
     assert out.quota_used == runs.saved[0].quota_used == 3 * 2  # 3 lotes de 50
+
+
+async def test_alvo_fora_do_idioma_nao_e_remedido() -> None:
+    """R14/17-10: com `accepted_language: pt-BR`, o `pt-PT` sai antes do coletor.
+
+    Mesma regra da coleta: `pt` sem região e idioma não declarado ficam. O
+    descartado não consome cota, não vira métrica e não entra no `found` da run
+    (é `skipped_language` no sub-envelope)."""
+    refresher = FakeRefresher(found="all")
+    repo = FakeRemediationRepo(targets=["v1", "v2", "v3"], languages={"v2": "pt-PT", "v3": "pt"})
+    runs = FakeRuns()
+    deps = remediation_deps(
+        repo, refreshables={"youtube": refresher}, runs=runs, accepted_language="pt-BR"
+    )
+    out = await remediate(segment_id=1, deps=deps)
+    assert (out.targets, out.skipped_language, out.refreshed) == (2, 1, 2)
+    assert [t.platform_video_id for t in refresher.asked] == ["v1", "v3"]
+    assert [t.platform_video_id for t, _, _ in repo.metrics] == ["v1", "v3"]
+    assert runs.saved[0].found == 2
+    assert out.removed == 0
+
+
+async def test_todos_fora_do_idioma_nao_chama_coletor() -> None:
+    """Sem alvo aceito, a remediação não abre run nem gasta cota."""
+    refresher = FakeRefresher()
+    runs = FakeRuns()
+    deps = remediation_deps(
+        FakeRemediationRepo(targets=["v1"], languages={"v1": "pt-PT"}),
+        refreshables={"youtube": refresher},
+        runs=runs,
+        accepted_language="pt-BR",
+    )
+    out = await remediate(segment_id=1, deps=deps)
+    assert out == RemediationOutcome(skipped_language=1)
+    assert refresher.calls == 0 and runs.saved == [] and out.removed == 0
+
+
+async def test_sem_idioma_aceito_nada_e_descartado() -> None:
+    """Segmento sem exigência de idioma: a remediação mantém todos os alvos."""
+    refresher = FakeRefresher()
+    deps = remediation_deps(
+        FakeRemediationRepo(targets=["v1"], languages={"v1": "pt-PT"}),
+        refreshables={"youtube": refresher},
+    )
+    out = await remediate(segment_id=1, deps=deps)
+    assert (out.targets, out.skipped_language) == (1, 0)
+    assert [t.platform_video_id for t in refresher.asked] == ["v1"]

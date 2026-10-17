@@ -737,6 +737,7 @@ def test_collect_envelope_parity_cli_and_worker(
     else:
         assert remediation == {
             "targets": 0,
+            "skipped_language": 0,
             "refreshed": 0,
             "metrics_written": 0,
             "removed": 0,

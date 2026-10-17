@@ -34,6 +34,7 @@ from content_factory.app.score import ScoreDeps
 from content_factory.app.segment_deps import SegmentDepsBundle, SegmentDepsFactory
 from content_factory.config import Settings
 from content_factory.domain.fanout_guard import FanoutGuard
+from content_factory.domain.language import wanted_language
 from content_factory.domain.models import DepthConfig, ResearchCampaign, Segment
 from content_factory.infra.redis_ops import RedisOps
 
@@ -274,6 +275,9 @@ class AppDeps(SegmentDepsFactory):
                     window_days=shared.remediation_window_days,
                     limit=shared.remediation_limit,
                     min_gap_hours=shared.remediation_min_gap_hours,
+                    # R14/17-10: a remediação aplica a MESMA regra de idioma da
+                    # coleta (`language_matches`): o alvo sem evidência fica.
+                    accepted_language=wanted_language(segment.search),
                 ),
             )
 

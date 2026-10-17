@@ -19,7 +19,7 @@ from content_factory.app.research_pipeline import ResearchDeps
 from content_factory.app.score import ScoreDeps, ScoreOutcome
 from content_factory.domain.errors import SegmentNotFound
 from content_factory.domain.fanout_guard import FanoutGuard
-from content_factory.domain.models import DepthConfig, ResearchCampaign, Segment
+from content_factory.domain.models import DepthConfig, ResearchCampaign, SearchConfig, Segment
 from content_factory.infra.queue import worker as w
 from content_factory.infra.ratelimit import RedisRateLimiter, Window
 from tests.stubs import (
@@ -322,7 +322,7 @@ async def test_run_collect_job_remede_apos_coletar(
 
     async def fake_remediate(segment_id: int, deps: object) -> RemediationOutcome:
         order.append("remediate")
-        return RemediationOutcome(targets=2, refreshed=2, metrics_written=2)
+        return RemediationOutcome(targets=2, skipped_language=3, refreshed=2, metrics_written=2)
 
     monkeypatch.setattr(w, "_collect_impl", fake_collect)
     monkeypatch.setattr(w, "_remediate_impl", fake_remediate)
@@ -333,6 +333,7 @@ async def test_run_collect_job_remede_apos_coletar(
     out = await w.run_collect_job({"campaigns_deps": campaigns, "app_deps": app_deps})
     assert out["segments"]["velas-artesanais"]["remediation"] == {
         "targets": 2,
+        "skipped_language": 3,
         "refreshed": 2,
         "metrics_written": 2,
         "removed": 0,
@@ -452,6 +453,7 @@ async def test_run_collect_job_isolates_segment_exception(
         "found": 1,
         "remediation": {
             "targets": 0,
+            "skipped_language": 0,
             "refreshed": 0,
             "metrics_written": 0,
             "removed": 0,
@@ -1188,6 +1190,7 @@ async def test_create_segment_deps_builds_per_segment_bundle(
         platforms=["youtube"],
         keywords=["k1"],
         research=DepthConfig(max_depth=5),
+        search=SearchConfig(relevance_language="pt", accepted_language="pt-BR"),
     )
     seg_b = Segment(id=2, slug="sabonetes", name="Sabonetes", platforms=["youtube"], keywords=["k"])
     async with deps.create_segment_deps(seg_a) as bundle_a:
@@ -1195,10 +1198,13 @@ async def test_create_segment_deps_builds_per_segment_bundle(
         assert bundle_a.score.keywords == ["k1"]
         assert bundle_a.research.guard.admit("x", depth=4) is True
         assert bundle_a.collect.limiter is deps.shared.limiter
+        # R14/17-10: a remediação herda o idioma exigido do segmento
+        assert bundle_a.remediate.accepted_language == "pt-BR"
         await bundle_a.uow.commit()
     async with deps.create_segment_deps(seg_b) as bundle_b:
         assert bundle_b.score.segment.slug == "sabonetes"
         assert bundle_b.research.guard.admit("x", depth=4) is False
+        assert bundle_b.remediate.accepted_language is None
         await bundle_b.uow.commit()
     assert len(created) == 2  # só as UoWs dos segmentos
     assert created[0] is not created[1]

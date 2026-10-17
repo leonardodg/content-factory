@@ -189,6 +189,12 @@ do processo — trocar exige restart do worker):
 | `REMEDIATION_LIMIT` | `500` | teto de alvos por segmento na remedição (R7) — 10 lotes de 50 ids no `videos.list` (YouTube) |
 | `REMEDIATION_MIN_GAP_HOURS` | `3` | não remedir vídeo com medição nas últimas N horas (R7): evita 2 medições com o mesmo `captured_at`; vale do startup |
 
+A remediação aplica a **regra de idioma do segmento** (`accepted_language` da
+busca, R14/17-10): o alvo cujo `videos.language` não casa — ex.: `pt-PT` com
+`pt-BR` — sai antes do coletor e não gasta cota (`skipped_language` no
+envelope). Histórico anterior à regra (a coleta real de 16/10 trouxe 12 de 27 em
+pt-PT) deixa de ser remedido; `pt` sem região e idioma não declarado ficam.
+
 Fixos no código (não são env):
 
 - **Timeout por job** (`infra/queue/worker.py`): collect e research 25 min,

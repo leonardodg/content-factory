@@ -23,6 +23,7 @@ from content_factory.app.ports import (
     RemediationRepository,
 )
 from content_factory.domain.errors import CollectorError
+from content_factory.domain.language import language_matches
 from content_factory.domain.models import (
     CandidateVideo,
     CollectRun,
@@ -51,7 +52,13 @@ def _metrics_of(candidate: CandidateVideo) -> VideoMetrics:
 @dataclass
 class RemediationDeps:
     """Portas da remedição. Limiter e breaker são os mesmos do `CollectDeps`:
-    a remedição e a busca disputam a mesma cota do YouTube."""
+    a remedição e a busca disputam a mesma cota do YouTube.
+
+    `accepted_language` é o idioma exigido do segmento (`accepted_language` ou
+    `relevance_language` da busca): o alvo que não casa (`pt-PT` com `pt-BR`)
+    sai antes do coletor, com a MESMA regra da coleta. Sem exigência (ou sem
+    evidência de idioma), mantém.
+    """
 
     videos: RemediationRepository
     refreshables: dict[str, RefreshableCollector]
@@ -62,13 +69,20 @@ class RemediationDeps:
     window_days: int = 7
     limit: int = 500
     min_gap_hours: int = 3
+    accepted_language: str | None = None
 
 
 @dataclass
 class RemediationOutcome:
-    """Sub-envelope `remediation` da coleta (só `int`: vai direto pro JSON)."""
+    """Sub-envelope `remediation` da coleta (só `int`: vai direto pro JSON).
+
+    `targets` é o que a remediação TENTOU remedir (já sem os descartados pelo
+    idioma); `skipped_language` conta os descartados — os dois somam os alvos
+    que o repositório devolveu.
+    """
 
     targets: int = 0
+    skipped_language: int = 0
     refreshed: int = 0
     metrics_written: int = 0
     removed: int = 0
@@ -78,10 +92,14 @@ class RemediationOutcome:
 
 async def remediate(segment_id: int, deps: RemediationDeps) -> RemediationOutcome:
     platforms = sorted(deps.refreshables)
-    targets = await deps.videos.remediation_targets(
+    found = await deps.videos.remediation_targets(
         segment_id, deps.window_days, deps.limit, deps.min_gap_hours, platforms
     )
-    out = RemediationOutcome(targets=len(targets))
+    # R14/17-10: o público é o Brasil. O vídeo já foi descoberto pela busca
+    # filtrada, mas linhas antigas (pt-PT) seguem no segmento; a remediação
+    # aplica a mesma regra antes de gastar cota.
+    targets = [t for t in found if language_matches(t.language, deps.accepted_language)]
+    out = RemediationOutcome(targets=len(targets), skipped_language=len(found) - len(targets))
     by_platform: dict[str, list[RemediationTarget]] = {}
     for t in targets:
         by_platform.setdefault(t.platform, []).append(t)

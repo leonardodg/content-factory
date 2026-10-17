@@ -52,12 +52,20 @@ O `collect_job` remede os vídeos já conhecidos do segmento logo depois do
 
 ```json
 {"ok": true, "partial": false, "found": 13,
- "remediation": {"targets": 24, "refreshed": 24, "metrics_written": 24,
-                 "removed": 1, "failed_platforms": 0, "quota_used": 2}}
+ "remediation": {"targets": 15, "skipped_language": 12, "refreshed": 15,
+                 "metrics_written": 15, "removed": 1, "failed_platforms": 0,
+                 "quota_used": 2}}
 ```
 
-- `targets`: alvos da janela (`REMEDIATION_WINDOW_DAYS`), sem medição nas
-  últimas `REMEDIATION_MIN_GAP_HOURS` e não marcados como removidos;
+- `targets`: alvos que a remediação TENTOU remedir — janela
+  (`REMEDIATION_WINDOW_DAYS`), sem medição nas últimas
+  `REMEDIATION_MIN_GAP_HOURS`, não marcados como removidos e **com o idioma do
+  segmento**;
+- `skipped_language`: alvos descartados pela regra de idioma (R14/17-10, a
+  MESMA `language_matches` da coleta): com `accepted_language: pt-BR`, o vídeo
+  declarado `pt-PT` sai (os 12 da coleta real de 16/10) e não gasta cota.
+  `pt` sem região e idioma não declarado ficam; `targets + skipped_language` =
+  alvos devolvidos pelo repositório;
 - `metrics_written`: linhas gravadas em `video_metrics`;
 - `removed`: vídeos que a plataforma não devolveu (removido/privado) e foram
   marcados em `videos.removed_at`;

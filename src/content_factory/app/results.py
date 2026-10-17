@@ -44,6 +44,7 @@ def remediation_result(out: RemediationOutcome) -> dict[str, int]:
     """Sub-envelope `remediation` da coleta (R7) — só contagens, chaves estáveis."""
     return {
         "targets": out.targets,
+        "skipped_language": out.skipped_language,
         "refreshed": out.refreshed,
         "metrics_written": out.metrics_written,
         "removed": out.removed,

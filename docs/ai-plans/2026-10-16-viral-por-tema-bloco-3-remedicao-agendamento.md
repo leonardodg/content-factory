@@ -668,6 +668,36 @@ WHERE v.removed_at IS NOT NULL AND vm.captured_at > v.removed_at;  -- esperado: 
 
 ---
 
+### Task 9: Idioma na remediação (R14/17-10) — *acrescentada após o merge da `main`*
+
+Decisão do usuário (17/10, revisão do PR #52): o público é o Brasil (mesma
+decisão que restringiu a coleta a `pt-BR` na `main`, `f6d2353`) e a remediação
+**herda a regra** — não remedir vídeo cujo idioma declarado não casa. Sem isso,
+os 12 vídeos `pt-PT` da coleta real de 16/10 (27 → 15 com o filtro da busca)
+seguiriam sendo remedidos por até 7 dias, gastando cota para alimentar uma
+métrica que a relevância do Bloco 5 descarta.
+
+- [x] **Step 1: Regra única no domínio** — `domain/language.py` com
+  `language_matches` (movida do `youtube.py`, que passa a importá-la como
+  `_language_matches` — o nome segue importável para os Blocos 5/6) e
+  `wanted_language(search)` = `accepted_language or relevance_language`.
+  Testes: `tests/domain/test_language.py`.
+- [x] **Step 2: Alvo carrega o idioma** — `RemediationTarget.language` (`videos.language`)
+  no `SELECT` do `remediation_targets`. Teste de integração em
+  `tests/infra/test_repositories.py`.
+- [x] **Step 3: Filtro no use-case** — `RemediationDeps.accepted_language`
+  (montado por segmento na composition); `remediate` descarta o alvo que não
+  casa **antes** do coletor (sem cota, sem `found`, sem métrica) e conta em
+  `RemediationOutcome.skipped_language`. Testes em `tests/app/test_remediate.py`
+  (`pt-PT` sai, `pt`/sem idioma ficam, sem exigência nada é descartado).
+- [x] **Step 4: Envelope** — `skipped_language` no sub-envelope
+  (`results.remediation_result`) + `contrato-envelopes.md`; `targets` passa a
+  ser o que a remediação TENTOU remedir (`targets + skipped_language` = alvos
+  do repositório). Wiring coberto por
+  `tests/infra/queue/test_worker.py::test_create_segment_deps_builds_per_segment_bundle`.
+
+---
+
 ## Auto-revisão da spec (R7/R12)
 
 - **R7** ✓ alvos últimos 7 dias com teto 500, só YouTube e sem medição nas últimas 3 h (Task 5); contrato de erro/cota/breaker igual ao da coleta (Task 6); `videos.list` em lotes de 50 (Task 4), `video_metrics` por remedição (Tasks 5-6), removido/privado marcado (`removed_at`) e fora dos alvos (Tasks 2/5). Instagram segue mídia própria e TikTok fora (porta separada, `refreshables` só com YouTube).
@@ -678,11 +708,11 @@ WHERE v.removed_at IS NOT NULL AND vm.captured_at > v.removed_at;  -- esperado: 
 
 ## Resultado (execução do bloco)
 
-Tasks 1–7 implementadas com TDD (teste falhando → implementação → verde) e
+Tasks 1–9 implementadas com TDD (teste falhando → implementação → verde) e
 commit por task. Migração `0013` validada do zero: `upgrade head`, `downgrade
 0012` e `upgrade head` de novo numa base vazia, `alembic check` sem drift.
 `make gates` verde (test/lint/typecheck/security/docs/privacy) e
-`pytest -m integration` com Postgres+Redis descartáveis: 62 passed.
+`pytest -m integration` com Postgres+Redis descartáveis: 63 passed.
 
 ### Desvios do plano (e por quê)
 
@@ -720,6 +750,13 @@ commit por task. Migração `0013` validada do zero: `upgrade head`, `downgrade
    `operacao.md` + `app.env.example` + `defaults.env`; o sub-envelope em
    `contrato-envelopes.md`; os diagramas do ciclo ganham o cron 4×/dia e a
    re-medição.
+8. **Task 9 (idioma) muda o contrato do sub-envelope**: a revisão de 17/10
+   decidiu que a remediação herda a regra de idioma da coleta, então o
+   sub-envelope ganha `skipped_language` e `targets` passa a ser "alvos
+   aceitos" (`targets + skipped_language` = o que o repositório devolveu) — o
+   plano (Task 7/8) previa `targets` como os alvos crus. TDD do Task 9 cobre os
+   dois valores; o aceite do Task 8 (`≥ 90% dos vídeos com medição nova`) passa
+   a usar o denominador correto, sem pt-PT.
 
 ### Verificação local com dados reais (pré-deploy)
 
@@ -736,9 +773,33 @@ removido (fora), 1 nunca medido (dentro):
   `removed_at`;
 - 2ª remedição imediata: `targets=0` (gap de 3 h), sem run nova e sem cota.
 
+**Regra de idioma (Task 9)**, mesmo E2E, 2 segmentos no banco descartável
+(`cfidioma`), transporte falso devolvendo todos os alvos:
+
+- segmento com `search.accepted_language: pt-BR` e 4 vídeos (`pt-BR`, `pt-PT`,
+  sem idioma, `en`): `targets=2, skipped_language=2, refreshed=2,
+  metrics_written=2, quota_used=2`; `remediate:youtube` `ok` com `found=2`;
+- no banco, só `a-br` e `a-none` ganharam medição — **nenhuma** linha para
+  `a-pt` (`pt-PT`) nem `a-en` (`en`), que nem entraram no `videos.list`;
+- segmento sem `SearchConfig` com `b-pt` (`pt-PT`): `targets=1,
+  skipped_language=0` e medição gravada — o fallback "sem exigência, mantém"
+  segue igual ao Bloco 3.
+
 ### Pendente (pós-deploy, com dados de produção)
 
 SQL do Task 8 após 2 coletas (≈ 12 h): gap < 1 h = 0, `remediate:*` com cota e
 status, ≥ 90% dos vídeos YouTube com medição nova e `velocity` não nula; R12
 com 4 runs `collect`/`score` no dia e `ticks.wall_ms_max` bem abaixo de 6 h;
 `removed_at > 0` e nenhuma medição posterior.
+
+Idioma (Task 9) depois do deploy — confirma com os dados reais que o histórico
+em `pt-PT` parou de ser remedido:
+
+```sql
+-- descartes por idioma na última janela (esperado > 0 enquanto houver pt-PT recente)
+SELECT count(*) FROM video_metrics;  -- baseline antes
+-- nenhum alvo pt-PT ganhou medição DEPOIS do deploy (language é o declarado do vídeo)
+SELECT count(*) FROM video_metrics vm JOIN videos v ON v.id = vm.video_id
+WHERE v.language = 'pt-PT' AND vm.captured_at > now() - interval '1 day';
+-- e o sub-envelope do collect no dia deve trazer skipped_language > 0
+```

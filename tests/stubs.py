@@ -6,7 +6,7 @@ estrutura dos testes. Sem Redis, sem banco, sem rede.
 """
 
 import asyncio
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from datetime import date, datetime
 from math import ceil
 from typing import Any, ClassVar, Literal
@@ -220,9 +220,15 @@ class FakeRemediationRepo(RemediationRepository):
     o id de vídeo ao alvo (v1 → 1).
     """
 
-    def __init__(self, targets: Sequence[str], platform: str = "youtube") -> None:
+    def __init__(
+        self,
+        targets: Sequence[str],
+        platform: str = "youtube",
+        languages: Mapping[str, str | None] | None = None,
+    ) -> None:
         self._targets = list(targets)
         self._platform = platform
+        self._languages = dict(languages or {})
         self.asked: list[tuple[int, int, int, int, list[str]]] = []
         self.metrics: list[tuple[RemediationTarget, VideoMetrics, int | None]] = []
         self.removed: list[int] = []
@@ -237,7 +243,12 @@ class FakeRemediationRepo(RemediationRepository):
     ) -> list[RemediationTarget]:
         self.asked.append((segment_id, since_days, limit, min_gap_hours, list(platforms)))
         return [
-            RemediationTarget(video_id=i + 1, platform=self._platform, platform_video_id=v)
+            RemediationTarget(
+                video_id=i + 1,
+                platform=self._platform,
+                platform_video_id=v,
+                language=self._languages.get(v),
+            )
             for i, v in enumerate(self._targets)
         ]
 
