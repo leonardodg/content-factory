@@ -9,10 +9,12 @@ from content_factory.domain.kw_rank import SuggestHit
 from content_factory.domain.models import (
     CandidateVideo,
     CollectRun,
+    Discovery,
     KeywordSignal,
     MetricCoverage,
     ResearchCampaign,
     ScoreResult,
+    SearchQuery,
     Segment,
     SegmentConfig,
     SegmentTerm,
@@ -53,6 +55,20 @@ class KeywordExpander(Protocol):
     platform: ClassVar[str]
 
     async def expand(self, seeds: list[str], depth: int) -> list[SuggestHit]: ...
+
+
+class TermSearcher(Protocol):
+    """Busca por UM termo, com atribuição (qual termo/posição trouxe o vídeo) — R6.
+
+    Capacidade separada do `Collector`: Instagram/TikTok/web não precisam
+    implementá-la. Hoje só o YouTube.
+    """
+
+    platform: ClassVar[str]
+
+    async def search_term(
+        self, segment: SegmentConfig, query: SearchQuery, limit: int
+    ) -> list[Discovery]: ...
 
 
 class TrendsProvider(Protocol):
