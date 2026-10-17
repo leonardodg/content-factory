@@ -52,13 +52,13 @@ Cota estimada do YouTube: ~5.100 de 10.000 unidades por dia.
    Nenhum tem campanha ativa (os jobs não os tocam), mas poluem as consultas.
    Proposta: apagar depois do backup, num passo próprio.
 
-## Fase A — passos
+## Fase A — passos (executada em 2026-10-17; início 07:17 BRT)
 
 Todos os comandos rodam na árvore principal do repositório.
 
 ```bash
 DC="docker compose -f .devcontainer/docker-compose.yml -f .devcontainer/docker-compose.multi-segmento.yml --profile worker-multi"
-RUN="$DC run --rm --no-deps worker sh -c"
+RUN="$DC run --rm --no-deps -T worker sh -c"   # -T: sem TTY a saída se perde
 SECRETS='set -a; . /run/secrets/app_secrets; set +a;'
 ```
 
@@ -79,9 +79,13 @@ SECRETS='set -a; . /run/secrets/app_secrets; set +a;'
    ```bash
    $DC build worker
    ```
-4. **Migrações 0010 → 0014:**
+4. **Migrações 0010 → 0015** — a imagem do worker NÃO leva `alembic.ini` nem
+   `alembic/` (o Dockerfile copia só `src/`, `README.md` e `segments/`).
+   Rodar da árvore principal, na mesma `main` do deploy, contra o Postgres de
+   produção pela porta local:
    ```bash
-   $RUN "$SECRETS uv run alembic upgrade head && uv run alembic current"   # 0014 (head)
+   DATABASE_URL='postgresql+psycopg://contentfactory:<senha>@127.0.0.1:5432/contentfactory' \
+     .venv/bin/alembic upgrade head && .venv/bin/alembic check
    ```
 5. **Segmentos** (sobe `probe_terms`, `anchor_terms`, `blocked_terms`,
    `accepted_language`):
