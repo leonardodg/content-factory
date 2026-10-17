@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import date, datetime
 from typing import Any, Literal
 
 from pydantic import BaseModel, Field
@@ -47,6 +47,9 @@ class SegmentConfig(BaseModel):
     audience: list[str] = Field(default_factory=list)  # vai p/ segments.config JSONB
     research: DepthConfig | None = None  # guard-rail do pipeline de pesquisa
     search: SearchConfig | None = None  # idioma/região da busca (YAML)
+    # R3: termo-âncora da comparação do Google Trends (opcional no YAML). Sem
+    # ele, o research usa `keywords[0]`; a âncora é a MESMA em todos os lotes.
+    trends_anchor: str | None = None
 
 
 class Segment(SegmentConfig):
@@ -236,6 +239,23 @@ class SegmentTerm(BaseModel):
     exclude_reason: str | None = None
     first_seen_at: datetime | None = None
     last_seen_at: datetime | None = None
+    rules_version: str = ""
+
+
+class TermTrendDay(BaseModel):
+    """R3: `trend_score` de um termo num dia, já normalizado pela âncora.
+
+    O valor corrente fica em `segment_terms.trend_score`; este é o histórico
+    (um por dia — refazer o research no mesmo dia atualiza). `None` em
+    `trend_score` = sem âncora comparável naquele dia (não é zero).
+    """
+
+    term: str
+    day: date
+    trend_score: float | None = None
+    interest_mean: float | None = None
+    slope: float | None = None
+    anchor: str = ""
     rules_version: str = ""
 
 

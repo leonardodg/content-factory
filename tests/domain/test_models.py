@@ -1,4 +1,4 @@
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 
 from content_factory.domain.models import (
     CandidateVideo,
@@ -10,6 +10,7 @@ from content_factory.domain.models import (
     SearchQueryRun,
     SegmentConfig,
     SegmentTerm,
+    TermTrendDay,
     TrendPoint,
 )
 
@@ -49,6 +50,47 @@ def test_segment_config_research_is_optional() -> None:
         research=DepthConfig(max_depth=3),
     )
     assert seg2.research is not None and seg2.research.max_depth == 3
+
+
+def test_segment_config_trends_anchor_opcional() -> None:
+    """R3: a âncora do Trends vem do YAML; sem ela, o research usa a 1ª keyword."""
+    seg = SegmentConfig(slug="candles", name="Velas", platforms=["web"], keywords=["vela"])
+    assert seg.trends_anchor is None
+    seg2 = SegmentConfig(
+        slug="candles",
+        name="Velas",
+        platforms=["web"],
+        keywords=["vela"],
+        trends_anchor="vela aromatica",
+    )
+    assert seg2.trends_anchor == "vela aromatica"
+
+
+def test_term_trend_day_fields() -> None:
+    """R3: histórico por termo e dia — `segment_id` é do repositório, não do DTO."""
+    d = TermTrendDay(
+        term="vela aromatica",
+        day=date(2026, 10, 20),
+        trend_score=0.5,
+        interest_mean=0.5,
+        slope=0.0,
+        anchor="vela",
+        rules_version="trends-anchor-v1",
+    )
+    assert d.trend_score == 0.5
+    assert d.anchor == "vela"
+    assert (
+        TermTrendDay(
+            term="vela aromatica",
+            day=date(2026, 10, 20),
+            trend_score=None,
+            interest_mean=None,
+            slope=None,
+            anchor="vela",
+            rules_version="trends-anchor-v1",
+        ).trend_score
+        is None
+    )
 
 
 def test_research_campaign_defaults() -> None:
