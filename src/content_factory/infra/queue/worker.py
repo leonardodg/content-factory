@@ -57,7 +57,6 @@ TIMEZONE = ZoneInfo("America/Sao_Paulo")
 RESEARCH_HOURS = {7}
 RESEARCH_MINUTE = 0
 COLLECT_MINUTE = 0
-SCORE_HOURS = {8, 21}
 SCORE_MINUTE = 30
 
 
@@ -288,7 +287,13 @@ def _now() -> datetime:
 
 
 def _collect_hours() -> set[int]:
-    return parse_cron_hours(os.getenv("COLLECT_CRON_HOURS", "08,20"))
+    return parse_cron_hours(os.getenv("COLLECT_CRON_HOURS", "02,08,14,20"))
+
+
+def _score_hours() -> set[int]:
+    """R12: score acompanha o collect por padrão (minuto 30, R7 dentro da coleta)."""
+    raw = os.getenv("SCORE_CRON_HOURS")
+    return parse_cron_hours(raw) if raw is not None else _collect_hours()
 
 
 def catchup_schedules() -> list[CronSchedule]:
@@ -300,7 +305,7 @@ def catchup_schedules() -> list[CronSchedule]:
     return [
         CronSchedule("research", _times(RESEARCH_HOURS, RESEARCH_MINUTE)),
         CronSchedule("collect", _times(_collect_hours(), COLLECT_MINUTE)),
-        CronSchedule("score", _times(SCORE_HOURS, SCORE_MINUTE)),
+        CronSchedule("score", _times(_score_hours(), SCORE_MINUTE)),
     ]
 
 
@@ -433,7 +438,7 @@ class WorkerSettings:
         cron(
             run_score_job,
             name="score_job",
-            hour=SCORE_HOURS,
+            hour=_score_hours(),
             minute=SCORE_MINUTE,
             unique=True,
             timeout=SCORE_JOB_TIMEOUT_S,
@@ -446,7 +451,7 @@ class WorkerSettings:
     # anterior existia SÓ porque a sessão era compartilhada (quebraria com
     # IllegalStateChangeError sob o default max_jobs=10 do arq).
     max_jobs: ClassVar[int] = 3
-    # cron em horário local do projeto (07:00 research, 08:00/20:00 collect BRT)
+    # cron em horário local do projeto (07:00 research; collect/score 4x/dia por env, R12)
     timezone: ClassVar[tzinfo] = TIMEZONE
     on_startup: ClassVar[StartupShutdown] = startup
     # SEM on_job_end (Task 11, decisão REMOVER): o job_end antigo fazia
