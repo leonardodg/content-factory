@@ -109,6 +109,13 @@ def build_ops_report(
     coverage_window: Mapping[str, MetricCoverage] | None = None,
     web_discards: Mapping[str, int] | None = None,
     tick_gap: timedelta = TICK_GAP,
+    search_yield: Mapping[str, Mapping[str, int]] | None = None,
+    remediation_quota: int = 0,
+    discoveries_by_origin: Mapping[str, int] | None = None,
+    remediation: Mapping[str, int] | None = None,
+    pool: Mapping[str, Mapping[str, int]] | None = None,
+    filter_discards: Mapping[str, int] | None = None,
+    language: Mapping[str, Mapping[str, int]] | None = None,
 ) -> dict[str, Any]:
     """Relatório operacional de um segmento na janela `[since, until]`.
 
@@ -139,4 +146,36 @@ def build_ops_report(
             "window": _coverage(coverage_window or {}),
         },
         "scored": scored,
+        # Bloco 6 (R13): teste viral-por-tema. Cota e rendimento vêm do log de
+        # buscas (`search_queries`): busca vazia também gasta cota e mede o
+        # rendimento da origem; a cota da remedição soma no total.
+        "search_quota": {
+            "by_origin": {
+                key: {**c, "videos_per_search": _ratio(c.get("kept", 0), c.get("searches", 0))}
+                for key, c in sorted((search_yield or {}).items())
+            },
+            "searches_total": sum(c.get("searches", 0) for c in (search_yield or {}).values()),
+            "quota_total": sum(c.get("quota", 0) for c in (search_yield or {}).values())
+            + remediation_quota,
+            "remediation_quota": remediation_quota,
+        },
+        "discovery_origins": dict(sorted((discoveries_by_origin or {}).items())),
+        "remediation": {
+            "targets": (remediation or {}).get("targets", 0),
+            "remeasured": (remediation or {}).get("remeasured", 0),
+            "removed": (remediation or {}).get("removed", 0),
+            "coverage": _ratio(
+                (remediation or {}).get("remeasured", 0), (remediation or {}).get("targets", 0)
+            ),
+        },
+        "term_pool": {k: dict(v) for k, v in sorted((pool or {}).items())},
+        "filter_discards": dict(sorted((filter_discards or {}).items())),
+        # R14: cobertura de idioma declarado por plataforma
+        "language": {
+            plat: {
+                **counts,
+                "rate": _ratio(counts.get("with_language", 0), counts.get("videos", 0)),
+            }
+            for plat, counts in sorted((language or {}).items())
+        },
     }
