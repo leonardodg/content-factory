@@ -20,7 +20,7 @@ from tests.stubs import (
 from content_factory.app.call_counters import record_gate_hit
 from content_factory.app.ports import KeywordSignalRepository, SocialDiscoverer
 from content_factory.app.research_pipeline import ResearchDeps, ResearchOutcome, run_research_cycle
-from content_factory.domain.errors import CollectorError
+from content_factory.domain.errors import CollectorError, NetworkError
 from content_factory.domain.fanout_guard import FanoutGuard
 from content_factory.domain.kw_rank import SuggestHit
 from content_factory.domain.models import (
@@ -1327,3 +1327,25 @@ async def test_research_so_manda_ao_trends_e_as_redes_termos_aceitos() -> None:
     assert "vela de soja" in requested
     social = cast("_FakeSocial", deps.socials["instagram"])
     assert all("candle for beginners" not in call for call in social.calls)
+
+
+@pytest.mark.asyncio
+async def test_research_marca_not_seen_os_suggest_que_nao_vieram_hoje() -> None:
+    """Revisão QA: sem isso o termo de ontem fica ativo para sempre com o
+    kw_rank antigo e a vaga `suggest` (Bloco 4) o escolhe indefinidamente."""
+    deps = research_deps(
+        suggest_hits=[SuggestHit("vela de soja", "velas", 1)], anchor_terms=["vela"]
+    )
+    await run_research_cycle("velas-artesanais", DepthConfig(), deps)
+    terms = cast("FakeSegmentTerms", deps.terms)
+    assert terms.status_calls == [(1, "suggest", ["vela de soja"], "not_seen")]
+
+
+@pytest.mark.asyncio
+async def test_research_nao_marca_not_seen_quando_o_suggest_falha() -> None:
+    """Suggest fora do ar devolve lista vazia: marcar `not_seen` apagaria o pool."""
+    deps = research_deps(suggest_hits=[], anchor_terms=["vela"])
+    deps.web = _BoomWeb(NetworkError("web_suggest", "fora do ar"))
+    out = await run_research_cycle("velas-artesanais", DepthConfig(), deps)
+    assert out.counts["web_failed"] == 1
+    assert cast("FakeSegmentTerms", deps.terms).status_calls == []

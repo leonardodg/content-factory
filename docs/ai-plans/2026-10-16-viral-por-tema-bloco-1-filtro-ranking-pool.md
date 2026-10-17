@@ -196,6 +196,9 @@ REASON_ORDER: tuple[str, ...] = ("blocked", "lang", "no_anchor")
 # Marcadores de OUTRA língua — palavras que não existem (normalizadas) em PT.
 EN_MARKERS = frozenset(
     {"for", "the", "and", "with", "of", "how", "to", "make", "making", "diy", "best", "easy"}
+    # substantivos EN do nicho (revisão QA do PR #50): inglês sem palavra-função
+    # ("soy wax candles") caía como no_anchor — descarte certo, motivo errado
+    | {"candle", "candles", "wick", "wax", "soap", "soaps", "resin", "handmade", "homemade"}
 )
 ES_MARKERS = frozenset(
     {
@@ -537,17 +540,17 @@ def test_segmentos_pt_tem_ancoras_e_bloqueios() -> None:
 `segments/velas-artesanais.yaml`:
 ```yaml
 anchor_terms: [vela, velas, pavio, parafina, cera]
-blocked_terms: [tendencia alcista, bajista, grafico, ignicao, motor, martillo]
+blocked_terms: [tendencia alcista, bajista, grafico, ignicao, motor, martillo, carro, boticario, granado]
 ```
 `segments/sabonetes-artesanais.yaml`:
 ```yaml
 anchor_terms: [sabonete, sabonetes, saboaria, glicerinada, saponificacao]
-blocked_terms: [natura, phebo, dove, lux, protex, granado]
+blocked_terms: [natura, phebo, dove, lux, protex, granado, boticario, marcas]
 ```
 `segments/resina-artesanal.yaml`:
 ```yaml
 anchor_terms: [resina, epoxi, epoxy]
-blocked_terms: [odontologica, dente, dentes, clareia, dental, ortodontia, mdf]
+blocked_terms: [odontologica, odontologia, dente, dentes, clareia, dental, ortodontia, mdf, composta, piso, 3d]
 ```
 
 > Âncoras de resina sem `molde`/`pigmento`/`encapsulada`: são genéricas (`molde de silicone para bolo` passaria). `mdf` e `clareia` vêm do QA real de 16/10 (consultas fora do nicho no sorteio cego). Os YAMLs já têm `probe_terms` (F1 web) — acrescentar, não substituir.
@@ -1134,7 +1137,7 @@ FROM keyword_signals WHERE source = 'web_suggest';
 
 - [ ] **Step 3: Aceite de R1 (amostra real do dia seguinte)**
 
-Checar no pool: ≤1 em 13 termos fora do nicho/idioma por segmento (amostra cega de 13 termos ativos `suggest` por segmento, sorteio com seed fixa); e o inverso — descartes `lang`/`no_anchor` revisados à mão: PT do nicho descartado é falso negativo e também conta. Se falhar, **reportar** com os termos (não afrouxar nem apertar o filtro sem nova versão).
+**Varredura completa** (revisão QA do PR #50 — a amostra de 13 não pegou marcas e outros sentidos): listar TODOS os termos `suggest` ativos por segmento e procurar marcas, outros sentidos (dental, piso, impressão 3D, ignição) e EN/ES; cada achado vira bloqueio no YAML + caso literal em `tests/app/test_segment.py`. Além disso, checar no pool: ≤1 em 13 termos fora do nicho/idioma por segmento (amostra cega de 13 termos ativos `suggest` por segmento, sorteio com seed fixa); e o inverso — descartes `lang`/`no_anchor` revisados à mão: PT do nicho descartado é falso negativo e também conta. Se falhar, **reportar** com os termos (não afrouxar nem apertar o filtro sem nova versão).
 
 - [ ] **Step 4: Aceite de R4**
 

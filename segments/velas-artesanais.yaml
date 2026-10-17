@@ -30,7 +30,7 @@ probe_terms:
   - velas
   - pavio
 anchor_terms: [vela, velas, pavio, parafina, cera]
-blocked_terms: [tendencia alcista, bajista, grafico, ignicao, motor, martillo]
+blocked_terms: [tendencia alcista, bajista, grafico, ignicao, motor, martillo, carro, boticario, granado]
 subnichos:
   # metadado puro (não consumido pelo pipeline) — marca quais keywords
   # acima são do grupo en, pra separar na análise pós-semana sem misturar

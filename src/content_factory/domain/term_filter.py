@@ -26,6 +26,9 @@ REASON_ORDER: tuple[str, ...] = ("blocked", "lang", "no_anchor")
 # Marcadores de OUTRA língua — palavras que não existem (normalizadas) em PT.
 EN_MARKERS = frozenset(
     {"for", "the", "and", "with", "of", "how", "to", "make", "making", "diy", "best", "easy"}
+    # substantivos EN do nicho (revisão QA do PR #50): inglês sem palavra-função
+    # ("soy wax candles") caía como no_anchor — descarte certo, motivo errado
+    | {"candle", "candles", "wick", "wax", "soap", "soaps", "resin", "handmade", "homemade"}
 )
 ES_MARKERS = frozenset(
     {

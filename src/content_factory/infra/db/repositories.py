@@ -711,8 +711,15 @@ class SegmentTermRepositoryImpl(SegmentTermRepository):
                 index_elements=["segment_id", "term", "origin"],
                 set_={
                     "kw_rank": stmt.excluded.kw_rank,
-                    "trend_score": stmt.excluded.trend_score,
-                    "engagement_score": stmt.excluded.engagement_score,
+                    # trend_score (Bloco 4) e engagement_score (Bloco 5) vêm de
+                    # outros jobs: o research reupserta sem eles e NÃO pode
+                    # apagá-los (revisão QA do PR #50). Valor novo não nulo vence.
+                    "trend_score": func.coalesce(
+                        stmt.excluded.trend_score, SegmentTermRow.trend_score
+                    ),
+                    "engagement_score": func.coalesce(
+                        stmt.excluded.engagement_score, SegmentTermRow.engagement_score
+                    ),
                     "status": stmt.excluded.status,
                     "exclude_reason": stmt.excluded.exclude_reason,
                     "last_seen_at": now,

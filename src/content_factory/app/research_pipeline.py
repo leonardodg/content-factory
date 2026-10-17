@@ -299,6 +299,14 @@ async def run_research_cycle(
             for k in segment.keywords
         ]
         await deps.terms.upsert_many(segment.id, terms)
+        # Termo `suggest` que não veio hoje sai do pool ativo (volta sozinho se
+        # reaparecer: o upsert reativa). Sem isso o termo de ontem ficava ativo
+        # para sempre com o kw_rank antigo (revisão QA do PR #50). Suggest que
+        # FALHOU devolve lista vazia: aí o pool fica como está.
+        if not web_failed:
+            await deps.terms.set_status(
+                segment.id, "suggest", [s.keyword for s in web_signals], "not_seen"
+            )
         counts["terms_active"] = len(web_signals) + len(segment.keywords)
         counts["terms_excluded"] = len(rejected)
         for reason in ("blocked", "lang", "no_anchor"):

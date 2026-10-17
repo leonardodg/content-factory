@@ -330,6 +330,7 @@ class FakeSegmentTerms(SegmentTermRepository):
 
     def __init__(self) -> None:
         self.saved: list[SegmentTerm] = []
+        self.status_calls: list[tuple[int, str, list[str], str]] = []
 
     async def upsert_many(self, segment_id: int, terms: Sequence[SegmentTerm]) -> int:
         self.saved.extend(terms)
@@ -358,7 +359,7 @@ class FakeSegmentTerms(SegmentTermRepository):
     async def set_status(
         self, segment_id: int, origin: str, keep: Sequence[str], reason: str
     ) -> int:
-        _ = segment_id, origin, keep, reason
+        self.status_calls.append((segment_id, origin, list(keep), reason))
         return 0
 
 
