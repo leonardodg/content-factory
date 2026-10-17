@@ -121,4 +121,20 @@ VIRAL_V2_ENABLED=1   # só a partir do deploy da Fase B (adendo com a data)
 
 ## Adendos
 
-(nenhum até o início do teste)
+### 2026-10-17 — início da Fase A
+
+- **Início do teste:** 2026-10-17 07:17 BRT (10:17:49 UTC), com a subida do
+  worker `cf-worker-multi-segmento` sobre a `main` em `c29dcd5` (blocos 1–6;
+  migrações até `0015`).
+- **Corte:** início + 96 h = **2026-10-21 07:17 BRT (10:17:49 UTC)**.
+- **Campanhas do teste:** 160 (velas, segmento 856), 161 (sabonetes, 857) e
+  162 (resina, 858), abertas por 1 semana e encerradas no D+4. As campanhas
+  155–157 do teste antigo foram encerradas antes.
+- **Configuração:** a do compose versionado (`COLLECT_PLATFORMS=youtube,web`,
+  janela de busca de 7 dias mantida, `VIRAL_V2_ENABLED=0` até a Fase B).
+- **Decisões do usuário (17/10):** coleta YouTube + web; manter a janela de 7
+  dias da busca; limpar do banco os 213 segmentos de teste (feito antes do
+  início, com backup).
+- **Primeiro research (catch-up do startup):** pool com 112–170 termos
+  `suggest` ativos por segmento; Trends com 10 de 12 lotes ok (2 com 429,
+  isolados por lote) e 12/16/12 termos com `trend_score`.
