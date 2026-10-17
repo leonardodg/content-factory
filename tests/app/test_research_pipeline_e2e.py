@@ -96,7 +96,10 @@ def _tiktok_with_stub() -> Any:
     payload: list[dict[str, Any]] = json.loads(fixture)
 
     class _StubSearch:
-        def videos(self, query: str, count: int = 30, **kw: object) -> Any:
+        # interface da TikTokApi v7 (`search.videos` da v6 não existe mais)
+        def search_type(
+            self, search_term: str, obj_type: str, count: int = 10, **kw: object
+        ) -> Any:
             async def _run() -> list[dict[str, Any]]:
                 return payload
 

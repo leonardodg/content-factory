@@ -87,3 +87,14 @@ def test_smoke_script_pipes_probe_into_container() -> None:
     # `uv run python`: o python do sistema nao enxerga o content_factory
     assert '"$IMAGE" run python -' in script
     assert "check_worker_segments.py" in script
+
+
+def test_chromium_do_worker_e_o_da_versao_travada_do_playwright() -> None:
+    """QA 17/10: `uv pip install --system playwright` instalava o Playwright
+    MAIS RECENTE e baixava o Chromium dele (1248), mas o worker roda o
+    Playwright do `uv.lock` (1.63.0), que procura o 1243 — o TikTok nunca
+    abria o navegador. O navegador tem de vir do Playwright do venv."""
+    stage = _stage(DOCKERFILE.read_text(encoding="utf-8"), "worker")
+    worker = "\n".join(ln for ln in stage.splitlines() if not ln.lstrip().startswith("#"))
+    assert "pip install --system playwright" not in worker
+    assert "/app/.venv/bin/playwright install" in worker

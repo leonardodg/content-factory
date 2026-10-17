@@ -16,7 +16,11 @@ USER appuser
 FROM dev AS worker
 USER root
 ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
-RUN uv pip install --system playwright && playwright install --with-deps chromium \
+# Navegador do Playwright do VENV (versão travada no uv.lock). Antes:
+# `uv pip install --system playwright` instalava o Playwright mais recente e
+# baixava o Chromium dele, que não batia com o do venv — o TikTok nunca abria
+# o navegador (QA 17/10; guarda em tests/test_worker_image.py).
+RUN /app/.venv/bin/playwright install --with-deps chromium \
     && chmod -R a+rX /ms-playwright
 # worker NÃO tem bind-mount: o código precisa estar na imagem (target worker);
 # README.md porque o hatchling valida o build do projeto a partir dele.
