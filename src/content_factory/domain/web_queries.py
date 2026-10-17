@@ -14,15 +14,16 @@ from typing import cast
 
 from content_factory.domain.text import contains_phrase, normalize, word_tokens
 
-INTENT_LEXICON_VERSION = "intent-v3"
-QUERY_FILTER_VERSION = "filter-v1"
+INTENT_LEXICON_VERSION = "intent-v4"
+QUERY_FILTER_VERSION = "filter-v2"
 QUERY_PROTOCOL_VERSION = "q1"
 QUERY_SEED = 20261017
 WEB_QUERIES_PER_RUN = 3
 NO_INTENT = "sem_intencao"
 
 # Ordem documentada de precedência: frase que casa mais de uma classe vai
-# para a PRIMEIRA nesta ordem.
+# para a PRIMEIRA nesta ordem — entre os marcadores ESPECÍFICOS. Os genéricos
+# (`GENERIC_MARKERS`) só decidem quando nenhum específico casa (`intent-v4`).
 INTENT_ORDER: tuple[str, ...] = ("aprender", "resolver", "tendencia", "comercial")
 
 # Cada marcador é uma CONJUNÇÃO de frases: TODAS precisam aparecer no texto,
@@ -56,6 +57,12 @@ _NEGATIVE_OUTCOMES = (
     "da certo",
 )
 
+# `intent-v4` (revisão externa de 17/10): "como" é GENÉRICO — aparece em
+# "como resolver…", "como vender…", "como evitar…". Com `aprender` avaliado
+# primeiro, ele vencia o marcador específico e a frase de problema/venda saía
+# como aprendizagem. Agora ele só decide quando nada específico casa.
+GENERIC_MARKERS: frozenset[IntentMarker] = frozenset({("como",)})
+
 INTENT_LEXICON: dict[str, tuple[IntentMarker, ...]] = {
     "aprender": (
         ("como",),
@@ -87,11 +94,19 @@ INTENT_LEXICON: dict[str, tuple[IntentMarker, ...]] = {
         ("rachado",),
         ("manchada",),
         ("manchado",),
+        # intent-v4: verbos/estados de problema que vinham depois de "como"
+        ("evitar",),
+        ("consertar",),
+        ("corrigir",),
+        ("bolha",),
+        ("bolhas",),
         *(("nao", outcome) for outcome in _NEGATIVE_OUTCOMES),
     ),
     "tendencia": (
         ("tendencia",),
+        ("tendencias",),
         ("novidade",),
+        ("novidades",),
         ("em alta",),
         ("lancamento",),
         ("lancamentos",),
@@ -158,7 +173,8 @@ FOREIGN_MARKERS: frozenset[str] = frozenset(
         "beginners",
         "recipe",
         "recipes",
-        "tutorial",
+        # `filter-v2`: "tutorial" saiu — é palavra corrente em PT ("tutorial de
+        # vela aromática"); frase em inglês com ela é barrada por outro marcador
         "guide",
         "ideas",
         "wholesale",
@@ -277,9 +293,11 @@ def classify_intent(phrase: str) -> str | None:
     2+ frases exigem TODAS (indicador contextual).
     """
     words = word_tokens(phrase)
-    for intent in INTENT_ORDER:
-        if any(marker_matches(words, marker) for marker in INTENT_LEXICON[intent]):
-            return intent
+    for generic in (False, True):  # específicos primeiro; genéricos de fallback
+        for intent in INTENT_ORDER:
+            markers = (m for m in INTENT_LEXICON[intent] if (m in GENERIC_MARKERS) is generic)
+            if any(marker_matches(words, marker) for marker in markers):
+                return intent
     return None
 
 

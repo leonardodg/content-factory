@@ -1,5 +1,7 @@
 from datetime import UTC, datetime
 
+import pytest
+
 from content_factory.domain.text import word_tokens
 from content_factory.domain.web_queries import (
     BLOCKED_BRANDS,
@@ -34,8 +36,11 @@ def test_classify_intent_each_class() -> None:
 
 
 def test_classify_intent_precedence_first_class_wins() -> None:
-    # "como" (aprender) e "preço" (comercial) → primeira na ordem documentada
-    assert classify_intent("como definir preço de vela") == "aprender"
+    # intent-v4: a precedência documentada vale entre marcadores ESPECÍFICOS —
+    # "receita" (aprender) e "vender" (comercial) → a primeira na ordem.
+    assert classify_intent("receita de vela para vender") == "aprender"
+    # o "como" genérico não vence um específico (antes saía "aprender")
+    assert classify_intent("como definir preço de vela") == "comercial"
 
 
 def test_classify_intent_no_marker() -> None:
@@ -143,11 +148,6 @@ def test_classify_intent_matches_whole_words_only() -> None:
 
 
 # --- intent-v3: só PT, "não" contextual, filtro objetivo `filter-v1` ---------
-
-
-def test_intent_lexicon_and_filter_versions() -> None:
-    assert INTENT_LEXICON_VERSION == "intent-v3"
-    assert QUERY_FILTER_VERSION == "filter-v1"
 
 
 def test_intent_coverage_counts_every_class_in_stable_order() -> None:
@@ -332,3 +332,56 @@ def test_protocol_records_the_filter_version() -> None:
     data = protocol_to_dict(protocol)
     assert data["filter_version"] == QUERY_FILTER_VERSION
     assert protocol_from_dict(data).filter_version == QUERY_FILTER_VERSION
+
+
+# --- intent-v4 / filter-v2 (revisão externa de 17/10) ------------------------
+# O "como" genérico vencia marcadores específicos porque `aprender` é avaliado
+# primeiro: "como resolver…" e "como vender…" saíam como `aprender`. Agora o
+# genérico só decide quando nenhum marcador específico casa.
+
+
+@pytest.mark.parametrize(
+    ("phrase", "intent"),
+    [
+        ("como resolver vela que nao acende", "resolver"),
+        ("resina amarelou como resolver", "resolver"),
+        ("como evitar sabonete suando", "resolver"),
+        ("como consertar vela que afundou", "resolver"),
+        ("como corrigir resina com bolha", "resolver"),
+        ("como tirar bolhas da resina", "resolver"),
+        ("como vender velas artesanais", "comercial"),
+        ("tendencias de velas 2026", "tendencia"),
+        ("novidades em sabonete artesanal", "tendencia"),
+        # o genérico continua valendo quando é o único sinal
+        ("como fazer vela aromatica", "aprender"),
+        ("receita de vela para vender", "aprender"),  # 2 específicos: ordem documentada
+        ("vela nao acende", "resolver"),
+    ],
+)
+def test_intent_v4_especifico_vence_o_como_generico(phrase: str, intent: str) -> None:
+    assert classify_intent(phrase) == intent
+
+
+def test_intent_v4_frases_sem_intencao_continuam_sem() -> None:
+    for phrase in ("vela aromatica", "sabonete de lavanda", "resina epoxi transparente"):
+        assert classify_intent(phrase) is None
+
+
+@pytest.mark.parametrize(
+    ("phrase", "eligible"),
+    [
+        # falsos positivos do filter-v1: PT legítimo com palavra que existe em PT
+        ("tutorial de vela aromatica", True),
+        ("sabonete artesanal tutorial", True),
+        # continua barrando o que é inequivocamente EN/ES ou marca
+        ("candle making tutorial", False),
+        ("como hacer velas con cera", False),
+        ("sabonete natura ekos", False),
+    ],
+)
+def test_filter_v2_tutorial_e_portugues(phrase: str, eligible: bool) -> None:
+    assert is_eligible(phrase) is eligible
+
+
+def test_versoes_intent_v4_filter_v2() -> None:
+    assert (INTENT_LEXICON_VERSION, QUERY_FILTER_VERSION) == ("intent-v4", "filter-v2")
