@@ -698,6 +698,36 @@ métrica que a relevância do Bloco 5 descarta.
 
 ---
 
+### Task 10: Revisão pre-merge — lote a lote (itens 1–3)
+
+Revisão do PR #52 (17/10), três correções com teste cada, todas no caminho da
+remediação (Tasks 4/6):
+
+- [x] **Item 1 — `refresh` sem items é anomalia, não remoção**:
+  `{"items": []}` (ou sem a chave) com ids pedidos levanta `UpstreamChanged`
+  (mesma regra do `_search_ranked`, "search sem items"). Antes o lote inteiro
+  virava `missing_ids` → `videos.removed_at`, o que é irreversível na janela
+  (o vídeo sai dos alvos) e é o sintoma clássico de quota estourada/contrato
+  quebrado. Id ausente num lote COM resposta válida continua sendo
+  removido/privado (teste novo mantém essa detecção).
+- [x] **Item 2 — lotes no use-case, gravação por lote**:
+  `RemediationDeps.batch_size` (default 50, o teto do `videos.list`); o
+  `remediate` fatia os alvos e grava cada lote ANTES de pedir o próximo. Erro
+  num lote para os lotes seguintes, mas preserva métricas e removidos já
+  detectados. `run.found` = alvos do run, `run.updated` = candidatos medidos.
+- [x] **Item 3 — exceção fora do contrato vira `internal_error`**:
+  o `refresh` (e o `limiter.acquire`) num `try` que pega `CollectorError` e
+  `Exception`: o segundo vira run `internal_error` com traceback no log
+  (`logger.exception`) e `__cause__`, sem levantar — a UoW do segmento não cai
+  (mesma defesa em profundidade da coleta). `internal_error` não abre o
+  breaker por design (`report_discover`).
+
+Contrato atualizado: `collect_runs.error_code` de `remediate:<plataforma>`
+pode ser `internal_error`; o sub-envelope não muda (as contagens já refletem o
+que foi medido de fato).
+
+---
+
 ## Auto-revisão da spec (R7/R12)
 
 - **R7** ✓ alvos últimos 7 dias com teto 500, só YouTube e sem medição nas últimas 3 h (Task 5); contrato de erro/cota/breaker igual ao da coleta (Task 6); `videos.list` em lotes de 50 (Task 4), `video_metrics` por remedição (Tasks 5-6), removido/privado marcado (`removed_at`) e fora dos alvos (Tasks 2/5). Instagram segue mídia própria e TikTok fora (porta separada, `refreshables` só com YouTube).
@@ -708,7 +738,7 @@ métrica que a relevância do Bloco 5 descarta.
 
 ## Resultado (execução do bloco)
 
-Tasks 1–9 implementadas com TDD (teste falhando → implementação → verde) e
+Tasks 1–10 implementadas com TDD (teste falhando → implementação → verde) e
 commit por task. Migração `0013` validada do zero: `upgrade head`, `downgrade
 0012` e `upgrade head` de novo numa base vazia, `alembic check` sem drift.
 `make gates` verde (test/lint/typecheck/security/docs/privacy) e
@@ -784,6 +814,19 @@ removido (fora), 1 nunca medido (dentro):
 - segmento sem `SearchConfig` com `b-pt` (`pt-PT`): `targets=1,
   skipped_language=0` e medição gravada — o fallback "sem exigência, mantém"
   segue igual ao Bloco 3.
+
+**Revisão pre-merge (Task 10)**, mesma base descartável (`cfrev`), 3 segmentos:
+
+- `videos.list` devolvendo `{"items": []}`: run `remediate:youtube` `failed`
+  com `error_code = upstream_changed`, `removed = 0` e **nenhum**
+  `videos.removed_at` no banco (item 1);
+- 120 alvos, 2º lote com HTTP 500: `refreshed=50, metrics_written=50,
+  quota_used=2`, 50 linhas em `video_metrics` do segmento, `videos.list`
+  chamado 2× (lotes seguintes não pedidos) e run `failed/upstream_changed` com
+  `found=120, updated=50` (item 2);
+- transporte levantando `RuntimeError` (fora do contrato): run `failed` com
+  `error_code = internal_error`, 0 métrica, e o `remediate` devolveu o
+  `RemediationOutcome` — não levantou, a UoW do segmento seguiu (item 3).
 
 ### Pendente (pós-deploy, com dados de produção)
 

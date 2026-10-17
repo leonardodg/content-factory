@@ -195,6 +195,12 @@ busca, R14/17-10): o alvo cujo `videos.language` não casa — ex.: `pt-PT` com
 envelope). Histórico anterior à regra (a coleta real de 16/10 trouxe 12 de 27 em
 pt-PT) deixa de ser remedido; `pt` sem região e idioma não declarado ficam.
 
+A remediação pede os alvos em **lotes de 50** (`videos.list`): cada lote é
+gravado antes do próximo, então o erro de um lote não custa as métricas dos
+anteriores (a run `remediate:<plataforma>` fica `failed` com o `error_code`).
+Erro fora do contrato grava `internal_error` e **não** derruba a coleta; lote
+sem items (`{"items": []}`) é `upstream_changed` — nunca vira remoção em massa.
+
 Fixos no código (não são env):
 
 - **Timeout por job** (`infra/queue/worker.py`): collect e research 25 min,

@@ -68,9 +68,21 @@ O `collect_job` remede os vídeos já conhecidos do segmento logo depois do
   alvos devolvidos pelo repositório;
 - `metrics_written`: linhas gravadas em `video_metrics`;
 - `removed`: vídeos que a plataforma não devolveu (removido/privado) e foram
-  marcados em `videos.removed_at`;
+  marcados em `videos.removed_at`. Só conta id ausente numa resposta VÁLIDA:
+  lote com `{"items": []}` é `upstream_changed` (a remediação não marca o lote
+  inteiro como removido nem inventa remoção em cima de erro);
 - `failed_platforms`: plataformas cuja remedição falhou — vira uma `CollectRun`
   `remediate:<plataforma>` `failed` e **não** derruba a coleta;
+- **lotes de 50** (`RemediationDeps.batch_size`, o teto do `videos.list`): cada
+  lote é gravado antes do próximo. Erro no lote N para os lotes seguintes, mas
+  o que já foi medido/removido nos lotes anteriores fica — as contagens do
+  sub-envelope são o que de fato entrou no banco. Na run
+  `remediate:<plataforma>`, `found` = alvos do run e `updated` = candidatos
+  medidos (podem divergir quando um lote falha);
+- erro de contrato (`CollectorError`) grava o `code` na run (`upstream_changed`,
+  `rate_limited`, `network`, `auth_expired`…); exceção fora do contrato grava
+  `internal_error` com traceback no log, sem propagar (a UoW do segmento não
+  cai);
 - a chave **não aparece** quando o collect nem rodou (lock ocupado,
   `ja_em_execucao`): remedir ali gravaria métrica duplicada;
 - a CLI (`cf collect`) não remedeia, então o teste de paridade compara o
