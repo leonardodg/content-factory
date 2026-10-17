@@ -1,7 +1,7 @@
 import asyncio
 import logging
 from collections.abc import Sequence
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from typing import ClassVar
 
 import pytest
@@ -90,6 +90,16 @@ class _FakeSignalRepo(KeywordSignalRepository):
         self, segment_id: int, source: str | None, limit: int
     ) -> list[KeywordSignal]:
         return []
+
+    async def record_days(
+        self, segment_id: int, keywords: Sequence[str], source: str, day: date
+    ) -> int:
+        return len(keywords)
+
+    async def days_seen(
+        self, segment_id: int, source: str, days: int, today: date
+    ) -> dict[str, int]:
+        return {}
 
 
 class _FakeSegmentsWithKeywords:

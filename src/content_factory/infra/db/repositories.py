@@ -1,9 +1,10 @@
 import hashlib
 import logging
 from collections.abc import Sequence
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime, timedelta
+from typing import Any, Literal, cast
 
-from sqlalchemy import func, select, text, update
+from sqlalchemy import CursorResult, func, select, text, update
 from sqlalchemy.dialects.postgresql import distinct_on
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.exc import DataError, IntegrityError
@@ -19,6 +20,7 @@ from content_factory.app.ports import (
     ScoreRepository,
     ScoreUpsertRow,
     SegmentRepository,
+    SegmentTermRepository,
     TrendObservationRepository,
     UpsertReport,
     VideoRepository,
@@ -36,6 +38,7 @@ from content_factory.domain.models import (
     ScoreResult,
     Segment,
     SegmentConfig,
+    SegmentTerm,
     TrendPoint,
     UpsertStats,
     VideoMetrics,
@@ -48,9 +51,11 @@ from content_factory.domain.web_relevance import WebPageInput
 from content_factory.domain.web_urls import ad_signal, canonicalize
 from content_factory.infra.db.orm import (
     CollectRunRow,
+    KeywordSignalDayRow,
     KeywordSignalRow,
     ResearchCampaignRow,
     SegmentRow,
+    SegmentTermRow,
     TrendObservationRow,
     VideoMetricsRow,
     VideoRow,
@@ -617,6 +622,41 @@ class KeywordSignalRepositoryImpl(KeywordSignalRepository):
             saved += 1
         return saved
 
+    async def record_days(
+        self, segment_id: int, keywords: Sequence[str], source: str, day: date
+    ) -> int:
+        """Marca (segmento, termo, fonte, dia) — append-only, conflito é no-op."""
+        for kw in keywords:
+            stmt = (
+                pg_insert(KeywordSignalDayRow)
+                .values(segment_id=segment_id, keyword=kw, source=source, seen_on=day)
+                .on_conflict_do_nothing(
+                    index_elements=["segment_id", "keyword", "source", "seen_on"]
+                )
+            )
+            await self._s.execute(stmt)
+        await self._s.flush()
+        return len(keywords)
+
+    async def days_seen(
+        self, segment_id: int, source: str, days: int, today: date
+    ) -> dict[str, int]:
+        # `today` vem do clock do app (determinismo em teste), não de datetime.now
+        since = today - timedelta(days=days - 1)
+        stmt = (
+            select(
+                KeywordSignalDayRow.keyword,
+                func.count(func.distinct(KeywordSignalDayRow.seen_on)),
+            )
+            .where(
+                KeywordSignalDayRow.segment_id == segment_id,
+                KeywordSignalDayRow.source == source,
+                KeywordSignalDayRow.seen_on >= since,
+            )
+            .group_by(KeywordSignalDayRow.keyword)
+        )
+        return {str(k): int(n) for k, n in (await self._s.execute(stmt)).all()}
+
     async def top_for_segment(
         self, segment_id: int, source: str | None, limit: int
     ) -> list[KeywordSignal]:
@@ -629,6 +669,120 @@ class KeywordSignalRepositoryImpl(KeywordSignalRepository):
             KeywordSignal(keyword=r.keyword, source=r.source, weight=r.weight, depth=r.depth)
             for r in rows
         ]
+
+
+def _segment_term(row: SegmentTermRow) -> SegmentTerm:
+    return SegmentTerm(
+        segment_id=row.segment_id,
+        term=row.term,
+        origin=row.origin,
+        kw_rank=row.kw_rank,
+        trend_score=row.trend_score,
+        engagement_score=row.engagement_score,
+        status=row.status,
+        exclude_reason=row.exclude_reason,
+        first_seen_at=row.first_seen_at,
+        last_seen_at=row.last_seen_at,
+        rules_version=row.rules_version,
+    )
+
+
+class SegmentTermRepositoryImpl(SegmentTermRepository):
+    def __init__(self, session: AsyncSession) -> None:
+        self._s = session
+
+    async def upsert_many(self, segment_id: int, terms: Sequence[SegmentTerm]) -> int:
+        now = datetime.now(UTC)
+        for t in terms:
+            stmt = pg_insert(SegmentTermRow).values(
+                segment_id=segment_id,
+                term=t.term,
+                origin=t.origin,
+                kw_rank=t.kw_rank,
+                trend_score=t.trend_score,
+                engagement_score=t.engagement_score,
+                status=t.status,
+                exclude_reason=t.exclude_reason,
+                first_seen_at=now,
+                last_seen_at=now,
+                rules_version=t.rules_version,
+            )
+            stmt = stmt.on_conflict_do_update(
+                index_elements=["segment_id", "term", "origin"],
+                set_={
+                    "kw_rank": stmt.excluded.kw_rank,
+                    "trend_score": stmt.excluded.trend_score,
+                    "engagement_score": stmt.excluded.engagement_score,
+                    "status": stmt.excluded.status,
+                    "exclude_reason": stmt.excluded.exclude_reason,
+                    "last_seen_at": now,
+                    "rules_version": stmt.excluded.rules_version,
+                },
+            )
+            await self._s.execute(stmt)
+        await self._s.flush()
+        return len(terms)
+
+    async def top_by_origin(
+        self,
+        segment_id: int,
+        origin: str,
+        limit: int,
+        order_by: Literal["kw_rank", "trend_score", "engagement_score"] = "kw_rank",
+    ) -> list[SegmentTerm]:
+        # A ordem depende da origem: suggest por kw_rank, a vaga trends por
+        # trend_score, hashtags por engagement_score (sem isso as hashtags
+        # sairiam em ordem ALFABÉTICA — revisão QA).
+        column = {
+            "kw_rank": SegmentTermRow.kw_rank,
+            "trend_score": SegmentTermRow.trend_score,
+            "engagement_score": SegmentTermRow.engagement_score,
+        }[order_by]
+        stmt = (
+            select(SegmentTermRow)
+            .where(
+                SegmentTermRow.segment_id == segment_id,
+                SegmentTermRow.origin == origin,
+                SegmentTermRow.status == "active",
+            )
+            .order_by(column.desc().nullslast(), SegmentTermRow.term)
+            .limit(limit)
+        )
+        return [_segment_term(r) for r in (await self._s.execute(stmt)).scalars().all()]
+
+    async def counts_by_origin(self, segment_id: int) -> dict[str, int]:
+        stmt = (
+            select(SegmentTermRow.origin, func.count(SegmentTermRow.id))
+            .where(SegmentTermRow.segment_id == segment_id)
+            .group_by(SegmentTermRow.origin)
+        )
+        return {str(o): int(n) for o, n in (await self._s.execute(stmt)).all()}
+
+    async def all_for_segment(
+        self, segment_id: int, status: str | None = None
+    ) -> list[SegmentTerm]:
+        stmt = select(SegmentTermRow).where(SegmentTermRow.segment_id == segment_id)
+        if status is not None:
+            stmt = stmt.where(SegmentTermRow.status == status)
+        rows = (await self._s.execute(stmt.order_by(SegmentTermRow.term))).scalars().all()
+        return [_segment_term(r) for r in rows]
+
+    async def set_status(
+        self, segment_id: int, origin: str, keep: Sequence[str], reason: str
+    ) -> int:
+        stmt = (
+            update(SegmentTermRow)
+            .where(
+                SegmentTermRow.segment_id == segment_id,
+                SegmentTermRow.origin == origin,
+                SegmentTermRow.status == "active",
+                SegmentTermRow.term.not_in(list(keep)),
+            )
+            .values(status="excluded", exclude_reason=reason)
+        )
+        result = cast("CursorResult[Any]", await self._s.execute(stmt))
+        await self._s.flush()
+        return int(result.rowcount)
 
 
 def _campaign_model(row: ResearchCampaignRow) -> ResearchCampaign:

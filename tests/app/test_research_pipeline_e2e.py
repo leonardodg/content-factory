@@ -6,6 +6,7 @@ mesmo com todos os coletores rodando no mesmo ciclo. Fakes de rede
 """
 
 from collections.abc import Sequence
+from datetime import date
 from pathlib import Path
 from typing import Any, ClassVar
 
@@ -128,6 +129,16 @@ class _SignalRepo(KeywordSignalRepository):
         self, segment_id: int, source: str | None, limit: int
     ) -> list[KeywordSignal]:
         return []
+
+    async def record_days(
+        self, segment_id: int, keywords: Sequence[str], source: str, day: date
+    ) -> int:
+        return len(keywords)
+
+    async def days_seen(
+        self, segment_id: int, source: str, days: int, today: date
+    ) -> dict[str, int]:
+        return {}
 
 
 class _Segments:

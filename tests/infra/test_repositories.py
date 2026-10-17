@@ -1,6 +1,6 @@
 import logging
 import os
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from typing import Any, cast
 from uuid import uuid4
 
@@ -16,6 +16,7 @@ from content_factory.domain.models import (
     KeywordSignal,
     ScoreResult,
     SegmentConfig,
+    SegmentTerm,
     TrendPoint,
     WebPageScoreRow,
     WebSearchHit,
@@ -36,6 +37,7 @@ from content_factory.infra.db.repositories import (
     ScoreRepositoryImpl,
     ScoreSampleRepositoryImpl,
     SegmentRepositoryImpl,
+    SegmentTermRepositoryImpl,
     TrendObservationRepositoryImpl,
     VideoRepositoryImpl,
     WebHitRepositoryImpl,
@@ -1663,4 +1665,135 @@ async def test_web_pages_and_hits_respect_until_cutoff() -> None:
         # sem corte: vê tudo
         page_all = (await repo.pages_for_segment(seg.id, ["vela"]))[0]
         assert (page_all.best_position, page_all.total_positions) == (1, 20)
+    await engine.dispose()
+
+
+@requires_infra
+async def test_segment_terms_pool_roundtrip() -> None:
+    """Pool R4: chave (segmento, termo, origem); upsert atualiza sem duplicar."""
+    engine = create_async_engine(os.environ["TEST_DATABASE_URL"])
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    async with factory() as s:
+        await s.rollback()
+        seg = await SegmentRepositoryImpl(s).upsert(
+            SegmentConfig(
+                slug=f"teste-pool-{uuid4().hex[:8]}",
+                name="Pool",
+                platforms=["youtube"],
+                keywords=["k"],
+            )
+        )
+        repo = SegmentTermRepositoryImpl(s)
+        terms = [
+            SegmentTerm(segment_id=seg.id, term="vela", origin="seed", rules_version="v1"),
+            SegmentTerm(
+                segment_id=seg.id,
+                term="vela",
+                origin="suggest",
+                kw_rank=0.8,
+                rules_version="v1",
+            ),
+            SegmentTerm(
+                segment_id=seg.id,
+                term="fora do nicho",
+                origin="suggest",
+                status="excluded",
+                exclude_reason="lang",
+                rules_version="v1",
+            ),
+        ]
+        assert await repo.upsert_many(seg.id, terms) == 3
+        assert await repo.counts_by_origin(seg.id) == {"seed": 1, "suggest": 2}
+        all_terms = await repo.all_for_segment(seg.id)
+        assert len(all_terms) == 3
+        # a MESMA frase como seed E sugestão = 2 linhas (origem na chave)
+        assert {(t.term, t.origin) for t in all_terms} == {
+            ("vela", "seed"),
+            ("vela", "suggest"),
+            ("fora do nicho", "suggest"),
+        }
+        assert {t.origin for t in await repo.all_for_segment(seg.id, status="active")} == {
+            "seed",
+            "suggest",
+        }
+
+        before = {
+            t.origin: t.first_seen_at
+            for t in await repo.all_for_segment(seg.id)
+            if t.term == "vela"
+        }
+        await repo.upsert_many(
+            seg.id,
+            [
+                SegmentTerm(
+                    segment_id=seg.id,
+                    term="vela",
+                    origin="suggest",
+                    kw_rank=0.95,
+                    rules_version="v2",
+                )
+            ],
+        )
+        after = await repo.all_for_segment(seg.id)
+        assert len(after) == 3  # não duplicou
+        sug = next(t for t in after if t.term == "vela" and t.origin == "suggest")
+        assert sug.kw_rank == 0.95
+        assert sug.rules_version == "v2"
+        assert sug.first_seen_at == before["suggest"]  # first_seen NÃO muda no conflito
+        assert sug.last_seen_at is not None and sug.last_seen_at >= sug.first_seen_at  # type: ignore[operator]
+
+        await repo.upsert_many(
+            seg.id,
+            [
+                SegmentTerm(
+                    segment_id=seg.id,
+                    term="b",
+                    origin="hashtag:youtube",
+                    engagement_score=0.1,
+                    rules_version="v1",
+                ),
+                SegmentTerm(
+                    segment_id=seg.id,
+                    term="a",
+                    origin="hashtag:youtube",
+                    engagement_score=0.9,
+                    rules_version="v1",
+                ),
+            ],
+        )
+        top = await repo.top_by_origin(seg.id, "hashtag:youtube", 5, order_by="engagement_score")
+        assert [t.term for t in top] == ["a", "b"]
+        assert [t.term for t in await repo.top_by_origin(seg.id, "suggest", 5)] == ["vela"]
+
+        assert await repo.set_status(seg.id, "hashtag:youtube", ["a"], "irrelevante") == 1
+        excluidos = await repo.all_for_segment(seg.id, status="excluded")
+        assert {(t.term, t.exclude_reason) for t in excluidos} == {
+            ("b", "irrelevante"),
+            ("fora do nicho", "lang"),
+        }
+    await engine.dispose()
+
+
+@requires_infra
+async def test_keyword_signal_days_conta_dias_distintos() -> None:
+    """R2: persistência = dias distintos na janela; mesmo dia é no-op."""
+    engine = create_async_engine(os.environ["TEST_DATABASE_URL"])
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    async with factory() as s:
+        await s.rollback()
+        seg = await SegmentRepositoryImpl(s).upsert(
+            SegmentConfig(
+                slug=f"teste-dias-{uuid4().hex[:8]}",
+                name="Dias",
+                platforms=["youtube"],
+                keywords=["k"],
+            )
+        )
+        repo = KeywordSignalRepositoryImpl(s)
+        today = date(2026, 10, 16)
+        assert await repo.record_days(seg.id, ["vela"], "web_suggest", today) == 1
+        await repo.record_days(seg.id, ["vela"], "web_suggest", today)  # no-op
+        await repo.record_days(seg.id, ["vela"], "web_suggest", date(2026, 10, 14))
+        await repo.record_days(seg.id, ["vela"], "web_suggest", date(2026, 9, 1))  # fora da janela
+        assert await repo.days_seen(seg.id, "web_suggest", 7, today) == {"vela": 2}
     await engine.dispose()

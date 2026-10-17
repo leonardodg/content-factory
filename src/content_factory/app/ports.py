@@ -2,8 +2,8 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import dataclass, field
-from datetime import datetime
-from typing import ClassVar, Protocol
+from datetime import date, datetime
+from typing import ClassVar, Literal, Protocol
 
 from content_factory.domain.kw_rank import SuggestHit
 from content_factory.domain.models import (
@@ -15,6 +15,7 @@ from content_factory.domain.models import (
     ScoreResult,
     Segment,
     SegmentConfig,
+    SegmentTerm,
     TrendPoint,
     UpsertStats,
     VideoSnapshot,
@@ -178,6 +179,44 @@ class KeywordSignalRepository(Protocol):
     async def top_for_segment(
         self, segment_id: int, source: str | None, limit: int
     ) -> list[KeywordSignal]: ...
+
+    async def record_days(
+        self, segment_id: int, keywords: Sequence[str], source: str, day: date
+    ) -> int:
+        """Dias distintos em que cada termo do Suggest apareceu (R2). Append-only."""
+        ...
+
+    async def days_seen(
+        self, segment_id: int, source: str, days: int, today: date
+    ) -> dict[str, int]:
+        """`{termo: nº de dias distintos}` na janela `[today-days+1, today]` (R2)."""
+        ...
+
+
+class SegmentTermRepository(Protocol):
+    """Pool de termos do segmento (R4) — fonte única das buscas."""
+
+    async def upsert_many(self, segment_id: int, terms: Sequence[SegmentTerm]) -> int: ...
+
+    async def top_by_origin(
+        self,
+        segment_id: int,
+        origin: str,
+        limit: int,
+        order_by: Literal["kw_rank", "trend_score", "engagement_score"] = "kw_rank",
+    ) -> list[SegmentTerm]: ...
+
+    async def counts_by_origin(self, segment_id: int) -> dict[str, int]: ...
+
+    async def all_for_segment(
+        self, segment_id: int, status: str | None = None
+    ) -> list[SegmentTerm]: ...
+
+    async def set_status(
+        self, segment_id: int, origin: str, keep: Sequence[str], reason: str
+    ) -> int:
+        """Marca `excluded` (com `reason`) os termos ativos da origem fora de `keep`."""
+        ...
 
 
 class CollectRunRepository(Protocol):
