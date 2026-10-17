@@ -14,6 +14,7 @@ from tests.stubs import (
     FakeRepos,
     FakeRuns,
     FakeSearchLog,
+    FakeSegmentTerms,
     FakeTermSearcher,
     FakeVideos,
     TrackedCollector,
@@ -36,10 +37,12 @@ from content_factory.domain.models import (
     SearchQueryRun,
     Segment,
     SegmentConfig,
+    SegmentTerm,
     UpsertStats,
     VideoSnapshot,
     WebSearchHit,
 )
+from content_factory.domain.search_plan import run_index_for
 
 
 class _FakeGatedCollector:
@@ -811,15 +814,46 @@ def _segment(keywords: list[str]) -> Segment:
     )
 
 
+def _clock_run_index_0() -> datetime:
+    """Instante cujo `run_index_for` é múltiplo de 12: o rodízio começa no 1º
+    termo de cada lista (até 4 termos) — testes determinísticos."""
+    day = datetime(2026, 10, 20, 1, tzinfo=UTC)
+    while run_index_for(day) % 12:
+        day += timedelta(days=1)
+    return day
+
+
+def _pool_from_keywords(segment: Segment) -> FakeSegmentTerms:
+    """Bloco 4: as buscas saem do POOL. Os testes do Bloco 2 usavam as 3
+    primeiras keywords (`provisional_queries`, removido); o equivalente no
+    pool é a 1ª keyword como `seed` e as demais como `suggest` (kw_rank
+    decrescente) — mesma ordem de buscas, mesmo contrato de atribuição."""
+    terms = FakeSegmentTerms()
+    kws = segment.keywords
+    terms.saved = [
+        *([SegmentTerm(segment_id=segment.id, term=kws[0], origin="seed")] if kws else []),
+        *(
+            SegmentTerm(segment_id=segment.id, term=k, origin="suggest", kw_rank=1.0 - i / 10)
+            for i, k in enumerate(kws[1:])
+        ),
+    ]
+    return terms
+
+
 def collect_deps(
     *,
     term_searchers: dict[str, TermSearcher] | None = None,
     collectors: list[Collector] | None = None,
     segment: Segment | None = None,
+    terms: FakeSegmentTerms | None = None,
+    env: dict[str, str] | None = None,
 ) -> CollectDeps:
-    """Deps de `collect` com fakes de atribuição/log; collectors p/ as buscas."""
+    """Deps de `collect` com fakes de atribuição/log/pool; relógio fixo."""
     repos = FakeRepos()
     searchers = term_searchers or {}
+    if terms is None:
+        terms = _pool_from_keywords(segment) if segment is not None else FakeSegmentTerms()
+    clock_at = _clock_run_index_0()
     return CollectDeps(
         collectors=collectors if collectors is not None else [FakeCollector(p) for p in searchers],
         videos=repos.videos,
@@ -830,6 +864,9 @@ def collect_deps(
         term_searchers=searchers,
         discoveries=FakeDiscoveries(),
         search_log=FakeSearchLog(),
+        terms=terms,
+        env=env or {},
+        clock=lambda: clock_at,
     )
 
 
@@ -949,3 +986,67 @@ async def test_searches_empty_nao_conta_busca_que_falhou() -> None:
     out = await collect("candles", ["youtube"], 25, deps)
     assert out.counts["searches"] == 2
     assert out.counts["searches_empty"] == 1
+
+
+# --- Bloco 4 Task 6: as buscas saem das vagas do pool (R5) ---
+
+
+async def test_collect_usa_as_vagas_do_pool() -> None:
+    terms = FakeSegmentTerms()
+    terms.saved = [
+        SegmentTerm(segment_id=1, term="vela artesanal", origin="seed"),
+        SegmentTerm(segment_id=1, term="vela de soja", origin="seed"),
+        SegmentTerm(
+            segment_id=1, term="como fazer vela", origin="suggest", kw_rank=0.9, trend_score=0.4
+        ),
+    ]
+    deps = collect_deps(
+        term_searchers={"youtube": FakeTermSearcher({})},
+        segment=_segment(keywords=["vela artesanal"]),
+        terms=terms,
+        env={"SEARCHES_PER_COLLECT_YOUTUBE": "4"},
+    )
+    out = await collect("candles", ["youtube"], 25, deps)
+    _, search_log = _saved(deps)
+    # 1 só termo suggest: a vaga trends não pode repeti-lo e cai para
+    # suggest, que também não tem outro; hashtag vazia idem → 2 buscas
+    assert [r.origin for r in search_log] == ["seed", "suggest"]
+    assert out.counts["searches_planned"] == 2
+    assert all(r.query_id.startswith("search-plan-v1:") for r in search_log)
+
+
+async def test_pool_sem_seed_ainda_usa_as_keywords_do_segmento() -> None:
+    """1ª coleta antes do 1º research com pool: as seeds vêm do segmento."""
+    deps = collect_deps(
+        term_searchers={"youtube": FakeTermSearcher({})},
+        segment=_segment(keywords=["vela artesanal"]),
+        terms=FakeSegmentTerms(),
+    )
+    await collect("candles", ["youtube"], 25, deps)
+    _, search_log = _saved(deps)
+    assert [(r.origin, r.term) for r in search_log] == [("seed", "vela artesanal")]
+
+
+async def test_vaga_trends_e_hashtag_com_cerquilha_no_youtube() -> None:
+    terms = FakeSegmentTerms()
+    terms.saved = [
+        SegmentTerm(segment_id=1, term="vela", origin="seed"),
+        SegmentTerm(segment_id=1, term="s1", origin="suggest", kw_rank=0.9),
+        SegmentTerm(segment_id=1, term="t1", origin="suggest", kw_rank=0.1, trend_score=0.8),
+        SegmentTerm(
+            segment_id=1, term="velasdecor", origin="hashtag:youtube", engagement_score=1.0
+        ),
+    ]
+    deps = collect_deps(
+        term_searchers={"youtube": FakeTermSearcher({})},
+        segment=_segment(keywords=["vela"]),
+        terms=terms,
+    )
+    await collect("candles", ["youtube"], 25, deps)
+    _, search_log = _saved(deps)
+    assert [(r.origin, r.term) for r in search_log] == [
+        ("seed", "vela"),
+        ("suggest", "s1"),
+        ("trends", "t1"),
+        ("hashtag:youtube", "#velasdecor"),
+    ]

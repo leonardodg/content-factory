@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import os
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
@@ -115,6 +116,7 @@ async def _collect_deps(platforms: list[str]) -> AsyncGenerator[CollectDeps]:
         DiscoveryRepositoryImpl,
         SearchQueryRepositoryImpl,
         SegmentRepositoryImpl,
+        SegmentTermRepositoryImpl,
         VideoRepositoryImpl,
         WebHitRepositoryImpl,
     )
@@ -142,6 +144,8 @@ async def _collect_deps(platforms: list[str]) -> AsyncGenerator[CollectDeps]:
             term_searchers=term_searchers,
             discoveries=DiscoveryRepositoryImpl(session),
             search_log=SearchQueryRepositoryImpl(session),
+            terms=SegmentTermRepositoryImpl(session),
+            env=os.environ,
         )
         await session.commit()
 

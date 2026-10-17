@@ -6,6 +6,7 @@ variáveis no startup e passa os valores.
 """
 
 import logging
+import os
 from collections.abc import AsyncGenerator, Awaitable, Callable, Iterable
 from contextlib import AsyncExitStack, asynccontextmanager
 from dataclasses import dataclass
@@ -238,6 +239,9 @@ class AppDeps(SegmentDepsFactory):
                     term_searchers=term_searchers,
                     discoveries=DiscoveryRepositoryImpl(session),
                     search_log=SearchQueryRepositoryImpl(session),
+                    # R5: buscas pelas vagas do pool; cota por env
+                    terms=SegmentTermRepositoryImpl(session),
+                    env=os.environ,
                 ),
                 score=ScoreDeps(
                     videos=videos,

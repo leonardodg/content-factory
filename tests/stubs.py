@@ -527,7 +527,9 @@ class FakeKeywordSignals(KeywordSignalRepository):
 
 
 class FakeSegmentTerms(SegmentTermRepository):
-    """Pool de termos (R4) em memória: só acumula para assert."""
+    """Pool de termos (R4) em memória: acumula para assert e responde
+    `top_by_origin` com a MESMA ordem do SQL (valor desc, nulos por último,
+    desempate por termo; só `active`; o último upsert do termo vence)."""
 
     def __init__(self) -> None:
         self.saved: list[SegmentTerm] = []
@@ -545,8 +547,18 @@ class FakeSegmentTerms(SegmentTermRepository):
         limit: int,
         order_by: Literal["kw_rank", "trend_score", "engagement_score"] = "kw_rank",
     ) -> list[SegmentTerm]:
-        _ = segment_id, origin, limit, order_by
-        return []
+        _ = segment_id
+        latest = {t.term: t for t in self.saved if t.origin == origin}
+        active = [t for t in latest.values() if t.status == "active"]
+
+        def value(t: SegmentTerm) -> float | None:
+            return getattr(t, order_by)
+
+        with_value = sorted(
+            (t for t in active if value(t) is not None), key=lambda t: (-(value(t) or 0.0), t.term)
+        )
+        without = sorted((t for t in active if value(t) is None), key=lambda t: t.term)
+        return [*with_value, *without][:limit]
 
     async def counts_by_origin(self, segment_id: int) -> dict[str, int]:
         _ = segment_id
@@ -567,6 +579,12 @@ class FakeSegmentTerms(SegmentTermRepository):
     async def set_trend_scores(self, segment_id: int, scores: Mapping[str, float | None]) -> int:
         _ = segment_id
         self.trend_scores.update(scores)
+        self.saved = [
+            t.model_copy(update={"trend_score": scores[t.term]})
+            if t.origin == "suggest" and t.term in scores
+            else t
+            for t in self.saved
+        ]
         return len(scores)
 
 
