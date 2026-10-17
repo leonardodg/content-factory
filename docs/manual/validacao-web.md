@@ -11,7 +11,9 @@ reportado pelos dois critérios.
 | Elemento | Versão | Onde |
 | --- | --- | --- |
 | Protocolo de consultas | `q1` (`web-queries-q1`) | `segments/web-queries/<slug>.q1.yaml` |
-| Léxico de intenção | `intent-v1` | `domain/web_queries.py` |
+| Léxico de intenção | `intent-v3` | `domain/web_queries.py` |
+| Filtro objetivo pré-sorteio | `filter-v1` | `domain/web_queries.py` |
+| Sondas de intenção do Suggest | `probe-v2` | `domain/suggest_probes.py` |
 | Regras de anúncio | `ads-v1` | `domain/web_urls.py` |
 | Normalização de URL | `canon-v1` | `domain/web_urls.py` |
 | Score novo | `web-v1` | `domain/web_relevance.py` |
@@ -56,6 +58,94 @@ dos itens, seed fixa). Com 40 a 50 itens por segmento, os resultados são
 
 Definições de "relevante" e "legítima" em
 [Anotação da amostra web](anotacao-web.md).
+
+### Adendo registrado — 2026-10-16: P@k é sobre a amostra
+
+**Motivo:** explicitar o que o cálculo já faz, sem alterar nenhum número. As
+métricas P@5, P@10 e o ganho em P@10 são medidas sobre o **conjunto anotado da
+amostra** (os itens `kept` anotados), não sobre o ranking completo da coleta em
+produção: candidatos que não entraram na amostra não competem pelo topo. O
+estrato de 15 itens do topo da linha de base sempre está presente, mas um item
+fora da amostra poderia subir no ranking `web-v1` e não ser medido. O teste
+pareado (v1 − base, sobre a mesma amostra) continua válido para comparar as duas
+funções; as metas absolutas de P@5/P@10 valem como **P@k sobre a amostra** (piso
+aproximado), não como a precisão exata do top 5/10 completo.
+
+### Adendo registrado — 2026-10-16: sondas de intenção no Suggest (opção (a))
+
+**Motivo:** o Suggest, semeado só com o nome do segmento, devolve variações de
+produto; `resolver` e `tendencia` ficavam praticamente sem frases (cobertura
+medida no banco real: 0 a 1 frase de tendência por segmento). A opção (a) passa
+a **sondar o autocompletar pela intenção**, com os termos-cabeça declarados por
+segmento (`SegmentConfig.probe_terms`) e os modelos `probe-v2`
+(`domain/suggest_probes.py`): `como fazer <termo>`, `<termo> nao`,
+`<termo> tendencia`, `<termo> mais vendido`, `<termo> preco`. As frases
+continuam vindo do autocompletar real: nada é inventado. Isso muda o
+**research** (a coleta de sinais que alimenta a seleção do `q1`), não os
+critérios — nenhum número pré-registrado muda.
+
+**Evidência (16/10, autocompletar real, sem escrever no banco; números brutos em
+[Evidência — sondas do Suggest](evidencia-sondas-suggest.md)):** a sonda só
+rende na **cabeça do termo**, não na cauda longa — `vela artesanal nao` e
+`vela artesanal tendencia` devolvem **0** sugestões, enquanto `vela nao` (10),
+`vela tendencia` (10), `pavio nao` (8), `sabonete mais vendido` (10) e
+`artesanato mais vendido` (10) devolvem frases classificáveis. Por isso os
+termos sondados são `probe_terms` (velas: `vela`/`velas`/`pavio`; sabonetes:
+`sabonete`/`sabonetes`/`saboaria`; resina: `resina`/`resina epoxi`/`artesanato`),
+não as keywords do segmento. Trocar o `client` do endpoint (firefox/chrome) não
+muda o resultado: o limite é o **dado** do nicho, não a consulta.
+
+!!! warning "Limitação: o estrato `tendencia` é induzido pela sonda"
+    A sonda de tendência leva o próprio marcador, então a frase resultante cai
+    na classe por construção. A consulta é uma busca real de usuário (o Google
+    só completa o que as pessoas buscam), mas o estrato `tendencia` do `q1` é
+    **induzido** pela sonda, não "descoberto" passivamente. Na leitura da F4,
+    tratar `tendencia` como piso exploratório — não como amostra natural do
+    vocabulário do segmento.
+
+!!! warning "Limitação: termos-cabeça são ambíguos em PT"
+    `resina` também é resina odontológica (`resina nao clareia`), `vela` também
+    é vela de ignição (`vela nao sai do motor`) e vela de gráfico
+    (`velas tendencia alcista`). Parte das frases do `resolver`/`tendencia`
+    fica fora do segmento. O `q1` é revisado pelo usuário, que **veta** a frase
+    inadequada (`cf web-queries --veto/--reason`); o veto é registrado no YAML.
+
+### Adendo registrado — 2026-10-16: `intent-v3` + filtro `filter-v1`
+
+**Motivo:** o QA do commit `4f56a0a` (sorteio cego com a seed `20261017` contra o
+autocompletar real) mostrou que as 4 classes fechavam nos 3 segmentos, mas de 4 a
+7 das 13 consultas saíam **fora do nicho ou em outro idioma**: frases em inglês
+(os marcadores `tutorial`/`for beginners`/`sale`/`price`/`wholesale` deixavam
+passar), marcas industriais (`sabonete mais vendido da natura`, `preco sabonete
+phebo`) e o `nao` solto (`pavio parafinado ou nao`, `velas que nao pingam` —
+atributo desejável, não problema). O veto resolvia em tese, mas a substituta
+vinha do mesmo conjunto contaminado.
+
+**O que muda (nenhum critério pré-registrado muda):**
+
+1. **Léxico `intent-v3`** (`domain/web_queries.py`): só português (o experimento é
+   em PT) e o `nao` deixou de ser marcador isolado — vale apenas junto de um
+   **desfecho ruim** (`nao acende`, `nao endurece`, `nao seca`, `nao queima`,
+   `nao faz espuma`, ...). Saíram `significado`, `vs`, `derrete` (casava "que não
+   derretem", atributo desejável) e todos os marcadores em inglês.
+2. **Filtro `filter-v1`** (pré-sorteio, versionado e gravado no YAML do protocolo
+   como `filter_version`): descarta frase com palavra funcional ou de conteúdo
+   típica de EN/ES (`for`, `the`, `en`, `con`, `soap`, `candle`, ...) e frase com
+   **marca industrial de produto acabado** (`natura`, `phebo`, `boticario`,
+   `granado`, `dove`, `ngk`, ...). Fornecedor de matéria-prima do artesão **não**
+   é bloqueado (ex.: `nossa terra`).
+
+**Efeito medido (mesma seed `20261017`, 16/10, sem escrever no banco):** as 4
+classes continuam fechando nos 3 segmentos (`missing` vazio) e as 13 consultas
+saem limpas — 0 candidatas a veto em sabonetes e resina; em velas restam 3
+resíduos de homonímia (`vela de aniversario`, `velas 7 dias`, `vela não queimou
+toda umbanda`). Cobertura elegível por classe e as 13 consultas por segmento em
+[Evidência — sondas do Suggest](evidencia-sondas-suggest.md).
+
+!!! note "Margem estreita em sabonetes/resolver"
+    Depois do filtro, `resolver` em sabonetes tem 4 frases elegíveis (3 entram no
+    `q1`): um veto abriria `missing`. A revisão do usuário decide se vale ampliar
+    a sonda antes do congelamento.
 
 ## Indicadores (não são critérios até haver calibração)
 
@@ -103,6 +193,10 @@ evidência registrada) antes de qualquer ativação.
 
 ## Próximos passos
 
+- A coleta em produção roda com `WEB_QUERIES_REQUIRED=1`: segmento sem
+  protocolo `q1` válido faz o collect da web **falhar** com
+  `missing_protocol` (o legado de 1 consulta **não** roda), em vez de degradar
+  em silêncio.
 - A ativação no `worker` (F5) só ocorre com veredito **aprovado em ≥ 2 dos 3
   segmentos PT**, sem nenhum "não atingido" por cobertura, e é reversível por
   `WEB_SCORE_ENABLED=0`.

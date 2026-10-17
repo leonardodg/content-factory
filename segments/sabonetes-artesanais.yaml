@@ -23,6 +23,12 @@ keywords:
   - melt and pour soap
   - soap making for beginners
   - homemade soap ideas
+probe_terms:
+  # cabeca do termo (opcao (a), medido 16/10): "sabonete mais vendido" rende
+  # tendencia; a cauda longa "sabonete artesanal" devolve 0
+  - sabonete
+  - sabonetes
+  - saboaria
 subnichos:
   idioma_en: [handmade soap, soap making, cold process soap,
               melt and pour soap, soap making for beginners,

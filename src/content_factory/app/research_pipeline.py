@@ -29,6 +29,7 @@ from content_factory.domain.models import (
     Segment,
     TrendPoint,
 )
+from content_factory.domain.suggest_probes import suggest_probes
 
 logger = logging.getLogger(__name__)
 
@@ -217,6 +218,12 @@ async def run_research_cycle(
         }
 
         seeds = [k for k in segment.keywords if deps.guard.admit(k, 0)]
+        # Opcao (a) da revisao 16/10: o Suggest semeado so com o nome do
+        # segmento devolve variacoes de produto; as sondas de intencao (termos-
+        # cabeca do segmento) trazem frases reais de "resolver"/"tendencia". SO
+        # o Suggest as recebe: os termos das redes sociais continuam sendo as
+        # keywords do segmento.
+        probe_seeds = suggest_probes(segment.probe_terms)
 
         # Fontes (Suggest/Trends) resilientes: falha vira run `failed` e o
         # ciclo segue com os sinais que houver (plano
@@ -224,7 +231,7 @@ async def run_research_cycle(
         # o Trends HTTP 400 diário abortava o segmento antes da fase social.
         async def _expand() -> list[KeywordSignal]:
             await deps.limiter.acquire(deps.web.platform)
-            return await deps.web.expand(seeds, 0)
+            return await deps.web.expand([*seeds, *probe_seeds], 0)
 
         web_raw, web_failed = await _run_source(deps.web.platform, segment, deps, _expand)
         web_signals = deps.guard.truncate(web_raw, "web")

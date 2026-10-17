@@ -46,6 +46,7 @@ nav:
       - manual/experimento-reativado.md
       - manual/anotacao-web.md
       - manual/validacao-web.md
+      - manual/evidencia-sondas-suggest.md
   - Produto:
       - Ideia inicial (verbatim): produto/ideia-inicial.md
       - PRD: produto/prd.md
