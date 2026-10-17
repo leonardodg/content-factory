@@ -339,6 +339,51 @@ class KeywordSignalDayRow(Base):
     seen_on: Mapped[date] = mapped_column(Date)
 
 
+class VideoDiscoveryRow(Base):
+    """R6: qual termo (e posição) trouxe cada vídeo, por busca executada.
+
+    Uma linha por (busca, vídeo): o mesmo vídeo achado em 16 coletas tem 16
+    linhas — a deduplicação por vídeo é do relatório (Bloco 5), não daqui.
+    """
+
+    __tablename__ = "video_discoveries"
+    __table_args__ = (
+        Index("ix_video_discoveries_segment_discovered", "segment_id", "discovered_at"),
+        Index("ix_video_discoveries_video_id", "video_id"),
+    )
+    id: Mapped[int] = mapped_column(primary_key=True)
+    video_id: Mapped[int] = mapped_column(ForeignKey("videos.id"))
+    segment_id: Mapped[int] = mapped_column(ForeignKey("segments.id"))
+    platform: Mapped[str] = mapped_column(String(32))
+    term: Mapped[str] = mapped_column(String(200))
+    term_origin: Mapped[str] = mapped_column(String(32))
+    query_id: Mapped[str | None] = mapped_column(String(96))
+    result_position: Mapped[int | None] = mapped_column(Integer)
+    run_kind: Mapped[str] = mapped_column(String(16))
+    discovered_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+
+
+class SearchQueryRow(Base):
+    """R5/R13: cada busca executada — inclusive as vazias e as que falharam."""
+
+    __tablename__ = "search_queries"
+    __table_args__ = (Index("ix_search_queries_segment_started", "segment_id", "started_at"),)
+    id: Mapped[int] = mapped_column(primary_key=True)
+    segment_id: Mapped[int] = mapped_column(ForeignKey("segments.id"))
+    platform: Mapped[str] = mapped_column(String(32))
+    query_id: Mapped[str] = mapped_column(String(96))
+    term: Mapped[str] = mapped_column(String(200))
+    origin: Mapped[str] = mapped_column(String(32))
+    results: Mapped[int] = mapped_column(Integer)  # devolvidos pela API (pós-idioma)
+    kept: Mapped[int] = mapped_column(Integer)  # únicos novos nesta coleta (pós-dedupe)
+    quota_used: Mapped[int] = mapped_column(Integer)
+    error_code: Mapped[str | None] = mapped_column(String(64))
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    finished_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
 class ResearchCampaignRow(Base):
     __tablename__ = "research_campaigns"
     __table_args__ = (Index("ix_research_campaigns_segment_id_active", "segment_id", "active"),)

@@ -91,3 +91,32 @@ def test_tabelas_do_pool_existem() -> None:
         "last_seen_at",
         "rules_version",
     }
+
+
+def test_tabelas_de_atribuicao_e_log_de_buscas() -> None:
+    from content_factory.infra.db.orm import SearchQueryRow, VideoDiscoveryRow
+
+    assert {
+        "video_id",
+        "segment_id",
+        "platform",
+        "term",
+        "term_origin",
+        "query_id",
+        "result_position",
+        "run_kind",
+        "discovered_at",
+    } <= {c.name for c in VideoDiscoveryRow.__table__.columns}
+    assert {
+        "segment_id",
+        "platform",
+        "query_id",
+        "term",
+        "origin",
+        "results",
+        "kept",
+        "quota_used",
+        "error_code",
+        "started_at",
+        "finished_at",
+    } <= {c.name for c in SearchQueryRow.__table__.columns}
