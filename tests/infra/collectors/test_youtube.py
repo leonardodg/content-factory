@@ -4,7 +4,7 @@ import httpx
 import pytest
 
 from content_factory.app.call_counters import counting
-from content_factory.domain.errors import UpstreamChanged
+from content_factory.domain.errors import RateLimited, UpstreamChanged
 from content_factory.domain.models import RemediationTarget, SegmentConfig
 from content_factory.infra.collectors.youtube import YoutubeCollector
 
@@ -618,23 +618,70 @@ async def test_refresh_quebra_em_lotes_de_50_e_conta_cota() -> None:
 
 
 @pytest.mark.asyncio
-async def test_refresh_sem_items_levanta_upstream_changed() -> None:
-    """Revisão pre-merge: `{"items": []}` NÃO é evidência de remoção.
+async def test_refresh_items_vazio_marca_todos_como_removidos() -> None:
+    """Revisão (ajuste do item 1): `{"items": []}` é resposta VÁLIDA.
 
-    Sem isso o lote inteiro viraria `missing_ids` → `videos.removed_at` (o
-    vídeo sai dos alvos por toda a janela) num sintoma clássico de contrato
-    quebrado/quota estourada. Mesma regra do `_search_ranked` ("search sem
-    items"): resposta sem items é anomalia de upstream, não remoção.
+    No YouTube, cota estourada é HTTP 403 (o `_get` já transforma em
+    `RateLimited`); resposta 200 com lista vazia não é sinal de quota — é o
+    contrato dizendo que nenhum id existe mais. Todos os ids do lote viram
+    `missing_ids` (removidos) e o lote ainda custa 1 unidade (`videos.list`),
+    sem `channels.list` (não há canal a resolver).
     """
     col = _collector_with_transport(_youtube_refresh_transport(returned=[]))
-    with pytest.raises(UpstreamChanged) as exc:
-        await col.refresh(
+    with counting() as counters:
+        out = await col.refresh(
             [
                 RemediationTarget(video_id=1, platform="youtube", platform_video_id="v1"),
                 RemediationTarget(video_id=2, platform="youtube", platform_video_id="v2"),
             ]
         )
+    assert out.candidates == []
+    assert out.missing_ids == ["v1", "v2"]
+    assert counters.quota_used == 1
+
+
+@pytest.mark.asyncio
+async def test_refresh_sem_chave_items_levanta_upstream_changed() -> None:
+    """Chave `items` AUSENTE (ou que não é lista) = contrato quebrado.
+
+    Não há como distinguir de uma resposta truncada; marcar o lote como
+    removido em cima disso seria irreversível (`videos.removed_at`).
+    """
+    col = _collector_with_transport(
+        httpx.MockTransport(
+            lambda _r: httpx.Response(200, json={"kind": "youtube#videoListResponse"})
+        )
+    )
+    with pytest.raises(UpstreamChanged) as exc:
+        await col.refresh(
+            [RemediationTarget(video_id=1, platform="youtube", platform_video_id="v1")]
+        )
     assert exc.value.code == "upstream_changed"
+
+
+@pytest.mark.asyncio
+async def test_refresh_items_nao_lista_levanta_upstream_changed() -> None:
+    """`items` presente mas com tipo errado (`{}`) também é contrato quebrado."""
+    col = _collector_with_transport(
+        httpx.MockTransport(lambda _r: httpx.Response(200, json={"items": {"id": "v1"}}))
+    )
+    with pytest.raises(UpstreamChanged):
+        await col.refresh(
+            [RemediationTarget(video_id=1, platform="youtube", platform_video_id="v1")]
+        )
+
+
+@pytest.mark.asyncio
+async def test_refresh_403_e_rate_limited_e_nao_marca_removido() -> None:
+    """Cota estourada no YouTube é HTTP 403: vira `RateLimited` (não
+    `UpstreamChanged`) e o lote NÃO é tratado como removido."""
+    col = _collector_with_transport(
+        httpx.MockTransport(lambda _r: httpx.Response(403, json={"error": {"message": "quota"}}))
+    )
+    with pytest.raises(RateLimited):
+        await col.refresh(
+            [RemediationTarget(video_id=1, platform="youtube", platform_video_id="v1")]
+        )
 
 
 @pytest.mark.asyncio
