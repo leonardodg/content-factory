@@ -116,6 +116,7 @@ REMEDIATION_LIMIT=500
 REMEDIATION_MIN_GAP_HOURS=3
 VIRAL_V2_WINDOW_DAYS=30
 VIRAL_V2_MIN_POPULATION=5
+VIRAL_V2_ENABLED=1   # só a partir do deploy da Fase B (adendo com a data)
 ```
 
 ## Adendos

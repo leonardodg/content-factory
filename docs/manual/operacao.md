@@ -189,6 +189,9 @@ do processo — trocar exige restart do worker):
 | `REMEDIATION_LIMIT` | `500` | teto de alvos por segmento na remedição (R7) — 10 lotes de 50 ids no `videos.list` (YouTube) |
 | `REMEDIATION_MIN_GAP_HOURS` | `3` | não remedir vídeo com medição nas últimas N horas (R7): evita 2 medições com o mesmo `captured_at`; vale do startup |
 | `SEARCHES_PER_COLLECT_YOUTUBE` | `4` | buscas por coleta e segmento no YouTube, uma vaga por origem: `seed`, `suggest`, `trends`, `hashtag` (R5); vaga vazia vai para `suggest`; lida a cada coleta; valor inválido cai no default |
+| `VIRAL_V2_ENABLED` | `0` | liga o `viral-v2` + mineração de hashtags no job de score (R9/R11), depois do fase-h e em transação própria — falha só reverte esta parte; liga no deploy da Fase B |
+| `VIRAL_V2_WINDOW_DAYS` | `30` | janela de publicação (dias) da população do `viral-v2`; vale do startup |
+| `VIRAL_V2_MIN_POPULATION` | `5` | população mínima por plataforma+segmento: abaixo dela o `viral-v2` sai `NULL` (sem ranking com poucos vídeos); vale do startup |
 | `TRENDS_TERMS_PER_DAY` | `16` | termos do pool (por `kw_rank`) medidos no Google Trends por research, em lotes de 4 + a âncora (`trends_anchor` do segmento ou a 1ª keyword) — R3; série diária `today 3-m`; vale do startup |
 
 A remediação aplica a **regra de idioma do segmento** (`accepted_language` da

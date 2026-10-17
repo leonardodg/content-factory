@@ -12,6 +12,7 @@ from content_factory.domain.models import (
     Discovery,
     KeywordSignal,
     MetricCoverage,
+    PopulationRow,
     RefreshResult,
     RemediationTarget,
     ResearchCampaign,
@@ -21,6 +22,7 @@ from content_factory.domain.models import (
     Segment,
     SegmentConfig,
     SegmentTerm,
+    TermReportRecord,
     TermTrendDay,
     TrendPoint,
     UpsertStats,
@@ -29,6 +31,7 @@ from content_factory.domain.models import (
     WebPageScoreRow,
     WebSearchHit,
 )
+from content_factory.domain.viral_v2 import ViralScore
 from content_factory.domain.web_relevance import WebPageInput
 
 
@@ -284,6 +287,11 @@ class SegmentTermRepository(Protocol):
         não mexe em `last_seen_at`, que significa "visto no Suggest")."""
         ...
 
+    async def set_engagement_scores(self, segment_id: int, scores: Mapping[str, float]) -> int:
+        """R10: grava o `engagement_score` do relatório nas linhas `seed`/`suggest`
+        existentes (o das hashtags é o peso da mineração e não é tocado)."""
+        ...
+
 
 class TermTrendRepository(Protocol):
     """R3: histórico do `trend_score` por termo e dia (`term_trend_days`)."""
@@ -333,6 +341,10 @@ class NoOpSegmentTermRepository:
         return 0
 
     async def set_trend_scores(self, segment_id: int, scores: Mapping[str, float | None]) -> int:
+        _ = segment_id
+        return len(scores)
+
+    async def set_engagement_scores(self, segment_id: int, scores: Mapping[str, float]) -> int:
         _ = segment_id
         return len(scores)
 
@@ -507,3 +519,37 @@ class SsrfGuard(Protocol):
     """
 
     def __call__(self, url: str) -> None: ...
+
+
+class PopulationReader(Protocol):
+    """R9/R10: população do `viral-v2` e atribuições, ambas NO CORTE."""
+
+    async def population(
+        self, segment_id: int, as_of: datetime, window_days: int
+    ) -> list[PopulationRow]:
+        """Vídeos do segmento publicados na janela, com métrica até o corte."""
+        ...
+
+    async def attributions(
+        self, segment_id: int, platform: str, as_of: datetime
+    ) -> list[tuple[int, str, str]]:
+        """Pares DISTINTOS (video_id, termo, origem) até o corte, sem `unattributed`."""
+        ...
+
+
+class ViralV2Repository(Protocol):
+    """R9: grava o `viral-v2` (append-only), nunca em `video_scores`."""
+
+    async def append_many(
+        self,
+        segment_id: int,
+        as_of: datetime,
+        scores: Sequence[ViralScore],
+        window_days: int,
+    ) -> int: ...
+
+
+class TermReportRepository(Protocol):
+    """R10: grava as linhas de um relatório no corte."""
+
+    async def append_many(self, rows: Sequence[TermReportRecord]) -> int: ...

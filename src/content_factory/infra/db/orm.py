@@ -439,3 +439,75 @@ class TrendObservationRow(Base):
     collected_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )
+
+
+class VideoScoreV2Row(Base):
+    """R9: `viral-v2` append-only, AO LADO de `video_scores` (fase-h intocado).
+
+    Uma linha por vídeo por execução. `as_of` = corte da população (o score é
+    percentil dentro de plataforma+segmento naquele instante); `viral_score_v2`
+    NULL = população abaixo do mínimo (não inventa ranking com poucos vídeos).
+    """
+
+    __tablename__ = "video_scores_v2"
+    __table_args__ = (
+        Index("ix_video_scores_v2_segment_computed", "segment_id", "computed_at"),
+        Index("ix_video_scores_v2_video_computed", "video_id", "computed_at"),
+    )
+    id: Mapped[int] = mapped_column(primary_key=True)
+    video_id: Mapped[int] = mapped_column(ForeignKey("videos.id"))
+    segment_id: Mapped[int] = mapped_column(ForeignKey("segments.id"))
+    computed_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    as_of: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    viral_score_v2: Mapped[float | None] = mapped_column(Float)
+    velocity: Mapped[float | None] = mapped_column(Float)
+    engagement: Mapped[float | None] = mapped_column(Float)
+    channel_relative: Mapped[float | None] = mapped_column(Float)
+    reach: Mapped[float | None] = mapped_column(Float)
+    population_n: Mapped[int] = mapped_column(Integer)
+    explanation: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict)
+    formula_version: Mapped[str] = mapped_column(String(16))
+    window_days: Mapped[int] = mapped_column(Integer)
+
+
+class TermReportRow(Base):
+    """R10: uma linha por chave de um relatório no corte (`cf term-report`).
+
+    `scope`: `term` (ranking de temas), `origin` (veredito pré-registrado
+    contra `seed`) ou `video` (top vídeos). Todas as linhas de uma execução
+    compartilham `report_id`; o mesmo `as_of` reproduz as mesmas linhas.
+    """
+
+    __tablename__ = "term_reports"
+    __table_args__ = (
+        Index("ix_term_reports_segment_as_of", "segment_id", "as_of"),
+        Index("ix_term_reports_report_id", "report_id"),
+    )
+    id: Mapped[int] = mapped_column(primary_key=True)
+    report_id: Mapped[str] = mapped_column(String(36))
+    segment_id: Mapped[int] = mapped_column(ForeignKey("segments.id"))
+    platform: Mapped[str] = mapped_column(String(32))
+    scope: Mapped[str] = mapped_column(String(16))
+    report_key: Mapped[str] = mapped_column(String(200))
+    n: Mapped[int] = mapped_column(Integer)
+    baseline_n: Mapped[int | None] = mapped_column(Integer)
+    median_viral_v2: Mapped[float | None] = mapped_column(Float)
+    median_velocity: Mapped[float | None] = mapped_column(Float)
+    median_engagement: Mapped[float | None] = mapped_column(Float)
+    median_channel_relative: Mapped[float | None] = mapped_column(Float)
+    top10_fraction: Mapped[float | None] = mapped_column(Float)
+    engagement_score: Mapped[float | None] = mapped_column(Float)
+    diff: Mapped[float | None] = mapped_column(Float)
+    ci_low: Mapped[float | None] = mapped_column(Float)
+    ci_high: Mapped[float | None] = mapped_column(Float)
+    overlap: Mapped[int | None] = mapped_column(Integer)
+    verdict: Mapped[str] = mapped_column(String(16))
+    rank: Mapped[int | None] = mapped_column(Integer)
+    version: Mapped[str] = mapped_column(String(32))
+    rules_version: Mapped[str] = mapped_column(String(64))
+    as_of: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    computed_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )

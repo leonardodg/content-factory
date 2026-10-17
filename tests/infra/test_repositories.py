@@ -5,7 +5,7 @@ from typing import Any, cast
 from uuid import uuid4
 
 import pytest
-from sqlalchemy import select, update
+from sqlalchemy import delete, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from content_factory.app.ports import ScoreUpsertRow
@@ -27,6 +27,7 @@ from content_factory.domain.models import (
 from content_factory.infra.db.orm import (
     CollectRunRow,
     CreatorRow,
+    VideoDiscoveryRow,
     VideoMetricsRow,
     VideoRow,
     VideoScoreRow,

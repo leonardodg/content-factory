@@ -535,6 +535,7 @@ class FakeSegmentTerms(SegmentTermRepository):
         self.saved: list[SegmentTerm] = []
         self.status_calls: list[tuple[int, str, list[str], str]] = []
         self.trend_scores: dict[str, float | None] = {}
+        self.engagement: dict[str, float] = {}
 
     async def upsert_many(self, segment_id: int, terms: Sequence[SegmentTerm]) -> int:
         self.saved.extend(terms)
@@ -585,6 +586,11 @@ class FakeSegmentTerms(SegmentTermRepository):
             else t
             for t in self.saved
         ]
+        return len(scores)
+
+    async def set_engagement_scores(self, segment_id: int, scores: Mapping[str, float]) -> int:
+        _ = segment_id
+        self.engagement.update(scores)
         return len(scores)
 
 
