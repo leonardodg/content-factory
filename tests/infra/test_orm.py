@@ -120,3 +120,10 @@ def test_tabelas_de_atribuicao_e_log_de_buscas() -> None:
         "started_at",
         "finished_at",
     } <= {c.name for c in SearchQueryRow.__table__.columns}
+
+
+def test_videos_tem_removed_at() -> None:
+    from content_factory.infra.db.orm import VideoRow
+
+    col = VideoRow.__table__.columns["removed_at"]
+    assert col.nullable is True
