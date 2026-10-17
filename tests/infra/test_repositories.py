@@ -2369,7 +2369,9 @@ async def test_viral_v2_e_relatorio_gravam_sem_tocar_video_scores() -> None:
     async with factory() as s:
         await s.rollback()
         seg = await SegmentRepositoryImpl(s).upsert(
-            SegmentConfig(slug=f"teste-v2-{uuid4().hex[:8]}", name="V2", platforms=["youtube"])
+            SegmentConfig(
+                slug=f"teste-v2-{uuid4().hex[:8]}", name="V2", platforms=["youtube"], keywords=["k"]
+            )
         )
         await VideoRepositoryImpl(s).upsert_candidates(seg.id, "youtube", [candidate(1)])
         vid = (await s.execute(select(VideoRow.id).order_by(VideoRow.id.desc()))).scalars().first()
