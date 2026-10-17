@@ -1,9 +1,10 @@
 import hashlib
 import logging
 from collections.abc import Sequence
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime, timedelta
+from typing import Any, Literal, cast
 
-from sqlalchemy import func, select, text, update
+from sqlalchemy import CursorResult, func, select, text, tuple_, update
 from sqlalchemy.dialects.postgresql import distinct_on
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.exc import DataError, IntegrityError
@@ -12,13 +13,16 @@ from sqlalchemy.orm import aliased
 
 from content_factory.app.ports import (
     CollectRunRepository,
+    DiscoveryRepository,
     JobRunReader,
     KeywordSignalRepository,
     OpsReportReader,
     ResearchCampaignRepository,
     ScoreRepository,
     ScoreUpsertRow,
+    SearchQueryRepository,
     SegmentRepository,
+    SegmentTermRepository,
     TrendObservationRepository,
     UpsertReport,
     VideoRepository,
@@ -30,12 +34,15 @@ from content_factory.domain.errors import SegmentNotFound
 from content_factory.domain.models import (
     CandidateVideo,
     CollectRun,
+    Discovery,
     KeywordSignal,
     MetricCoverage,
     ResearchCampaign,
     ScoreResult,
+    SearchQueryRun,
     Segment,
     SegmentConfig,
+    SegmentTerm,
     TrendPoint,
     UpsertStats,
     VideoMetrics,
@@ -48,10 +55,15 @@ from content_factory.domain.web_relevance import WebPageInput
 from content_factory.domain.web_urls import ad_signal, canonicalize
 from content_factory.infra.db.orm import (
     CollectRunRow,
+    CreatorRow,
+    KeywordSignalDayRow,
     KeywordSignalRow,
     ResearchCampaignRow,
+    SearchQueryRow,
     SegmentRow,
+    SegmentTermRow,
     TrendObservationRow,
+    VideoDiscoveryRow,
     VideoMetricsRow,
     VideoRow,
     VideoScoreRow,
@@ -125,6 +137,32 @@ class VideoRepositoryImpl(VideoRepository):
             # (ex.: conexão) seguem propagando.
             try:
                 async with self._s.begin_nested():
+                    # R8: criador a partir do channelId (YouTube). Sem
+                    # `creator_platform_id` (Instagram/web) não há linha em
+                    # `creators` e o vídeo fica com creator_id NULL.
+                    creator_id: int | None = None
+                    if c.creator_platform_id:
+                        cstmt = pg_insert(CreatorRow).values(
+                            platform=c.platform,
+                            platform_creator_id=c.creator_platform_id,
+                            username=c.creator_handle,
+                            followers_count=c.creator_followers,
+                            raw={},  # o raw do candidato é do VÍDEO, não do criador
+                        )
+                        cstmt = cstmt.on_conflict_do_update(
+                            index_elements=["platform", "platform_creator_id"],
+                            set_={
+                                "username": cstmt.excluded.username,
+                                # COALESCE: coleta sem subscriberCount não apaga
+                                # o valor conhecido
+                                "followers_count": func.coalesce(
+                                    cstmt.excluded.followers_count, CreatorRow.followers_count
+                                ),
+                            },
+                        )
+                        creator_id = (
+                            await self._s.execute(cstmt.returning(CreatorRow.id))
+                        ).scalar_one()
                     stmt = pg_insert(VideoRow).values(
                         platform=c.platform,
                         platform_video_id=c.platform_video_id,
@@ -135,6 +173,7 @@ class VideoRepositoryImpl(VideoRepository):
                         duration_s=c.duration_s,
                         thumbnail_url=c.thumbnail_url,
                         language=c.language,
+                        creator_id=creator_id,
                         raw=c.raw,
                     )
                     stmt = stmt.on_conflict_do_update(
@@ -161,6 +200,11 @@ class VideoRepositoryImpl(VideoRepository):
                                 stmt.excluded.thumbnail_url, VideoRow.thumbnail_url
                             ),
                             "language": func.coalesce(stmt.excluded.language, VideoRow.language),
+                            # R8: só preenche o vínculo quando esta coleta o
+                            # trouxe — coleta sem channelId não desliga o criador
+                            "creator_id": func.coalesce(
+                                stmt.excluded.creator_id, VideoRow.creator_id
+                            ),
                             "raw": stmt.excluded.raw,
                             "last_collected_at": stmt.excluded.last_collected_at,
                         },
@@ -617,6 +661,41 @@ class KeywordSignalRepositoryImpl(KeywordSignalRepository):
             saved += 1
         return saved
 
+    async def record_days(
+        self, segment_id: int, keywords: Sequence[str], source: str, day: date
+    ) -> int:
+        """Marca (segmento, termo, fonte, dia) — append-only, conflito é no-op."""
+        for kw in keywords:
+            stmt = (
+                pg_insert(KeywordSignalDayRow)
+                .values(segment_id=segment_id, keyword=kw, source=source, seen_on=day)
+                .on_conflict_do_nothing(
+                    index_elements=["segment_id", "keyword", "source", "seen_on"]
+                )
+            )
+            await self._s.execute(stmt)
+        await self._s.flush()
+        return len(keywords)
+
+    async def days_seen(
+        self, segment_id: int, source: str, days: int, today: date
+    ) -> dict[str, int]:
+        # `today` vem do clock do app (determinismo em teste), não de datetime.now
+        since = today - timedelta(days=days - 1)
+        stmt = (
+            select(
+                KeywordSignalDayRow.keyword,
+                func.count(func.distinct(KeywordSignalDayRow.seen_on)),
+            )
+            .where(
+                KeywordSignalDayRow.segment_id == segment_id,
+                KeywordSignalDayRow.source == source,
+                KeywordSignalDayRow.seen_on >= since,
+            )
+            .group_by(KeywordSignalDayRow.keyword)
+        )
+        return {str(k): int(n) for k, n in (await self._s.execute(stmt)).all()}
+
     async def top_for_segment(
         self, segment_id: int, source: str | None, limit: int
     ) -> list[KeywordSignal]:
@@ -629,6 +708,127 @@ class KeywordSignalRepositoryImpl(KeywordSignalRepository):
             KeywordSignal(keyword=r.keyword, source=r.source, weight=r.weight, depth=r.depth)
             for r in rows
         ]
+
+
+def _segment_term(row: SegmentTermRow) -> SegmentTerm:
+    return SegmentTerm(
+        segment_id=row.segment_id,
+        term=row.term,
+        origin=row.origin,
+        kw_rank=row.kw_rank,
+        trend_score=row.trend_score,
+        engagement_score=row.engagement_score,
+        status=row.status,
+        exclude_reason=row.exclude_reason,
+        first_seen_at=row.first_seen_at,
+        last_seen_at=row.last_seen_at,
+        rules_version=row.rules_version,
+    )
+
+
+class SegmentTermRepositoryImpl(SegmentTermRepository):
+    def __init__(self, session: AsyncSession) -> None:
+        self._s = session
+
+    async def upsert_many(self, segment_id: int, terms: Sequence[SegmentTerm]) -> int:
+        now = datetime.now(UTC)
+        for t in terms:
+            stmt = pg_insert(SegmentTermRow).values(
+                segment_id=segment_id,
+                term=t.term,
+                origin=t.origin,
+                kw_rank=t.kw_rank,
+                trend_score=t.trend_score,
+                engagement_score=t.engagement_score,
+                status=t.status,
+                exclude_reason=t.exclude_reason,
+                first_seen_at=now,
+                last_seen_at=now,
+                rules_version=t.rules_version,
+            )
+            stmt = stmt.on_conflict_do_update(
+                index_elements=["segment_id", "term", "origin"],
+                set_={
+                    "kw_rank": stmt.excluded.kw_rank,
+                    # trend_score (Bloco 4) e engagement_score (Bloco 5) vêm de
+                    # outros jobs: o research reupserta sem eles e NÃO pode
+                    # apagá-los (revisão QA do PR #50). Valor novo não nulo vence.
+                    "trend_score": func.coalesce(
+                        stmt.excluded.trend_score, SegmentTermRow.trend_score
+                    ),
+                    "engagement_score": func.coalesce(
+                        stmt.excluded.engagement_score, SegmentTermRow.engagement_score
+                    ),
+                    "status": stmt.excluded.status,
+                    "exclude_reason": stmt.excluded.exclude_reason,
+                    "last_seen_at": now,
+                    "rules_version": stmt.excluded.rules_version,
+                },
+            )
+            await self._s.execute(stmt)
+        await self._s.flush()
+        return len(terms)
+
+    async def top_by_origin(
+        self,
+        segment_id: int,
+        origin: str,
+        limit: int,
+        order_by: Literal["kw_rank", "trend_score", "engagement_score"] = "kw_rank",
+    ) -> list[SegmentTerm]:
+        # A ordem depende da origem: suggest por kw_rank, a vaga trends por
+        # trend_score, hashtags por engagement_score (sem isso as hashtags
+        # sairiam em ordem ALFABÉTICA — revisão QA).
+        column = {
+            "kw_rank": SegmentTermRow.kw_rank,
+            "trend_score": SegmentTermRow.trend_score,
+            "engagement_score": SegmentTermRow.engagement_score,
+        }[order_by]
+        stmt = (
+            select(SegmentTermRow)
+            .where(
+                SegmentTermRow.segment_id == segment_id,
+                SegmentTermRow.origin == origin,
+                SegmentTermRow.status == "active",
+            )
+            .order_by(column.desc().nullslast(), SegmentTermRow.term)
+            .limit(limit)
+        )
+        return [_segment_term(r) for r in (await self._s.execute(stmt)).scalars().all()]
+
+    async def counts_by_origin(self, segment_id: int) -> dict[str, int]:
+        stmt = (
+            select(SegmentTermRow.origin, func.count(SegmentTermRow.id))
+            .where(SegmentTermRow.segment_id == segment_id)
+            .group_by(SegmentTermRow.origin)
+        )
+        return {str(o): int(n) for o, n in (await self._s.execute(stmt)).all()}
+
+    async def all_for_segment(
+        self, segment_id: int, status: str | None = None
+    ) -> list[SegmentTerm]:
+        stmt = select(SegmentTermRow).where(SegmentTermRow.segment_id == segment_id)
+        if status is not None:
+            stmt = stmt.where(SegmentTermRow.status == status)
+        rows = (await self._s.execute(stmt.order_by(SegmentTermRow.term))).scalars().all()
+        return [_segment_term(r) for r in rows]
+
+    async def set_status(
+        self, segment_id: int, origin: str, keep: Sequence[str], reason: str
+    ) -> int:
+        stmt = (
+            update(SegmentTermRow)
+            .where(
+                SegmentTermRow.segment_id == segment_id,
+                SegmentTermRow.origin == origin,
+                SegmentTermRow.status == "active",
+                SegmentTermRow.term.not_in(list(keep)),
+            )
+            .values(status="excluded", exclude_reason=reason)
+        )
+        result = cast("CursorResult[Any]", await self._s.execute(stmt))
+        await self._s.flush()
+        return int(result.rowcount)
 
 
 def _campaign_model(row: ResearchCampaignRow) -> ResearchCampaign:
@@ -801,6 +1001,74 @@ class WebHitRepositoryImpl(WebHitRepository):
             saved += 1
         await self._s.flush()
         return saved
+
+
+class DiscoveryRepositoryImpl(DiscoveryRepository):
+    """R6 — atribui cada vídeo ao termo/posição que o trouxe nesta coleta."""
+
+    def __init__(self, session: AsyncSession) -> None:
+        self._s = session
+
+    async def record(self, segment_id: int, discoveries: Sequence[Discovery]) -> int:
+        if not discoveries:
+            return 0
+        # 1 consulta para todos os vídeos: uma por descoberta seria N+1
+        keys = {(d.candidate.platform, d.candidate.platform_video_id) for d in discoveries}
+        rows = await self._s.execute(
+            select(VideoRow.platform, VideoRow.platform_video_id, VideoRow.id).where(
+                tuple_(VideoRow.platform, VideoRow.platform_video_id).in_(list(keys))
+            )
+        )
+        ids = {(p, pid): vid for p, pid, vid in rows.all()}
+        written = 0
+        for d in discoveries:
+            video_id = ids.get((d.candidate.platform, d.candidate.platform_video_id))
+            if video_id is None:
+                continue  # candidato não persistiu (savepoint): sem linha órfã
+            self._s.add(
+                VideoDiscoveryRow(
+                    video_id=video_id,
+                    segment_id=segment_id,
+                    platform=d.candidate.platform,
+                    term=d.term,
+                    term_origin=d.origin,
+                    query_id=d.query_id,
+                    result_position=d.result_position,
+                    run_kind=d.run_kind,
+                )
+            )
+            written += 1
+        await self._s.flush()
+        return written
+
+
+class SearchQueryRepositoryImpl(SearchQueryRepository):
+    """R13 — log append-only de cada busca (inclusive vazia/falha)."""
+
+    def __init__(self, session: AsyncSession) -> None:
+        self._s = session
+
+    async def record_many(self, segment_id: int, runs: Sequence[SearchQueryRun]) -> int:
+        self._s.add_all(
+            [
+                SearchQueryRow(
+                    segment_id=segment_id,
+                    platform=r.platform,
+                    query_id=r.query_id,
+                    term=r.term,
+                    origin=r.origin,
+                    results=r.results,
+                    kept=r.kept,
+                    quota_used=r.quota_used,
+                    error_code=r.error_code,
+                    started_at=r.started_at,
+                    finished_at=r.finished_at,
+                )
+                for r in runs
+            ]
+        )
+        await self._s.flush()
+        return len(runs)
 
 
 class WebScoreRepositoryImpl(WebScoreRepository):

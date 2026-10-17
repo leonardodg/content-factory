@@ -1,16 +1,18 @@
 import asyncio
 import logging
 from collections.abc import Sequence
-from datetime import UTC, datetime, timedelta
-from typing import ClassVar
+from datetime import UTC, date, datetime, timedelta
+from typing import ClassVar, cast
 
 import pytest
 from tests.stubs import (
     ConcurrencyTracker,
+    FakeKeywordSignals,
     FakeLimiter,
     FakeLock,
     FakeRepos,
     FakeRuns,
+    FakeSegmentTerms,
     FakeTrendObservations,
     FakeVideos,
 )
@@ -18,8 +20,9 @@ from tests.stubs import (
 from content_factory.app.call_counters import record_gate_hit
 from content_factory.app.ports import KeywordSignalRepository, SocialDiscoverer
 from content_factory.app.research_pipeline import ResearchDeps, ResearchOutcome, run_research_cycle
-from content_factory.domain.errors import CollectorError
+from content_factory.domain.errors import CollectorError, NetworkError
 from content_factory.domain.fanout_guard import FanoutGuard
+from content_factory.domain.kw_rank import SuggestHit
 from content_factory.domain.models import (
     CandidateVideo,
     CollectRun,
@@ -45,16 +48,9 @@ class _FakeWeb:
     def __init__(self) -> None:
         self.calls: list[list[str]] = []
 
-    async def expand(self, seeds: list[str], depth: int) -> list[KeywordSignal]:
+    async def expand(self, seeds: list[str], depth: int) -> list[SuggestHit]:
         self.calls.append(list(seeds))
-        return [
-            KeywordSignal(
-                keyword=f"{seeds[0]} relacionada",
-                source=self.platform,
-                weight=0.7,
-                depth=depth + 1,
-            )
-        ]
+        return [SuggestHit(term=f"{seeds[0]} relacionada", seed=seeds[0], position=1)]
 
 
 class _FakeTrends:
@@ -96,6 +92,16 @@ class _FakeSignalRepo(KeywordSignalRepository):
         self, segment_id: int, source: str | None, limit: int
     ) -> list[KeywordSignal]:
         return []
+
+    async def record_days(
+        self, segment_id: int, keywords: Sequence[str], source: str, day: date
+    ) -> int:
+        return len(keywords)
+
+    async def days_seen(
+        self, segment_id: int, source: str, days: int, today: date
+    ) -> dict[str, int]:
+        return {}
 
 
 class _FakeSegmentsWithKeywords:
@@ -440,6 +446,36 @@ async def test_run_research_cycle_partial_when_one_of_two_social_fails() -> None
 
 
 @pytest.mark.asyncio
+async def test_research_sem_fase_social_quando_desligada() -> None:
+    """R5: `social_platforms=frozenset()` desliga a fase social (orçamento).
+
+    Suggest/Trends/pool seguem rodando; nenhuma cota de busca social é gasta.
+    """
+    repos = FakeRepos()
+    social = _FakeSocial()
+    web = _FakeWeb()
+    deps = ResearchDeps(
+        web=web,
+        trends=_FakeTrends(),
+        socials={"instagram": social},
+        signals=_FakeSignalRepo(),
+        trend_observations=FakeTrendObservations(),
+        segments=_FakeSegmentsWithKeywords(),
+        videos=repos.videos,
+        runs=repos.runs,
+        lock=FakeLock(),
+        limiter=FakeLimiter(),
+        guard=FanoutGuard(DepthConfig()),
+        social_platforms=frozenset(),
+    )
+    out = await run_research_cycle("candles", DepthConfig(), deps)
+    assert out.counts["social_platforms_attempted"] == 0
+    assert social.calls == []  # nenhuma cota de busca no research
+    assert web.calls  # Suggest continua rodando
+    assert out.ok is True
+
+
+@pytest.mark.asyncio
 async def test_run_research_cycle_ok_when_no_social_platform_configured() -> None:
     """Segmento sem rede social configurada: ausência de coleta social não é falha."""
     repos = FakeRepos()
@@ -570,15 +606,13 @@ class _SegmentsWithPlatforms:
 
 
 class _RankedWeb:
-    """Devolve N sinais com pesos distintos — o guard trunca pelos maiores."""
+    """Devolve N termos com posições distintas — o guard trunca pelos melhores."""
 
     platform: ClassVar[str] = "web_suggest"
 
-    async def expand(self, seeds: list[str], depth: int) -> list[KeywordSignal]:
-        return [
-            KeywordSignal(keyword=f"kw{i}", source=self.platform, weight=w, depth=depth + 1)
-            for i, w in enumerate([0.1, 0.9, 0.5])
-        ]
+    async def expand(self, seeds: list[str], depth: int) -> list[SuggestHit]:
+        _ = seeds, depth
+        return [SuggestHit(term=f"kw{i}", seed="s", position=i + 1) for i in range(3)]
 
 
 @pytest.mark.asyncio
@@ -983,7 +1017,7 @@ class _BoomWeb:
     def __init__(self, error: Exception) -> None:
         self._error = error
 
-    async def expand(self, seeds: list[str], depth: int) -> list[KeywordSignal]:
+    async def expand(self, seeds: list[str], depth: int) -> list[SuggestHit]:
         raise self._error
 
 
@@ -1163,13 +1197,9 @@ async def test_research_social_run_records_quota_used() -> None:
 class _ManyWeb:
     platform: ClassVar[str] = "web_suggest"
 
-    async def expand(self, seeds: list[str], depth: int) -> list[KeywordSignal]:
-        _ = seeds
-        weights = [0.1, 0.9, 0.5, 0.3, 0.8, 0.2, 0.7, 0.6]
-        return [
-            KeywordSignal(keyword=f"kw{i}", source=self.platform, weight=w, depth=depth + 1)
-            for i, w in enumerate(weights)
-        ]
+    async def expand(self, seeds: list[str], depth: int) -> list[SuggestHit]:
+        _ = seeds, depth
+        return [SuggestHit(term=f"kw{i}", seed="s", position=i + 1) for i in range(8)]
 
 
 class _RecordingTrends:
@@ -1200,7 +1230,7 @@ async def test_trends_gets_valid_timeframe_and_top5_keywords_by_weight() -> None
     keywords, timeframe = trends.calls[0]
     assert timeframe == TRENDS_TIMEFRAME == "today 12-m"
     assert TRENDS_MAX_KEYWORDS == 5
-    assert keywords == ["kw1", "kw4", "kw6", "kw7", "kw2"]  # 0.9, 0.8, 0.7, 0.6, 0.5
+    assert keywords == ["kw0", "kw1", "kw2", "kw3", "kw4"]  # 1/1, 1/2, 1/3, 1/4, 1/5
 
 
 @pytest.mark.asyncio
@@ -1214,3 +1244,138 @@ async def test_social_keywords_put_segment_seeds_first_without_duplicates() -> N
     assert isinstance(social, _FakeSocial)
     # seed primeiro; "vela relacionada" vem do web E do trends, mas aparece 1 vez
     assert social.calls == [["vela", "vela relacionada"]]
+
+
+class _HitWeb:
+    """Suggest que devolve hits FIXOS — controla termo, semente e posição."""
+
+    platform: ClassVar[str] = "web_suggest"
+
+    def __init__(self, hits: list[SuggestHit]) -> None:
+        self._hits = hits
+
+    async def expand(self, seeds: list[str], depth: int) -> list[SuggestHit]:
+        _ = seeds, depth
+        return list(self._hits)
+
+
+class _SegmentsWithConfig:
+    def __init__(self, segment: Segment) -> None:
+        self._segment = segment
+
+    async def get_by_slug(self, slug: str) -> Segment:
+        return self._segment
+
+    async def upsert(self, cfg: SegmentConfig) -> Segment:
+        raise NotImplementedError
+
+
+def research_deps(
+    *,
+    suggest_hits: list[SuggestHit],
+    anchor_terms: list[str] | None = None,
+    blocked_terms: list[str] | None = None,
+    keywords: list[str] | None = None,
+) -> ResearchDeps:
+    """Deps do research com Suggest controlado e fakes do pool/dias (R1/R2/R4)."""
+    repos = FakeRepos()
+    segment = Segment(
+        id=1,
+        slug="velas-artesanais",
+        name="Velas artesanais",
+        platforms=["instagram"],
+        keywords=["vela artesanal"] if keywords is None else keywords,
+        probe_terms=[],
+        anchor_terms=anchor_terms or [],
+        blocked_terms=blocked_terms or [],
+    )
+    return ResearchDeps(
+        web=_HitWeb(suggest_hits),
+        trends=_RecordingTrends(),
+        socials={"instagram": _FakeSocial()},
+        signals=FakeKeywordSignals(),
+        trend_observations=FakeTrendObservations(),
+        segments=_SegmentsWithConfig(segment),
+        videos=repos.videos,
+        runs=repos.runs,
+        lock=FakeLock(),
+        limiter=FakeLimiter(),
+        guard=FanoutGuard(DepthConfig()),
+        terms=FakeSegmentTerms(),
+    )
+
+
+@pytest.mark.asyncio
+async def test_research_filtra_ranqueia_e_grava_o_pool() -> None:
+    deps = research_deps(
+        suggest_hits=[
+            SuggestHit("como fazer vela aromática", "velas", 1),  # aceita
+            SuggestHit("candle making for beginners", "velas", 2),  # lang
+            SuggestHit("presente original", "velas", 3),  # no_anchor
+        ],
+        anchor_terms=["vela"],
+        blocked_terms=["grafico"],
+    )
+    out = await run_research_cycle("velas-artesanais", DepthConfig(), deps)
+    terms = cast("FakeSegmentTerms", deps.terms)
+    assert out.counts["filter_discards_lang"] == 1
+    assert out.counts["filter_discards_no_anchor"] == 1
+    assert out.counts["filter_discards_blocked"] == 0
+    by_key = {(t.term, t.origin): t for t in terms.saved}
+    aceita = by_key[("como fazer vela aromática", "suggest")]
+    assert aceita.status == "active"
+    assert aceita.kw_rank is not None and aceita.kw_rank != 0.5
+    excluida = by_key[("presente original", "suggest")]
+    assert excluida.status == "excluded" and excluida.exclude_reason == "no_anchor"
+    assert all(t.status == "active" for t in terms.saved if t.origin == "seed")
+    assert out.counts["terms_active"] == out.counts["web_found"] + 1
+    assert out.counts["terms_excluded"] == 2
+
+
+@pytest.mark.asyncio
+async def test_research_grava_o_dia_antes_de_ler_a_persistencia() -> None:
+    deps = research_deps(suggest_hits=[SuggestHit("vela de soja", "velas", 1)])
+    await run_research_cycle("velas-artesanais", DepthConfig(), deps)
+    signals = cast("FakeKeywordSignals", deps.signals)
+    # o termo de hoje conta 1 dia (não 0, nem "default 1" sem gravar)
+    assert signals.days[("vela de soja", deps.clock().date())] == 1
+
+
+@pytest.mark.asyncio
+async def test_research_so_manda_ao_trends_e_as_redes_termos_aceitos() -> None:
+    deps = research_deps(
+        suggest_hits=[
+            SuggestHit("candle for beginners", "velas", 1),  # lang → fora
+            SuggestHit("vela de soja", "velas", 2),  # aceita
+        ],
+        anchor_terms=["vela"],
+    )
+    await run_research_cycle("velas-artesanais", DepthConfig(), deps)
+    trends = cast("_RecordingTrends", deps.trends)
+    requested = trends.calls[0][0] if trends.calls else []
+    assert "candle for beginners" not in requested
+    assert "vela de soja" in requested
+    social = cast("_FakeSocial", deps.socials["instagram"])
+    assert all("candle for beginners" not in call for call in social.calls)
+
+
+@pytest.mark.asyncio
+async def test_research_marca_not_seen_os_suggest_que_nao_vieram_hoje() -> None:
+    """Revisão QA: sem isso o termo de ontem fica ativo para sempre com o
+    kw_rank antigo e a vaga `suggest` (Bloco 4) o escolhe indefinidamente."""
+    deps = research_deps(
+        suggest_hits=[SuggestHit("vela de soja", "velas", 1)], anchor_terms=["vela"]
+    )
+    await run_research_cycle("velas-artesanais", DepthConfig(), deps)
+    terms = cast("FakeSegmentTerms", deps.terms)
+    assert terms.status_calls == [(1, "suggest", ["vela de soja"], "not_seen")]
+
+
+@pytest.mark.asyncio
+async def test_research_nao_marca_not_seen_quando_o_suggest_falha() -> None:
+    """Suggest fora do ar devolve lista vazia: marcar `not_seen` apagaria o pool."""
+    deps = research_deps(suggest_hits=[], anchor_terms=["vela"])
+    deps.web = _BoomWeb(NetworkError("web_suggest", "fora do ar"))
+    out = await run_research_cycle("velas-artesanais", DepthConfig(), deps)
+    assert out.counts["web_failed"] == 1
+    assert cast("FakeSegmentTerms", deps.terms).status_calls == []

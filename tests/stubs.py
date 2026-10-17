@@ -7,14 +7,20 @@ estrutura dos testes. Sem Redis, sem banco, sem rede.
 
 import asyncio
 from collections.abc import Sequence
-from datetime import datetime
+from datetime import date, datetime
 from math import ceil
-from typing import Any, ClassVar
+from typing import Any, ClassVar, Literal
 
+from content_factory.app.call_counters import record_quota
 from content_factory.app.ports import (
     Collector,
     CollectRunRepository,
+    DiscoveryRepository,
+    KeywordSignalRepository,
+    SearchQueryRepository,
     SegmentRepository,
+    SegmentTermRepository,
+    TermSearcher,
     TrendObservationRepository,
     VideoRepository,
     WebScoreRepository,
@@ -23,8 +29,13 @@ from content_factory.domain.errors import CollectorError
 from content_factory.domain.models import (
     CandidateVideo,
     CollectRun,
+    Discovery,
+    KeywordSignal,
+    SearchQuery,
+    SearchQueryRun,
     Segment,
     SegmentConfig,
+    SegmentTerm,
     TrendPoint,
     UpsertStats,
     VideoSnapshot,
@@ -58,6 +69,81 @@ def FakeCollector(platform: str, n: int = 3, fail: CollectorError | None = None)
             ]
 
     return Impl()
+
+
+def FakeTermSearcher(
+    hits: dict[str, list[str]],
+    *,
+    quota_per_call: int = 0,
+    fail_on: str | None = None,
+    error: CollectorError | None = None,
+) -> TermSearcher:
+    """`TermSearcher` determinístico: `{termo: [ids de vídeo]}` (R6).
+
+    `search_term` devolve `Discovery` com posição 1-based. `quota_per_call`
+    é somado via `record_quota` (o contador ativo é o `counting()` de cada
+    busca). `fail_on` levanta `error` naquele termo (interrompe as buscas
+    seguintes, como o contrato real).
+    """
+    mapping = dict(hits)
+    quota = quota_per_call
+    fail_term = fail_on
+    fail_error = error
+
+    class Impl:
+        platform: ClassVar[str] = "youtube"
+
+        async def search_term(
+            self, segment: SegmentConfig, query: SearchQuery, limit: int
+        ) -> list[Discovery]:
+            _ = segment, limit
+            if quota:
+                record_quota(quota)
+            if fail_term is not None and query.term == fail_term:
+                raise fail_error or CollectorError("failed", "youtube")
+            return [
+                Discovery(
+                    candidate=CandidateVideo(
+                        platform="youtube",
+                        platform_video_id=vid,
+                        url=f"https://youtu.be/{vid}",
+                        creator_handle="stub",
+                        title=vid,
+                    ),
+                    term=query.term,
+                    origin=query.origin,
+                    query_id=query.query_id,
+                    result_position=position,
+                    run_kind="collect",
+                )
+                for position, vid in enumerate(mapping.get(query.term, []), start=1)
+            ]
+
+    return Impl()
+
+
+class FakeDiscoveries(DiscoveryRepository):
+    """Grava as descobertas em memória e devolve quantas entraram (R6)."""
+
+    def __init__(self) -> None:
+        self.saved: list[Discovery] = []
+
+    async def record(self, segment_id: int, discoveries: Sequence[Discovery]) -> int:
+        _ = segment_id
+        self.saved.extend(discoveries)
+        return len(discoveries)
+
+
+class FakeSearchLog(SearchQueryRepository):
+    """Grava o log de buscas em memória e devolve quantas entraram (R13)."""
+
+    def __init__(self) -> None:
+        self.saved: list[SearchQueryRun] = []
+
+    async def record_many(self, segment_id: int, runs: Sequence[SearchQueryRun]) -> int:
+        _ = segment_id
+        self.saved.extend(runs)
+        return len(runs)
 
 
 class FakeLimiter:
@@ -100,11 +186,13 @@ class _FakeVideos:
         self._updates_only = updates_only
         self._skipped = skipped
         self.upserts: list[tuple[int, str, int]] = []
+        self.upserted: list[CandidateVideo] = []  # candidatos que chegaram ao upsert
 
     async def upsert_candidates(
         self, segment_id: int, source: str, candidates: Sequence[CandidateVideo]
     ) -> UpsertStats:
         self.upserts.append((segment_id, source, len(candidates)))
+        self.upserted.extend(candidates)
         if self._updates_only:  # re-execução idempotente: tudo já existe
             return UpsertStats(
                 inserted=0, updated=len(candidates) - self._skipped, skipped=self._skipped
@@ -283,6 +371,80 @@ class FakeWebScores(WebScoreRepository):
         _ = segment_id
         self.until_asked.append(until)
         return list(self._hits)
+
+
+class FakeKeywordSignals(KeywordSignalRepository):
+    """Sinais gravados + dias distintos do Suggest (R2) em memória."""
+
+    def __init__(self) -> None:
+        self.saved: list[KeywordSignal] = []
+        self.days: dict[tuple[str, date], int] = {}
+
+    async def upsert_many(self, segment_id: int, signals: Sequence[KeywordSignal]) -> int:
+        self.saved.extend(signals)
+        return len(signals)
+
+    async def top_for_segment(
+        self, segment_id: int, source: str | None, limit: int
+    ) -> list[KeywordSignal]:
+        _ = segment_id, source, limit
+        return []
+
+    async def record_days(
+        self, segment_id: int, keywords: Sequence[str], source: str, day: date
+    ) -> int:
+        _ = segment_id, source
+        for kw in keywords:
+            self.days[(kw, day)] = 1
+        return len(keywords)
+
+    async def days_seen(
+        self, segment_id: int, source: str, days: int, today: date
+    ) -> dict[str, int]:
+        _ = segment_id, source
+        counts: dict[str, int] = {}
+        for kw, day in self.days:
+            if 0 <= (today - day).days < days:
+                counts[kw] = counts.get(kw, 0) + 1
+        return counts
+
+
+class FakeSegmentTerms(SegmentTermRepository):
+    """Pool de termos (R4) em memória: só acumula para assert."""
+
+    def __init__(self) -> None:
+        self.saved: list[SegmentTerm] = []
+        self.status_calls: list[tuple[int, str, list[str], str]] = []
+
+    async def upsert_many(self, segment_id: int, terms: Sequence[SegmentTerm]) -> int:
+        self.saved.extend(terms)
+        return len(terms)
+
+    async def top_by_origin(
+        self,
+        segment_id: int,
+        origin: str,
+        limit: int,
+        order_by: Literal["kw_rank", "trend_score", "engagement_score"] = "kw_rank",
+    ) -> list[SegmentTerm]:
+        _ = segment_id, origin, limit, order_by
+        return []
+
+    async def counts_by_origin(self, segment_id: int) -> dict[str, int]:
+        _ = segment_id
+        return {}
+
+    async def all_for_segment(
+        self, segment_id: int, status: str | None = None
+    ) -> list[SegmentTerm]:
+        _ = segment_id, status
+        return []
+
+    async def set_status(
+        self, segment_id: int, origin: str, keep: Sequence[str], reason: str
+    ) -> int:
+        self.status_calls.append((segment_id, origin, list(keep), reason))
+        return 0
 
 
 class FakeTrendObservations(TrendObservationRepository):

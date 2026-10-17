@@ -2,18 +2,23 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import dataclass, field
-from datetime import datetime
-from typing import ClassVar, Protocol
+from datetime import date, datetime
+from typing import ClassVar, Literal, Protocol
 
+from content_factory.domain.kw_rank import SuggestHit
 from content_factory.domain.models import (
     CandidateVideo,
     CollectRun,
+    Discovery,
     KeywordSignal,
     MetricCoverage,
     ResearchCampaign,
     ScoreResult,
+    SearchQuery,
+    SearchQueryRun,
     Segment,
     SegmentConfig,
+    SegmentTerm,
     TrendPoint,
     UpsertStats,
     VideoSnapshot,
@@ -46,11 +51,25 @@ class Collector(Protocol):
 
 
 class KeywordExpander(Protocol):
-    """Stage de descoberta de keywords relacionadas (ex. web search suggest)."""
+    """Descoberta de sugestões relacionadas (Google Suggest)."""
 
     platform: ClassVar[str]
 
-    async def expand(self, seeds: list[str], depth: int) -> list[KeywordSignal]: ...
+    async def expand(self, seeds: list[str], depth: int) -> list[SuggestHit]: ...
+
+
+class TermSearcher(Protocol):
+    """Busca por UM termo, com atribuição (qual termo/posição trouxe o vídeo) — R6.
+
+    Capacidade separada do `Collector`: Instagram/TikTok/web não precisam
+    implementá-la. Hoje só o YouTube.
+    """
+
+    platform: ClassVar[str]
+
+    async def search_term(
+        self, segment: SegmentConfig, query: SearchQuery, limit: int
+    ) -> list[Discovery]: ...
 
 
 class TrendsProvider(Protocol):
@@ -177,6 +196,108 @@ class KeywordSignalRepository(Protocol):
     async def top_for_segment(
         self, segment_id: int, source: str | None, limit: int
     ) -> list[KeywordSignal]: ...
+
+    async def record_days(
+        self, segment_id: int, keywords: Sequence[str], source: str, day: date
+    ) -> int:
+        """Dias distintos em que cada termo do Suggest apareceu (R2). Append-only."""
+        ...
+
+    async def days_seen(
+        self, segment_id: int, source: str, days: int, today: date
+    ) -> dict[str, int]:
+        """`{termo: nº de dias distintos}` na janela `[today-days+1, today]` (R2)."""
+        ...
+
+
+class SegmentTermRepository(Protocol):
+    """Pool de termos do segmento (R4) — fonte única das buscas."""
+
+    async def upsert_many(self, segment_id: int, terms: Sequence[SegmentTerm]) -> int: ...
+
+    async def top_by_origin(
+        self,
+        segment_id: int,
+        origin: str,
+        limit: int,
+        order_by: Literal["kw_rank", "trend_score", "engagement_score"] = "kw_rank",
+    ) -> list[SegmentTerm]: ...
+
+    async def counts_by_origin(self, segment_id: int) -> dict[str, int]: ...
+
+    async def all_for_segment(
+        self, segment_id: int, status: str | None = None
+    ) -> list[SegmentTerm]: ...
+
+    async def set_status(
+        self, segment_id: int, origin: str, keep: Sequence[str], reason: str
+    ) -> int:
+        """Marca `excluded` (com `reason`) os termos ativos da origem fora de `keep`."""
+        ...
+
+
+class NoOpSegmentTermRepository:
+    """Default de `ResearchDeps` quando o chamador não grava o pool (testes)."""
+
+    async def upsert_many(self, segment_id: int, terms: Sequence[SegmentTerm]) -> int:
+        _ = segment_id
+        return len(terms)
+
+    async def top_by_origin(
+        self,
+        segment_id: int,
+        origin: str,
+        limit: int,
+        order_by: Literal["kw_rank", "trend_score", "engagement_score"] = "kw_rank",
+    ) -> list[SegmentTerm]:
+        _ = segment_id, origin, limit, order_by
+        return []
+
+    async def counts_by_origin(self, segment_id: int) -> dict[str, int]:
+        _ = segment_id
+        return {}
+
+    async def all_for_segment(
+        self, segment_id: int, status: str | None = None
+    ) -> list[SegmentTerm]:
+        _ = segment_id, status
+        return []
+
+    async def set_status(
+        self, segment_id: int, origin: str, keep: Sequence[str], reason: str
+    ) -> int:
+        _ = segment_id, origin, keep, reason
+        return 0
+
+
+class DiscoveryRepository(Protocol):
+    """R6: grava qual termo/posição trouxe cada vídeo (uma linha por busca)."""
+
+    async def record(self, segment_id: int, discoveries: Sequence[Discovery]) -> int:
+        """Devolve as linhas gravadas; descoberta de vídeo não persistido é pulada."""
+        ...
+
+
+class SearchQueryRepository(Protocol):
+    """R13: log de cada busca executada, inclusive as vazias e as que falharam."""
+
+    async def record_many(self, segment_id: int, runs: Sequence[SearchQueryRun]) -> int: ...
+
+
+class NoOpDiscoveryRepository:
+    """Default de `CollectDeps` quando o chamador não grava atribuição (testes)."""
+
+    async def record(self, segment_id: int, discoveries: Sequence[Discovery]) -> int:
+        _ = segment_id
+        return len(discoveries)
+
+
+class NoOpSearchQueryRepository:
+    """Default de `CollectDeps` quando o chamador não grava o log (testes)."""
+
+    async def record_many(self, segment_id: int, runs: Sequence[SearchQueryRun]) -> int:
+        _ = segment_id
+        return len(runs)
 
 
 class CollectRunRepository(Protocol):

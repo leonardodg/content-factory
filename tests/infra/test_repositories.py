@@ -1,6 +1,6 @@
 import logging
 import os
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from typing import Any, cast
 from uuid import uuid4
 
@@ -16,12 +16,14 @@ from content_factory.domain.models import (
     KeywordSignal,
     ScoreResult,
     SegmentConfig,
+    SegmentTerm,
     TrendPoint,
     WebPageScoreRow,
     WebSearchHit,
 )
 from content_factory.infra.db.orm import (
     CollectRunRow,
+    CreatorRow,
     VideoMetricsRow,
     VideoRow,
     VideoScoreRow,
@@ -36,6 +38,7 @@ from content_factory.infra.db.repositories import (
     ScoreRepositoryImpl,
     ScoreSampleRepositoryImpl,
     SegmentRepositoryImpl,
+    SegmentTermRepositoryImpl,
     TrendObservationRepositoryImpl,
     VideoRepositoryImpl,
     WebHitRepositoryImpl,
@@ -1663,4 +1666,374 @@ async def test_web_pages_and_hits_respect_until_cutoff() -> None:
         # sem corte: vê tudo
         page_all = (await repo.pages_for_segment(seg.id, ["vela"]))[0]
         assert (page_all.best_position, page_all.total_positions) == (1, 20)
+    await engine.dispose()
+
+
+@requires_infra
+async def test_segment_terms_pool_roundtrip() -> None:
+    """Pool R4: chave (segmento, termo, origem); upsert atualiza sem duplicar."""
+    engine = create_async_engine(os.environ["TEST_DATABASE_URL"])
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    async with factory() as s:
+        await s.rollback()
+        seg = await SegmentRepositoryImpl(s).upsert(
+            SegmentConfig(
+                slug=f"teste-pool-{uuid4().hex[:8]}",
+                name="Pool",
+                platforms=["youtube"],
+                keywords=["k"],
+            )
+        )
+        repo = SegmentTermRepositoryImpl(s)
+        terms = [
+            SegmentTerm(segment_id=seg.id, term="vela", origin="seed", rules_version="v1"),
+            SegmentTerm(
+                segment_id=seg.id,
+                term="vela",
+                origin="suggest",
+                kw_rank=0.8,
+                rules_version="v1",
+            ),
+            SegmentTerm(
+                segment_id=seg.id,
+                term="fora do nicho",
+                origin="suggest",
+                status="excluded",
+                exclude_reason="lang",
+                rules_version="v1",
+            ),
+        ]
+        assert await repo.upsert_many(seg.id, terms) == 3
+        assert await repo.counts_by_origin(seg.id) == {"seed": 1, "suggest": 2}
+        all_terms = await repo.all_for_segment(seg.id)
+        assert len(all_terms) == 3
+        # a MESMA frase como seed E sugestão = 2 linhas (origem na chave)
+        assert {(t.term, t.origin) for t in all_terms} == {
+            ("vela", "seed"),
+            ("vela", "suggest"),
+            ("fora do nicho", "suggest"),
+        }
+        assert {t.origin for t in await repo.all_for_segment(seg.id, status="active")} == {
+            "seed",
+            "suggest",
+        }
+
+        before = {
+            t.origin: t.first_seen_at
+            for t in await repo.all_for_segment(seg.id)
+            if t.term == "vela"
+        }
+        await repo.upsert_many(
+            seg.id,
+            [
+                SegmentTerm(
+                    segment_id=seg.id,
+                    term="vela",
+                    origin="suggest",
+                    kw_rank=0.95,
+                    rules_version="v2",
+                )
+            ],
+        )
+        after = await repo.all_for_segment(seg.id)
+        assert len(after) == 3  # não duplicou
+        sug = next(t for t in after if t.term == "vela" and t.origin == "suggest")
+        assert sug.kw_rank == 0.95
+        assert sug.rules_version == "v2"
+        assert sug.first_seen_at == before["suggest"]  # first_seen NÃO muda no conflito
+        assert sug.first_seen_at is not None and sug.last_seen_at is not None
+        assert sug.last_seen_at >= sug.first_seen_at
+
+        await repo.upsert_many(
+            seg.id,
+            [
+                SegmentTerm(
+                    segment_id=seg.id,
+                    term="b",
+                    origin="hashtag:youtube",
+                    engagement_score=0.1,
+                    rules_version="v1",
+                ),
+                SegmentTerm(
+                    segment_id=seg.id,
+                    term="a",
+                    origin="hashtag:youtube",
+                    engagement_score=0.9,
+                    rules_version="v1",
+                ),
+            ],
+        )
+        top = await repo.top_by_origin(seg.id, "hashtag:youtube", 5, order_by="engagement_score")
+        assert [t.term for t in top] == ["a", "b"]
+        assert [t.term for t in await repo.top_by_origin(seg.id, "suggest", 5)] == ["vela"]
+
+        assert await repo.set_status(seg.id, "hashtag:youtube", ["a"], "irrelevante") == 1
+        excluidos = await repo.all_for_segment(seg.id, status="excluded")
+        assert {(t.term, t.exclude_reason) for t in excluidos} == {
+            ("b", "irrelevante"),
+            ("fora do nicho", "lang"),
+        }
+    await engine.dispose()
+
+
+@requires_infra
+async def test_upsert_do_pool_preserva_trend_e_engagement_quando_vem_none() -> None:
+    """Revisão QA do bloco 1: o research reupserta o termo sem scores e NÃO pode
+    apagar o trend_score (Bloco 4) nem o engagement_score (Bloco 5)."""
+    engine = create_async_engine(os.environ["TEST_DATABASE_URL"])
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    async with factory() as s:
+        await s.rollback()
+        seg = await SegmentRepositoryImpl(s).upsert(
+            SegmentConfig(
+                slug=f"teste-coalesce-{uuid4().hex[:8]}",
+                name="Coalesce",
+                platforms=["youtube"],
+                keywords=["k"],
+            )
+        )
+        repo = SegmentTermRepositoryImpl(s)
+        await repo.upsert_many(
+            seg.id,
+            [
+                SegmentTerm(
+                    segment_id=seg.id,
+                    term="vela a",
+                    origin="suggest",
+                    kw_rank=0.9,
+                    trend_score=0.8,
+                    engagement_score=0.7,
+                )
+            ],
+        )
+        # research do dia seguinte: kw_rank novo, sem trend/engagement
+        await repo.upsert_many(
+            seg.id,
+            [SegmentTerm(segment_id=seg.id, term="vela a", origin="suggest", kw_rank=0.85)],
+        )
+        (row,) = await repo.all_for_segment(seg.id)
+        assert row.kw_rank == 0.85  # kw_rank é recalculado a cada research
+        assert row.trend_score == 0.8
+        assert row.engagement_score == 0.7
+        # valor novo (não nulo) continua sobrescrevendo
+        await repo.upsert_many(
+            seg.id,
+            [
+                SegmentTerm(
+                    segment_id=seg.id,
+                    term="vela a",
+                    origin="suggest",
+                    kw_rank=0.85,
+                    trend_score=0.1,
+                    engagement_score=0.2,
+                )
+            ],
+        )
+        (row,) = await repo.all_for_segment(seg.id)
+        assert (row.trend_score, row.engagement_score) == (0.1, 0.2)
+    await engine.dispose()
+
+
+@requires_infra
+async def test_keyword_signal_days_conta_dias_distintos() -> None:
+    """R2: persistência = dias distintos na janela; mesmo dia é no-op."""
+    engine = create_async_engine(os.environ["TEST_DATABASE_URL"])
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    async with factory() as s:
+        await s.rollback()
+        seg = await SegmentRepositoryImpl(s).upsert(
+            SegmentConfig(
+                slug=f"teste-dias-{uuid4().hex[:8]}",
+                name="Dias",
+                platforms=["youtube"],
+                keywords=["k"],
+            )
+        )
+        repo = KeywordSignalRepositoryImpl(s)
+        today = date(2026, 10, 16)
+        assert await repo.record_days(seg.id, ["vela"], "web_suggest", today) == 1
+        await repo.record_days(seg.id, ["vela"], "web_suggest", today)  # no-op
+        await repo.record_days(seg.id, ["vela"], "web_suggest", date(2026, 10, 14))
+        await repo.record_days(seg.id, ["vela"], "web_suggest", date(2026, 9, 1))  # fora da janela
+        assert await repo.days_seen(seg.id, "web_suggest", 7, today) == {"vela": 2}
+    await engine.dispose()
+
+
+@requires_infra
+async def test_upsert_preenche_criador_e_liga_ao_video() -> None:
+    """R8: channelId → creators; videos.creator_id; followers não regridem a NULL."""
+    engine = create_async_engine(os.environ["TEST_DATABASE_URL"])
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    async with factory() as s:
+        await s.rollback()
+        seg = await SegmentRepositoryImpl(s).upsert(
+            SegmentConfig(
+                slug=f"teste-creator-{uuid4().hex[:8]}",
+                name="Teste creator",
+                platforms=["youtube"],
+                keywords=["k"],
+            )
+        )
+        cid = f"UC{uuid4().hex[:12]}"
+        c = CandidateVideo(
+            platform="youtube",
+            platform_video_id=f"vid-creator-{uuid4().hex[:12]}",
+            url="https://youtu.be/x",
+            creator_handle="Canal X",
+            creator_platform_id=cid,
+            creator_followers=1234,
+        )
+        repo = VideoRepositoryImpl(s)
+        await repo.upsert_candidates(seg.id, "youtube", [c])
+        creator = (
+            await s.execute(select(CreatorRow).where(CreatorRow.platform_creator_id == cid))
+        ).scalar_one()
+        assert (creator.platform, creator.username, creator.followers_count) == (
+            "youtube",
+            "Canal X",
+            1234,
+        )
+        vid = (
+            await s.execute(
+                select(VideoRow).where(VideoRow.platform_video_id == c.platform_video_id)
+            )
+        ).scalar_one()
+        assert vid.creator_id == creator.id
+        # 2ª coleta sem subscriberCount (None) NÃO apaga o followers conhecido
+        await repo.upsert_candidates(
+            seg.id, "youtube", [c.model_copy(update={"creator_followers": None})]
+        )
+        creator2 = (
+            await s.execute(select(CreatorRow).where(CreatorRow.platform_creator_id == cid))
+        ).scalar_one()
+        assert creator2.followers_count == 1234
+    await engine.dispose()
+
+
+@requires_infra
+async def test_upsert_sem_channel_id_nao_cria_criador() -> None:
+    """R8: Instagram/web não têm id de criador → creator_id NULL, sem linha."""
+    engine = create_async_engine(os.environ["TEST_DATABASE_URL"])
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    async with factory() as s:
+        await s.rollback()
+        seg = await SegmentRepositoryImpl(s).upsert(
+            SegmentConfig(
+                slug=f"teste-nocreator-{uuid4().hex[:8]}",
+                name="Teste sem creator",
+                platforms=["instagram"],
+                keywords=["k"],
+            )
+        )
+        handle = f"u-{uuid4().hex[:8]}"
+        c = CandidateVideo(
+            platform="instagram",
+            platform_video_id=f"reel-{uuid4().hex[:12]}",
+            url="https://instagram.com/reel/x",
+            creator_handle=handle,
+        )
+        await VideoRepositoryImpl(s).upsert_candidates(seg.id, "instagram", [c])
+        vid = (
+            await s.execute(
+                select(VideoRow).where(VideoRow.platform_video_id == c.platform_video_id)
+            )
+        ).scalar_one()
+        assert vid.creator_id is None
+        assert (
+            await s.execute(select(CreatorRow).where(CreatorRow.username == handle))
+        ).scalar_one_or_none() is None
+    await engine.dispose()
+
+
+@requires_infra
+async def test_discovery_repository_grava_vinculos_e_pula_video_ausente() -> None:
+    """R6: 1 linha por (busca, vídeo); vídeo não persistido não gera órfã."""
+    from content_factory.domain.models import Discovery
+    from content_factory.infra.db.orm import VideoDiscoveryRow
+    from content_factory.infra.db.repositories import DiscoveryRepositoryImpl
+
+    engine = create_async_engine(os.environ["TEST_DATABASE_URL"])
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    async with factory() as s:
+        await s.rollback()
+        seg = await SegmentRepositoryImpl(s).upsert(
+            SegmentConfig(
+                slug=f"teste-disc-{uuid4().hex[:8]}",
+                name="Teste discoveries",
+                platforms=["youtube"],
+                keywords=["k"],
+            )
+        )
+        c = candidate(7)
+        await VideoRepositoryImpl(s).upsert_candidates(seg.id, "youtube", [c])
+        fantasma = CandidateVideo(
+            platform="youtube",
+            platform_video_id=f"fantasma-{uuid4().hex[:12]}",
+            url="https://youtu.be/f",
+            creator_handle="u",
+        )
+        made = Discovery(
+            candidate=c,
+            term="vela artesanal",
+            origin="seed",
+            query_id="provisional:0",
+            result_position=1,
+            run_kind="collect",
+        )
+        missing = Discovery(
+            candidate=fantasma,
+            term="vela artesanal",
+            origin="seed",
+            query_id="provisional:0",
+            result_position=2,
+            run_kind="collect",
+        )
+        written = await DiscoveryRepositoryImpl(s).record(seg.id, [made, missing])
+        assert written == 1  # a fantasma foi pulada
+        row = (
+            await s.execute(select(VideoDiscoveryRow).where(VideoDiscoveryRow.segment_id == seg.id))
+        ).scalar_one()
+        assert (row.term, row.term_origin, row.result_position) == ("vela artesanal", "seed", 1)
+        assert row.query_id == "provisional:0" and row.run_kind == "collect"
+    await engine.dispose()
+
+
+@requires_infra
+async def test_search_query_repository_registra_busca_vazia() -> None:
+    """R13: a busca que voltou vazia é logada (results=0) com a cota gasta."""
+    from content_factory.domain.models import SearchQueryRun
+    from content_factory.infra.db.orm import SearchQueryRow
+    from content_factory.infra.db.repositories import SearchQueryRepositoryImpl
+
+    engine = create_async_engine(os.environ["TEST_DATABASE_URL"])
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    async with factory() as s:
+        await s.rollback()
+        seg = await SegmentRepositoryImpl(s).upsert(
+            SegmentConfig(
+                slug=f"teste-sq-{uuid4().hex[:8]}",
+                name="Teste search log",
+                platforms=["youtube"],
+                keywords=["k"],
+            )
+        )
+        now = datetime.now(UTC)
+        run = SearchQueryRun(
+            platform="youtube",
+            query_id="provisional:1",
+            term="vela de soja",
+            origin="seed",
+            results=0,
+            kept=0,
+            quota_used=102,
+            started_at=now,
+            finished_at=now,
+        )
+        n = await SearchQueryRepositoryImpl(s).record_many(seg.id, [run])
+        assert n == 1
+        row = (
+            await s.execute(select(SearchQueryRow).where(SearchQueryRow.segment_id == seg.id))
+        ).scalar_one()
+        assert row.results == 0 and row.quota_used == 102 and row.error_code is None
+        assert row.term == "vela de soja" and row.origin == "seed"
     await engine.dispose()

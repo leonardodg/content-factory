@@ -6,7 +6,13 @@ import httpx
 
 from content_factory.app.call_counters import record_quota
 from content_factory.domain.errors import AuthExpired, NetworkError, RateLimited, UpstreamChanged
-from content_factory.domain.models import CandidateVideo, SearchConfig, SegmentConfig
+from content_factory.domain.models import (
+    CandidateVideo,
+    Discovery,
+    SearchConfig,
+    SearchQuery,
+    SegmentConfig,
+)
 from content_factory.infra.redact import redact
 
 API = "https://www.googleapis.com/youtube/v3"
@@ -163,9 +169,37 @@ class YoutubeCollector:
         terms = [*keywords, *hashtags][:5]  # API não aceita query enorme
         return await self._search(or_query(terms), 25, locale or self.default_search)
 
-    async def _search(
+    async def search_term(
+        self, segment: SegmentConfig, query: SearchQuery, limit: int
+    ) -> list[Discovery]:
+        """R6: 1 busca = 1 termo → atribuição exata. Custa 100 + 2 unidades.
+
+        O termo vai como está (sem `or_query`): sem aspas de frase exata e com
+        `#` preservado para as hashtags (R11). O locale é o do segmento, como
+        no `discover()` — senão perde `relevance_language=pt`/`order=relevance`.
+        """
+        locale = segment.search or self.default_search
+        ranked = await self._search_ranked(query.term, limit, locale)
+        return [
+            Discovery(
+                candidate=cand,
+                term=query.term,
+                origin=query.origin,
+                query_id=query.query_id,
+                result_position=position,
+                run_kind="collect",
+            )
+            for position, cand in ranked
+        ]
+
+    async def _search_ranked(
         self, q: str, limit: int, search: SearchConfig | None = None
-    ) -> list[CandidateVideo]:
+    ) -> list[tuple[int, CandidateVideo]]:
+        """Corpo do `_search`; a posição vem da ordem de `ids` (search.list).
+
+        O `videos.list` não garante a ordem pedida: ordenar pelos índices de
+        `ids`. O filtro de idioma remove itens sem renumerar os restantes.
+        """
         after = (datetime.now(UTC) - timedelta(days=7)).strftime("%Y-%m-%dT%H:%M:%SZ")
         params = {
             "part": "snippet",
@@ -213,9 +247,18 @@ class YoutubeCollector:
             str(c["id"]): int(c["statistics"].get("subscriberCount", 0))
             for c in channels.get("items", [])
         }
-        videos = [self._map(v, followers) for v in stats_by_id.values()]
+        position = {vid: i for i, vid in enumerate(ids, start=1)}
+        ranked = sorted(
+            ((position[str(v["id"])], self._map(v, followers)) for v in stats_by_id.values()),
+            key=lambda pc: pc[0],
+        )
         wanted = search.relevance_language if search is not None else None
-        return [v for v in videos if _language_matches(v.language, wanted)]
+        return [(p, c) for p, c in ranked if _language_matches(c.language, wanted)]
+
+    async def _search(
+        self, q: str, limit: int, search: SearchConfig | None = None
+    ) -> list[CandidateVideo]:
+        return [c for _, c in await self._search_ranked(q, limit, search)]
 
     def _map(self, v: dict[str, Any], followers: dict[str, int]) -> CandidateVideo:
         sn, st = v["snippet"], v.get("statistics", {})
@@ -226,6 +269,7 @@ class YoutubeCollector:
             url=f"https://www.youtube.com/watch?v={vid}",
             creator_handle=sn.get("channelTitle", ""),
             creator_followers=followers.get(sn.get("channelId", "")),
+            creator_platform_id=sn.get("channelId"),
             title=sn.get("title", ""),
             description=sn.get("description", ""),
             published_at=datetime.fromisoformat(sn["publishedAt"].replace("Z", "+00:00")),

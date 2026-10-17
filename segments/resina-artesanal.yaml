@@ -29,6 +29,8 @@ probe_terms:
   - resina
   - resina epoxi
   - artesanato
+anchor_terms: [resina, epoxi, epoxy]
+blocked_terms: [odontologica, odontologia, dente, dentes, clareia, dental, ortodontia, mdf, composta, piso, 3d]
 subnichos:
   idioma_en: [resin art, epoxy resin crafts, resin molds, resin tray,
               resin keychains, resin art for beginners]

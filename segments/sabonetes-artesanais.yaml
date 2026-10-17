@@ -29,6 +29,8 @@ probe_terms:
   - sabonete
   - sabonetes
   - saboaria
+anchor_terms: [sabonete, sabonetes, saboaria, glicerinada, saponificacao]
+blocked_terms: [natura, phebo, dove, lux, protex, granado, boticario, marcas]
 subnichos:
   idioma_en: [handmade soap, soap making, cold process soap,
               melt and pour soap, soap making for beginners,

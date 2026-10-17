@@ -31,6 +31,11 @@ class SegmentConfig(BaseModel):
     # termos-cabeca para sondar o Suggest pela intencao (opcao (a) da revisao
     # 16/10). Vazio = sem sondas. Ver `domain/suggest_probes.py`.
     probe_terms: list[str] = Field(default_factory=list)
+    # R1: âncoras do nicho (ex.: vela, pavio, cera). Frase sem nenhuma âncora
+    # é descartada. Vazio = checagem de âncora desligada para o segmento.
+    anchor_terms: list[str] = Field(default_factory=list)
+    # R1: lista curta de bloqueio por segmento (marcas/termos fora do nicho).
+    blocked_terms: list[str] = Field(default_factory=list)
     subnichos: dict[str, list[str]] = Field(default_factory=dict)
     audience: list[str] = Field(default_factory=list)  # vai p/ segments.config JSONB
     research: DepthConfig | None = None  # guard-rail do pipeline de pesquisa
@@ -49,6 +54,9 @@ class CandidateVideo(BaseModel):
     url: str
     creator_handle: str
     creator_followers: int | None = None
+    # id do canal na plataforma (YouTube: channelId) — base do vínculo com
+    # `creators` (R8). None = a plataforma não expôs o id.
+    creator_platform_id: str | None = None
     title: str = ""
     description: str = ""
     published_at: datetime | None = None
@@ -206,3 +214,53 @@ class ResearchCampaign(BaseModel):
     started_at: datetime
     ends_at: datetime
     active: bool = True
+
+
+class SegmentTerm(BaseModel):
+    """Termo do pool do segmento (R4) — fonte única das buscas."""
+
+    segment_id: int
+    term: str
+    origin: str  # seed | suggest | trends | hashtag:youtube | hashtag:instagram | hashtag:tiktok
+    kw_rank: float | None = None
+    trend_score: float | None = None
+    engagement_score: float | None = None
+    status: str = "active"  # active | excluded
+    exclude_reason: str | None = None
+    first_seen_at: datetime | None = None
+    last_seen_at: datetime | None = None
+    rules_version: str = ""
+
+
+class SearchQuery(BaseModel):
+    """Uma busca a executar: o termo ENVIADO à API, a origem e o id do plano (R6)."""
+
+    term: str
+    origin: str
+    query_id: str
+
+
+class Discovery(BaseModel):
+    """Vídeo encontrado por uma busca — qual termo/posição o trouxe (R6)."""
+
+    candidate: CandidateVideo
+    term: str
+    origin: str
+    query_id: str | None = None
+    result_position: int | None
+    run_kind: str  # collect
+
+
+class SearchQueryRun(BaseModel):
+    """Log de cada busca executada, inclusive as vazias (R6/R13)."""
+
+    platform: str
+    query_id: str
+    term: str
+    origin: str
+    results: int
+    kept: int
+    quota_used: int
+    error_code: str | None = None
+    started_at: datetime
+    finished_at: datetime

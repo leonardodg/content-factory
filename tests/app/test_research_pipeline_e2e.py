@@ -6,6 +6,7 @@ mesmo com todos os coletores rodando no mesmo ciclo. Fakes de rede
 """
 
 from collections.abc import Sequence
+from datetime import date
 from pathlib import Path
 from typing import Any, ClassVar
 
@@ -16,6 +17,7 @@ from tests.stubs import FakeLimiter, FakeLock, FakeRepos, FakeTrendObservations
 from content_factory.app.ports import KeywordSignalRepository
 from content_factory.app.research_pipeline import ResearchDeps, run_research_cycle
 from content_factory.domain.fanout_guard import FanoutGuard
+from content_factory.domain.kw_rank import SuggestHit
 from content_factory.domain.models import (
     CandidateVideo,
     DepthConfig,
@@ -38,14 +40,9 @@ class _FakeWeb:
     def __init__(self, n: int = 10) -> None:
         self._n = n
 
-    async def expand(self, seeds: list[str], depth: int) -> list[KeywordSignal]:
+    async def expand(self, seeds: list[str], depth: int) -> list[SuggestHit]:
         return [
-            KeywordSignal(
-                keyword=f"{seeds[0]} var {i}",
-                source=self.platform,
-                weight=0.9 - i * 0.05,
-                depth=depth + 1,
-            )
+            SuggestHit(term=f"{seeds[0]} var {i}", seed=seeds[0], position=i + 1)
             for i in range(self._n)
             if seeds
         ]
@@ -133,6 +130,16 @@ class _SignalRepo(KeywordSignalRepository):
     ) -> list[KeywordSignal]:
         return []
 
+    async def record_days(
+        self, segment_id: int, keywords: Sequence[str], source: str, day: date
+    ) -> int:
+        return len(keywords)
+
+    async def days_seen(
+        self, segment_id: int, source: str, days: int, today: date
+    ) -> dict[str, int]:
+        return {}
+
 
 class _Segments:
     async def get_by_slug(self, slug: str) -> Segment:
@@ -218,12 +225,9 @@ async def test_guard_dedupe_prevents_duplicate_keywords_to_socials() -> None:
     class _DupWeb:
         platform: ClassVar[str] = "web_suggest"
 
-        async def expand(self, seeds: list[str], depth: int) -> list[KeywordSignal]:
-            # devolve 1 sinal por seed recebida (seeds já deduplicados pelo guard)
-            return [
-                KeywordSignal(keyword=f"{s} derivada", source="web_suggest", weight=0.9, depth=1)
-                for s in seeds
-            ]
+        async def expand(self, seeds: list[str], depth: int) -> list[SuggestHit]:
+            # devolve 1 hit por seed recebida (seeds já deduplicados pelo guard)
+            return [SuggestHit(term=f"{s} derivada", seed=s, position=1) for s in seeds]
 
     class _DupSegments:
         async def get_by_slug(self, slug: str) -> Segment:

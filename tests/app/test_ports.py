@@ -1,4 +1,5 @@
 from collections.abc import Sequence
+from datetime import date
 from typing import ClassVar, get_type_hints
 
 from content_factory.app import ports
@@ -9,6 +10,7 @@ from content_factory.app.ports import (
     TrendsProvider,
 )
 from content_factory.domain.errors import CollectorError
+from content_factory.domain.kw_rank import SuggestHit
 from content_factory.domain.models import CandidateVideo, KeywordSignal, TrendPoint
 
 
@@ -26,8 +28,8 @@ def test_collector_error_carries_code() -> None:
 class _FakeKeywordExpander:
     platform: ClassVar[str] = "web_suggest"
 
-    async def expand(self, seeds: list[str], depth: int) -> list[KeywordSignal]:
-        return [KeywordSignal(keyword=seeds[0], source=self.platform, depth=depth)]
+    async def expand(self, seeds: list[str], depth: int) -> list[SuggestHit]:
+        return [SuggestHit(term=seeds[0], seed=seeds[0], position=1)]
 
 
 class _FakeTrendsProvider:
@@ -52,6 +54,16 @@ class _FakeKeywordSignalRepository:
         self, segment_id: int, source: str | None, limit: int
     ) -> list[KeywordSignal]:
         return []
+
+    async def record_days(
+        self, segment_id: int, keywords: Sequence[str], source: str, day: date
+    ) -> int:
+        return len(keywords)
+
+    async def days_seen(
+        self, segment_id: int, source: str, days: int, today: date
+    ) -> dict[str, int]:
+        return {}
 
 
 def test_new_protocols_accept_structural_fakes() -> None:

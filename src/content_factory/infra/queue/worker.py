@@ -42,7 +42,11 @@ from content_factory.app.web_rank import web_rank
 from content_factory.config import Settings, get_settings
 from content_factory.domain.models import DepthConfig, Segment
 from content_factory.infra.logs import configure_logging
-from content_factory.infra.queue.composition import AppDeps, compose_app_deps
+from content_factory.infra.queue.composition import (
+    AppDeps,
+    compose_app_deps,
+    parse_social_platforms,
+)
 from content_factory.infra.redact import redact
 
 logger = logging.getLogger(__name__)
@@ -353,6 +357,7 @@ async def create_app_deps(settings: Settings) -> AppDeps:
         settings,
         max_concurrent_discoveries=int(_load_settings()["max_concurrency"]),
         platform_limits=_platform_max_concurrency_from_env(),
+        social_platforms=parse_social_platforms(os.getenv("RESEARCH_SOCIAL_PLATFORMS")),
     )
 
 

@@ -2,16 +2,19 @@ import asyncio
 import logging
 from collections.abc import Sequence
 from datetime import UTC, datetime, timedelta
-from typing import ClassVar
+from typing import ClassVar, cast
 
 import pytest
 from tests.stubs import (
     ConcurrencyTracker,
     FakeCollector,
+    FakeDiscoveries,
     FakeLimiter,
     FakeLock,
     FakeRepos,
     FakeRuns,
+    FakeSearchLog,
+    FakeTermSearcher,
     FakeVideos,
     TrackedCollector,
 )
@@ -24,11 +27,14 @@ from content_factory.app.collect import (
     _discover_one,  # pyright: ignore[reportPrivateUsage]
     collect,
 )
-from content_factory.app.ports import Collector, VideoRepository
+from content_factory.app.ports import Collector, TermSearcher, VideoRepository
 from content_factory.domain.errors import CollectorError, RateLimited
 from content_factory.domain.models import (
     CandidateVideo,
     CollectRun,
+    Discovery,
+    SearchQueryRun,
+    Segment,
     SegmentConfig,
     UpsertStats,
     VideoSnapshot,
@@ -777,3 +783,127 @@ async def test_collect_web_keeps_videos_and_records_all_hits_with_reasons() -> N
     assert out.counts["web_discard:duplicate"] == 1
     run = out.runs[0]
     assert run.found == 1 and run.skipped == 2
+
+
+# --- Bloco 2: coleta por busca com atribuição, dedupe e log (R6/R13) ---
+
+
+class _FixedSegments:
+    """`get_by_slug` devolve sempre o segmento dado (keywords p/ as buscas)."""
+
+    def __init__(self, segment: Segment) -> None:
+        self._segment = segment
+
+    async def get_by_slug(self, slug: str) -> Segment:
+        return self._segment
+
+    async def upsert(self, cfg: SegmentConfig) -> Segment:
+        raise NotImplementedError("não usado no collect")
+
+
+def _segment(keywords: list[str]) -> Segment:
+    return Segment(
+        id=1,
+        slug="candles",
+        name="Candles",
+        platforms=["youtube"],
+        keywords=keywords,
+    )
+
+
+def collect_deps(
+    *,
+    term_searchers: dict[str, TermSearcher] | None = None,
+    collectors: list[Collector] | None = None,
+    segment: Segment | None = None,
+) -> CollectDeps:
+    """Deps de `collect` com fakes de atribuição/log; collectors p/ as buscas."""
+    repos = FakeRepos()
+    searchers = term_searchers or {}
+    return CollectDeps(
+        collectors=collectors if collectors is not None else [FakeCollector(p) for p in searchers],
+        videos=repos.videos,
+        segments=_FixedSegments(segment) if segment is not None else repos.segments,
+        runs=repos.runs,
+        limiter=FakeLimiter(),
+        lock=FakeLock(),
+        term_searchers=searchers,
+        discoveries=FakeDiscoveries(),
+        search_log=FakeSearchLog(),
+    )
+
+
+def _saved(deps: CollectDeps) -> tuple[list[Discovery], list[SearchQueryRun]]:
+    return (
+        cast(FakeDiscoveries, deps.discoveries).saved,
+        cast(FakeSearchLog, deps.search_log).saved,
+    )
+
+
+async def test_collect_atribui_por_busca_e_deduplica_candidatos() -> None:
+    """R6: 1 busca por termo; v2 atribuído aos dois termos, upsertado 1 vez."""
+    deps = collect_deps(
+        term_searchers={
+            "youtube": FakeTermSearcher(
+                {"vela artesanal": ["v1", "v2"], "vela de soja": ["v2", "v3"]}
+            )
+        },
+        segment=_segment(keywords=["vela artesanal", "vela de soja"]),
+    )
+    out = await collect("candles", ["youtube"], 25, deps)
+    assert out.ok is True
+    videos = cast(FakeVideos, deps.videos)
+    # dedupe: v2 chega uma vez só ao upsert
+    assert sorted(c.platform_video_id for c in videos.upserted) == ["v1", "v2", "v3"]
+    assert out.counts["discoveries"] == 4  # v2 atribuído aos dois termos
+    assert out.counts["searches"] == 2
+    discoveries, search_log = _saved(deps)
+    saved = {(d.term, d.candidate.platform_video_id) for d in discoveries}
+    assert {("vela artesanal", "v2"), ("vela de soja", "v2")} <= saved
+    # kept: v2 é primeiro no 1º termo; no 2º só v3 é novo
+    assert {r.term: r.kept for r in search_log} == {"vela artesanal": 2, "vela de soja": 1}
+
+
+async def test_collect_registra_busca_vazia_com_cota() -> None:
+    """R13: a busca que voltou vazia é logada, com a cota gasta."""
+    deps = collect_deps(
+        term_searchers={"youtube": FakeTermSearcher({}, quota_per_call=102)},
+        segment=_segment(keywords=["vela artesanal", "vela de soja", "vela x"]),
+    )
+    out = await collect("candles", ["youtube"], 25, deps)
+    assert out.ok is True
+    assert out.counts["searches_empty"] == out.counts["searches"] == 3
+    _, search_log = _saved(deps)
+    assert all(r.results == 0 and r.quota_used == 102 for r in search_log)
+    assert out.runs[0].quota_used == 306  # soma das buscas
+
+
+async def test_erro_numa_busca_para_as_seguintes_e_grava_o_que_veio() -> None:
+    """Erro de contrato interrompe as buscas seguintes; o que veio persiste."""
+    erro = RateLimited("youtube", "quota")
+    searcher = FakeTermSearcher({"vela artesanal": ["v1"]}, fail_on="vela de soja", error=erro)
+    deps = collect_deps(
+        term_searchers={"youtube": searcher},
+        segment=_segment(keywords=["vela artesanal", "vela de soja", "vela x"]),
+    )
+    out = await collect("candles", ["youtube"], 25, deps)
+    videos = cast(FakeVideos, deps.videos)
+    assert [c.platform_video_id for c in videos.upserted] == ["v1"]
+    _, search_log = _saved(deps)
+    # "vela x" não roda: a lista para no erro
+    assert [r.error_code for r in search_log] == [None, erro.code]
+    assert out.ok is False and out.partial is True
+    run = out.runs[0]
+    assert run.status == "failed" and run.error_code == erro.code
+    assert run.found == 1 and run.failed == 1
+
+
+async def test_plataforma_sem_term_searcher_usa_discover_legado_sem_atribuicao() -> None:
+    """Plataformas sem `TermSearcher` seguem o `discover()` legado."""
+    deps = collect_deps(term_searchers={}, collectors=[FakeCollector("instagram", n=1)])
+    out = await collect("candles", ["instagram"], 25, deps)
+    assert out.ok is True
+    assert out.counts["unattributed"] == 1
+    discoveries, _ = _saved(deps)
+    assert all(d.origin == "unattributed" and d.term == "" for d in discoveries)
+    assert all(d.query_id is None and d.result_position is None for d in discoveries)

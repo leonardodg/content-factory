@@ -4,7 +4,7 @@ from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Any, NoReturn
+from typing import Any, NoReturn, cast
 
 import typer
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -107,11 +107,14 @@ async def _segment_platforms(segment_slug: str) -> list[str]:
 @asynccontextmanager
 async def _collect_deps(platforms: list[str]) -> AsyncGenerator[CollectDeps]:
     """Deps reais do `collect`: registry de collectors + Postgres + Redis."""
+    from content_factory.app.ports import TermSearcher
     from content_factory.config import get_settings
     from content_factory.infra.collectors import register_defaults, registry
     from content_factory.infra.db.base import get_session_factory
     from content_factory.infra.db.repositories import (
         CollectRunRepositoryImpl,
+        DiscoveryRepositoryImpl,
+        SearchQueryRepositoryImpl,
         SegmentRepositoryImpl,
         VideoRepositoryImpl,
         WebHitRepositoryImpl,
@@ -124,14 +127,25 @@ async def _collect_deps(platforms: list[str]) -> AsyncGenerator[CollectDeps]:
     register_defaults(settings)  # composition root: worker já fazia o mesmo no startup
     factory: async_sessionmaker[AsyncSession] = get_session_factory(settings)
     async with redis_client(settings.redis_url) as client, factory() as session:
+        collectors = registry.resolve(platforms)
+        # R6: coletores que buscam por termo (YouTube) ganham atribuição; os
+        # demais seguem o `discover()` legado.
+        term_searchers = {
+            collector.platform: cast(TermSearcher, collector)
+            for collector in collectors
+            if hasattr(collector, "search_term")
+        }
         yield CollectDeps(
-            collectors=registry.resolve(platforms),
+            collectors=collectors,
             videos=VideoRepositoryImpl(session),
             segments=SegmentRepositoryImpl(session),
             runs=CollectRunRepositoryImpl(session),
             limiter=RedisRateLimiter(client),
             lock=RedisLock(client),
             web_hits=WebHitRepositoryImpl(session),
+            term_searchers=term_searchers,
+            discoveries=DiscoveryRepositoryImpl(session),
+            search_log=SearchQueryRepositoryImpl(session),
         )
         await session.commit()
 

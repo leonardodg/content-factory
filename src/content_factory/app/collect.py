@@ -9,16 +9,29 @@ from content_factory.app.platform_health import NoPlatformHealth, report_discove
 from content_factory.app.ports import (
     Collector,
     CollectRunRepository,
+    DiscoveryRepository,
     Lock,
+    NoOpDiscoveryRepository,
+    NoOpSearchQueryRepository,
     NoOpWebHitRepository,
     PlatformHealth,
     RateLimiter,
+    SearchQueryRepository,
     SegmentRepository,
+    TermSearcher,
     VideoRepository,
     WebHitRepository,
 )
 from content_factory.domain.errors import CollectorError
-from content_factory.domain.models import CandidateVideo, CollectRun, SegmentConfig, WebSearchHit
+from content_factory.domain.models import (
+    CandidateVideo,
+    CollectRun,
+    Discovery,
+    SearchQuery,
+    SearchQueryRun,
+    SegmentConfig,
+    WebSearchHit,
+)
 from content_factory.domain.web_hits import discard_counts, partition_web
 
 logger = logging.getLogger(__name__)
@@ -57,6 +70,14 @@ class CollectDeps:
     health: PlatformHealth = field(default_factory=NoPlatformHealth)
     # Rastro dos resultados web (F1); default no-op mantém testes/uso avulso.
     web_hits: WebHitRepository = field(default_factory=NoOpWebHitRepository)
+    # R6: plataformas com busca por termo (só YouTube hoje). Quem está aqui
+    # NÃO usa `collector.discover` — a coleta vira uma busca por termo, com
+    # atribuição. Chave = `platform` (a mesma do collector).
+    term_searchers: dict[str, TermSearcher] = field(default_factory=dict[str, TermSearcher])
+    # R6/R13: grava a atribuição (video_discoveries) e o log de buscas
+    # (search_queries); defaults no-op mantêm testes/uso avulso.
+    discoveries: DiscoveryRepository = field(default_factory=NoOpDiscoveryRepository)
+    search_log: SearchQueryRepository = field(default_factory=NoOpSearchQueryRepository)
 
 
 @dataclass
@@ -80,6 +101,10 @@ class DiscoverResult:
     quota_used: int  # unidades de cota de API desta chamada (revisão B2)
     discover_ms: int | None
     started_at: datetime
+    # R6/R13: atribuição e log das buscas desta plataforma (vazio no caminho
+    # legado `discover()` e na web, que têm proveniência própria).
+    discoveries: list[Discovery] = field(default_factory=list[Discovery])
+    query_runs: list[SearchQueryRun] = field(default_factory=list[SearchQueryRun])
 
 
 @dataclass
@@ -90,10 +115,139 @@ class CollectOutcome:
     runs: list[CollectRun] = field(default_factory=list[CollectRun])
 
 
+def provisional_queries(segment: SegmentConfig) -> list[SearchQuery]:
+    """Buscas de partida: as 3 primeiras keywords do segmento (R6).
+
+    PROVISÓRIO: substituído no Bloco 4 por `plan_queries` (uma vaga por
+    origem incl. trends/hashtags). NÃO fazer deploy com ele — a coleta não
+    reflete o plano completo de busca do segmento.
+    """
+    return [
+        SearchQuery(term=term, origin="seed", query_id=f"provisional:{i}")
+        for i, term in enumerate(segment.keywords[:3])
+    ]
+
+
+def _query_run(
+    query: SearchQuery,
+    platform: str,
+    results: int,
+    quota_used: int,
+    started_at: datetime,
+    finished_at: datetime,
+    error_code: str | None,
+) -> SearchQueryRun:
+    """Uma linha do log de buscas; `kept` é preenchido depois do dedupe."""
+    return SearchQueryRun(
+        platform=platform,
+        query_id=query.query_id,
+        term=query.term,
+        origin=query.origin,
+        results=results,
+        kept=0,
+        quota_used=quota_used,
+        error_code=error_code,
+        started_at=started_at,
+        finished_at=finished_at,
+    )
+
+
+def _unattributed(candidate: CandidateVideo) -> Discovery:
+    """Descoberta do caminho legado (`discover()`), sem termo que a atribua."""
+    return Discovery(
+        candidate=candidate,
+        term="",
+        origin="unattributed",
+        query_id=None,
+        result_position=None,
+        run_kind="collect",
+    )
+
+
+def _dedup_and_mark_kept(
+    discoveries: list[Discovery], runs: list[SearchQueryRun]
+) -> list[CandidateVideo]:
+    """Deduplica candidatos (primeiro vence) e marca o `kept` de cada busca.
+
+    O mesmo vídeo pode vir de termos diferentes: o `upsert` recebe cada um
+    uma vez, mas `video_discoveries` guarda a atribuição a TODOS os termos
+    que o trouxeram. `kept` de cada busca = quantos candidatos dela foram os
+    primeiros no dedupe desta coleta.
+    """
+    seen: set[tuple[str, str]] = set()
+    deduped: list[CandidateVideo] = []
+    kept: dict[str, int] = {}
+    for d in discoveries:
+        key = (d.candidate.platform, d.candidate.platform_video_id)
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(d.candidate)
+        if d.query_id is not None:
+            kept[d.query_id] = kept.get(d.query_id, 0) + 1
+    for run in runs:
+        run.kept = kept.get(run.query_id, 0)
+    return deduped
+
+
+async def _search_queries(
+    searcher: TermSearcher,
+    segment: SegmentConfig,
+    queries: list[SearchQuery],
+    limit: int,
+    deps: CollectDeps,
+    discoveries: list[Discovery],
+    runs: list[SearchQueryRun],
+) -> tuple[int, CollectorError | None]:
+    """Executa as buscas EM SÉRIE; cada uma com `counting()` próprio.
+
+    Erro de contrato (cota, rede) interrompe as buscas seguintes da mesma
+    plataforma — 429/403 de cota não melhora na próxima chamada — e o que já
+    veio fica acumulado em `discoveries`/`runs` (passados pelo chamador, para
+    não se perder nem numa exceção fora do contrato). Devolve (cota total,
+    erro).
+    """
+    quota = 0
+    for query in queries:
+        started = deps.clock()
+        with counting() as counters:
+            try:
+                await deps.limiter.acquire(searcher.platform)
+                found = await searcher.search_term(segment, query, limit)
+            except CollectorError as exc:
+                quota += counters.quota_used
+                runs.append(
+                    _query_run(
+                        query,
+                        searcher.platform,
+                        0,
+                        counters.quota_used,
+                        started,
+                        deps.clock(),
+                        exc.code,
+                    )
+                )
+                return quota, exc
+        quota += counters.quota_used
+        discoveries += found
+        runs.append(
+            _query_run(
+                query,
+                searcher.platform,
+                len(found),
+                counters.quota_used,
+                started,
+                deps.clock(),
+                None,
+            )
+        )
+    return quota, None
+
+
 async def _discover_one(
     collector: Collector, segment: SegmentConfig, limit: int, deps: CollectDeps
 ) -> DiscoverResult:
-    """Fase de rede para uma plataforma: limiter.acquire + discover.
+    """Fase de rede para uma plataforma: limiter.acquire + discover/busca.
 
     Devolve DiscoverResult em vez de levantar — a fase de persistência
     decide status/counts/runs. Exceção fora do contrato vira
@@ -101,11 +255,20 @@ async def _discover_one(
     gate_hits é contado POR CHAMADA (`counting()`, Etapa 1 Task 9): o
     collector é singleton e segmentos concorrentes o compartilham, então o
     delta do atributo somaria hits de outros segmentos.
+
+    R6: plataforma em `deps.term_searchers` faz uma busca por termo (com
+    atribuição); as demais seguem o `discover()` legado (descobertas
+    `unattributed`; a web não gera atribuição — tem a proveniência própria
+    em `web_search_hits`).
     """
     platform = collector.platform
     found: list[CandidateVideo] | None = None
     error: CollectorError | None = None
     discover_start: datetime | None = None
+    discoveries: list[Discovery] = []
+    query_runs: list[SearchQueryRun] = []
+    quota = 0
+    searcher = deps.term_searchers.get(platform)
     # Teto por plataforma (Etapa 0 Task 7): a vaga cobre acquire + discover.
     # started_at é lido DENTRO da vaga (mas antes do acquire) para a duração
     # não contar espera na fila. Comparar com o baseline por discover_ms +
@@ -116,7 +279,21 @@ async def _discover_one(
             try:
                 await deps.limiter.acquire(platform)
                 discover_start = deps.clock()
-                found = await collector.discover(segment, limit)
+                if searcher is not None:
+                    quota, error = await _search_queries(
+                        searcher,
+                        segment,
+                        provisional_queries(segment),
+                        limit,
+                        deps,
+                        discoveries,
+                        query_runs,
+                    )
+                    found = _dedup_and_mark_kept(discoveries, query_runs)
+                else:
+                    found = await collector.discover(segment, limit)
+                    if platform != "web":  # web tem proveniência própria (F1)
+                        discoveries = [_unattributed(c) for c in found]
             except CollectorError as exc:
                 error = exc
                 if discover_start is not None:  # erro do discover, não do acquire
@@ -127,7 +304,8 @@ async def _discover_one(
                 error = CollectorError("internal_error", platform, str(exc))
                 error.__cause__ = exc
             else:
-                await report_discover(deps.health, platform, None)
+                # breaker: sucesso só se NENHUMA busca falhou (R6)
+                await report_discover(deps.health, platform, error.code if error else None)
         # discover_ms só existe se o acquire passou (falha no limiter = None)
         discover_ms = None if discover_start is None else _ms_between(discover_start, deps.clock())
         return DiscoverResult(
@@ -135,9 +313,13 @@ async def _discover_one(
             found=found,  # só atribuído no sucesso: erro ⇒ None
             error=error,
             gate_hits=counters.gate_hits,
-            quota_used=counters.quota_used,
+            # a busca conta a cota em `counting()` próprio (aninhado), então
+            # o total vem da soma das buscas, não do contador externo
+            quota_used=quota if searcher is not None else counters.quota_used,
             discover_ms=discover_ms,
             started_at=started_at,
+            discoveries=discoveries,
+            query_runs=query_runs,
         )
 
 
@@ -156,6 +338,11 @@ async def collect(
             # candidatos revertidos pelo savepoint: semântica separada de
             # "failed" (plataformas com erro) para a CLI não mentir
             "skipped": 0,
+            # R6/R13: atribuição e log de buscas
+            "discoveries": 0,
+            "searches": 0,
+            "searches_empty": 0,
+            "unattributed": 0,
         }
         runs: list[CollectRun] = []
         errors = 0
@@ -182,7 +369,12 @@ async def collect(
             # run num `finally` levantaria PendingRollbackError e mascararia
             # a causa. A UoW do segmento reverte tudo, então não há run a
             # gravar nesse caminho.
-            if result.error is not None:
+            #
+            # R6: há o que persistir quando a rede trouxe candidatos (found)
+            # ou quando a fase de busca gerou log/atribuição — mesmo com erro
+            # parcial de busca, o que já veio é gravado e a run vira failed.
+            has_data = result.found is not None or bool(result.query_runs)
+            if result.error is not None and not has_data:
                 exc = result.error
                 run.status = "blocked" if exc.code == "blocked" else "failed"
                 run.error_code = exc.code
@@ -190,16 +382,16 @@ async def collect(
                 errors += 1
                 counts["failed"] = int(counts["failed"]) + 1
             else:
-                # invariante: erro↔found None (sem assert: B101; erro interno
-                # explícito se a fronteira de _discover_one for violada)
-                if result.found is None:
-                    raise RuntimeError(f"discover sem erro nem found: {result.platform}")
-                # F0/F1: na web, descartados (anúncio/duplicata) NÃO entram em
-                # `videos` — só geram rastro em `web_search_hits`.
-                candidates = result.found
+                # invariante: sem erro, found nunca é None (a fronteira de
+                # _discover_one garante); com erro parcial, cai no que veio
+                candidates = (
+                    result.found
+                    if result.found is not None
+                    else [d.candidate for d in result.discoveries]
+                )
                 hits: list[WebSearchHit] = []
                 if result.platform == "web":
-                    candidates, hits = partition_web(result.found)
+                    candidates, hits = partition_web(candidates)
                 try:
                     persist_start = deps.clock()
                     stats = await deps.videos.upsert_candidates(
@@ -207,6 +399,8 @@ async def collect(
                     )
                     if hits:
                         await deps.web_hits.record(segment.id, hits)
+                    written = await deps.discoveries.record(segment.id, result.discoveries)
+                    await deps.search_log.record_many(segment.id, result.query_runs)
                 except CollectorError as exc:
                     run.status = "blocked" if exc.code == "blocked" else "failed"
                     run.error_code = exc.code
@@ -215,8 +409,9 @@ async def collect(
                     counts["failed"] = int(counts["failed"]) + 1
                 else:
                     run.persist_ms = _ms_between(persist_start, deps.clock())
-                    run.status = "ok"
-                    discarded = len(result.found) - len(candidates)
+                    discarded = (
+                        len(result.found) - len(candidates) if result.found is not None else 0
+                    )
                     run.found = len(candidates)
                     run.inserted, run.updated = stats.inserted, stats.updated
                     # descartados pelo filtro somam em `skipped` (auditável)
@@ -225,12 +420,30 @@ async def collect(
                     counts["inserted"] = int(counts["inserted"]) + stats.inserted
                     counts["updated"] = int(counts["updated"]) + stats.updated
                     counts["skipped"] = int(counts["skipped"]) + stats.skipped + discarded
+                    counts["discoveries"] = int(counts["discoveries"]) + written
+                    counts["searches"] = int(counts["searches"]) + len(result.query_runs)
+                    counts["searches_empty"] = int(counts["searches_empty"]) + sum(
+                        1 for r in result.query_runs if r.results == 0
+                    )
+                    counts["unattributed"] = int(counts["unattributed"]) + sum(
+                        1 for d in result.discoveries if d.origin == "unattributed"
+                    )
                     if discarded:
                         counts["web_discarded"] = int(counts.get("web_discarded", 0)) + discarded
                         for reason, n in discard_counts(hits).items():
                             counts[f"web_discard:{reason}"] = (
                                 int(counts.get(f"web_discard:{reason}", 0)) + n
                             )
+                    # erro parcial de busca: dados persistidos + run failed
+                    if result.error is not None:
+                        exc = result.error
+                        run.status = "blocked" if exc.code == "blocked" else "failed"
+                        run.error_code = exc.code
+                        run.failed = 1
+                        errors += 1
+                        counts["failed"] = int(counts["failed"]) + 1
+                    else:
+                        run.status = "ok"
             if result.gate_hits:
                 counts[f"{result.platform}_gate_hits"] = result.gate_hits
             run.finished_at = deps.clock()

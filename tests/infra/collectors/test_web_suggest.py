@@ -7,7 +7,7 @@ import httpx
 import pytest
 
 from content_factory.domain.errors import CollectorError, NetworkError, RateLimited
-from content_factory.domain.models import KeywordSignal
+from content_factory.domain.kw_rank import SuggestHit
 
 PLATFORM = "web_suggest"
 
@@ -40,27 +40,34 @@ def _provider(transport: _FakeTransport, **kw: Any) -> Any:
 
 
 @pytest.mark.asyncio
-async def test_expand_returns_keyword_signals() -> None:
-    t = _FakeTransport(suggestions=["vela soja", "vela aromatica", "vela de cera"])
+async def test_expand_expoe_posicao_e_semente() -> None:
+    t = _FakeTransport(suggestions=["a", "b"])
     p = _provider(t)
-    out = await p.expand(["vela"], depth=0)
-    assert len(out) == 3
-    assert all(isinstance(s, KeywordSignal) for s in out)
-    assert out[0].keyword == "vela soja"
-    assert out[0].source == PLATFORM
-    assert out[0].depth == 1
+    hits = await p.expand(["s1"], depth=0)
+    assert [(h.term, h.seed, h.position) for h in hits] == [
+        ("a", "s1", 1),
+        ("b", "s1", 2),
+    ]
+    assert all(isinstance(h, SuggestHit) for h in hits)
     # cada seed gera 1 chamada
-    assert t.requests == ["vela"]
+    assert t.requests == ["s1"]
 
 
 @pytest.mark.asyncio
-async def test_expand_dedupes_across_seeds() -> None:
-    """Mesma sugestão de 2 seeds diferentes → 1 signal só."""
+async def test_expand_dedupe_por_semente_mas_nao_entre_elas() -> None:
+    """Mesma sugestão de 2 seeds → 2 hits (sementes distintas) p/ a recorrência."""
     t = _FakeTransport(suggestions=["vela soja"])
     p = _provider(t)
     out = await p.expand(["vela", "cera"], depth=0)
-    assert len(out) == 1
-    assert out[0].keyword == "vela soja"
+    assert [(h.term, h.seed) for h in out] == [("vela soja", "vela"), ("vela soja", "cera")]
+
+
+@pytest.mark.asyncio
+async def test_expand_dedupe_dentro_da_semente() -> None:
+    t = _FakeTransport(suggestions=["a", "a", "b"])
+    p = _provider(t)
+    out = await p.expand(["s1"], depth=0)
+    assert [(h.term, h.position) for h in out] == [("a", 1), ("b", 3)]
 
 
 @pytest.mark.asyncio

@@ -452,3 +452,92 @@ async def test_relevance_language_drops_videos_declared_in_other_language() -> N
 async def test_without_relevance_language_nothing_is_dropped() -> None:
     c = YoutubeCollector(api_key="k", transport=_lang_transport(_MIXED))
     assert len(await c.discover(SEG, limit=5)) == 5
+
+
+def _ranked_transport(
+    ids: list[str], langs: dict[str, str], log: list[httpx.Request]
+) -> httpx.MockTransport:
+    """search devolve `ids` na ordem; videos declara idioma por vídeo (`langs`)."""
+
+    def _route(request: httpx.Request) -> httpx.Response:
+        log.append(request)
+        path = request.url.path
+        if path.endswith("/search"):
+            return httpx.Response(200, json={"items": [{"id": {"videoId": v}} for v in ids]})
+        if path.endswith("/videos"):
+            items = [
+                {
+                    "id": vid,
+                    "snippet": {
+                        "title": vid,
+                        "channelId": "UC1",
+                        "channelTitle": "canal",
+                        "publishedAt": "2026-10-15T10:00:00Z",
+                        **({"defaultAudioLanguage": langs[vid]} if vid in langs else {}),
+                    },
+                    "statistics": {"viewCount": "10"},
+                    "contentDetails": {"duration": "PT1M"},
+                }
+                for vid in ids
+            ]
+            return httpx.Response(200, json={"items": items})
+        return httpx.Response(
+            200, json={"items": [{"id": "UC1", "statistics": {"subscriberCount": "100"}}]}
+        )
+
+    return httpx.MockTransport(_route)
+
+
+@pytest.mark.asyncio
+async def test_search_term_atribui_termo_posicao_e_locale() -> None:
+    """R6: 1 termo por busca; posição = ordem do search.list ANTES do filtro."""
+    from content_factory.domain.models import SearchConfig, SearchQuery
+
+    seen: list[httpx.Request] = []
+    col = YoutubeCollector(
+        api_key="k", transport=_ranked_transport(["v1", "v2", "v3"], {"v2": "en"}, seen)
+    )
+    seg = SEG.model_copy(
+        update={
+            "search": SearchConfig(relevance_language="pt", region_code="BR", order="relevance")
+        }
+    )
+    q = SearchQuery(term="vela artesanal", origin="seed", query_id="p:0:0:seed")
+    out = await col.search_term(seg, q, limit=25)
+    # v2 é en → cai; v3 mantém a posição 3 (o filtro não renumera)
+    assert [(d.candidate.platform_video_id, d.result_position) for d in out] == [
+        ("v1", 1),
+        ("v3", 3),
+    ]
+    assert all(
+        d.term == "vela artesanal" and d.origin == "seed" and d.query_id == q.query_id for d in out
+    )
+    assert all(d.run_kind == "collect" for d in out)
+    search_req = next(r for r in seen if r.url.path.endswith("/search"))
+    assert search_req.url.params["relevanceLanguage"] == "pt"
+    assert search_req.url.params["regionCode"] == "BR"
+    assert search_req.url.params["order"] == "relevance"
+    assert search_req.url.params["q"] == "vela artesanal"  # sem aspas de or_query
+
+
+@pytest.mark.asyncio
+async def test_search_term_preserva_hashtag() -> None:
+    from content_factory.domain.models import SearchQuery
+
+    seen: list[httpx.Request] = []
+    col = YoutubeCollector(api_key="k", transport=_ranked_transport(["v1"], {}, seen))
+    q = SearchQuery(term="#velaaromatica", origin="hashtag:youtube", query_id="p:0:3:h")
+    await col.search_term(SEG, q, limit=25)
+    assert (
+        next(r for r in seen if r.url.path.endswith("/search")).url.params["q"] == "#velaaromatica"
+    )
+
+
+@pytest.mark.asyncio
+async def test_channel_id_do_snippet_chega_no_candidato() -> None:
+    """R8: o `channelId` que o YouTube já recebe e descartava vira vínculo."""
+    seen: list[httpx.Request] = []
+    col = YoutubeCollector(api_key="k", transport=_ranked_transport(["v1"], {}, seen))
+    out = await col.discover(SEG, limit=5)
+    assert [c.creator_platform_id for c in out] == ["UC1"]
+    assert out[0].creator_followers == 100

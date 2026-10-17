@@ -1,9 +1,10 @@
-from datetime import datetime
+from datetime import date, datetime
 from typing import Any
 
 from pgvector.sqlalchemy import Vector
 from sqlalchemy import (
     Boolean,
+    Date,
     DateTime,
     Float,
     ForeignKey,
@@ -291,6 +292,96 @@ class KeywordSignalRow(Base):
     weight: Mapped[float] = mapped_column(Float, default=0.0)
     depth: Mapped[int] = mapped_column(Integer, default=0)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class SegmentTermRow(Base):
+    """Pool de termos do segmento (R4). Único por (segment_id, term, origin).
+
+    A origem faz parte da chave: a mesma frase pode ser seed E sugestão (o
+    Suggest devolve a própria seed), e uma hashtag pode coincidir com um termo.
+    Com chave só em (segment_id, term) o upsert trocava a origem e rebaixava a
+    seed (revisão QA).
+    """
+
+    __tablename__ = "segment_terms"
+    __table_args__ = (
+        UniqueConstraint("segment_id", "term", "origin", name="uq_segment_term"),
+        Index("ix_segment_terms_segment_status", "segment_id", "status"),
+        Index("ix_segment_terms_segment_origin", "segment_id", "origin"),
+    )
+    id: Mapped[int] = mapped_column(primary_key=True)
+    segment_id: Mapped[int] = mapped_column(ForeignKey("segments.id"))
+    term: Mapped[str] = mapped_column(String(200))
+    origin: Mapped[str] = mapped_column(String(32))
+    kw_rank: Mapped[float | None] = mapped_column(Float)
+    trend_score: Mapped[float | None] = mapped_column(Float)
+    engagement_score: Mapped[float | None] = mapped_column(Float)
+    status: Mapped[str] = mapped_column(String(16), default="active")
+    exclude_reason: Mapped[str | None] = mapped_column(String(32))
+    first_seen_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    last_seen_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    rules_version: Mapped[str] = mapped_column(String(32), default="")
+
+
+class KeywordSignalDayRow(Base):
+    """Dias distintos em que um termo do Suggest apareceu (R2 — persistência)."""
+
+    __tablename__ = "keyword_signal_days"
+    __table_args__ = (UniqueConstraint("segment_id", "keyword", "source", "seen_on"),)
+    id: Mapped[int] = mapped_column(primary_key=True)
+    segment_id: Mapped[int] = mapped_column(ForeignKey("segments.id"))
+    keyword: Mapped[str] = mapped_column(String(200))
+    source: Mapped[str] = mapped_column(String(32))
+    seen_on: Mapped[date] = mapped_column(Date)
+
+
+class VideoDiscoveryRow(Base):
+    """R6: qual termo (e posição) trouxe cada vídeo, por busca executada.
+
+    Uma linha por (busca, vídeo): o mesmo vídeo achado em 16 coletas tem 16
+    linhas — a deduplicação por vídeo é do relatório (Bloco 5), não daqui.
+    """
+
+    __tablename__ = "video_discoveries"
+    __table_args__ = (
+        Index("ix_video_discoveries_segment_discovered", "segment_id", "discovered_at"),
+        Index("ix_video_discoveries_video_id", "video_id"),
+    )
+    id: Mapped[int] = mapped_column(primary_key=True)
+    video_id: Mapped[int] = mapped_column(ForeignKey("videos.id"))
+    segment_id: Mapped[int] = mapped_column(ForeignKey("segments.id"))
+    platform: Mapped[str] = mapped_column(String(32))
+    term: Mapped[str] = mapped_column(String(200))
+    term_origin: Mapped[str] = mapped_column(String(32))
+    query_id: Mapped[str | None] = mapped_column(String(96))
+    result_position: Mapped[int | None] = mapped_column(Integer)
+    run_kind: Mapped[str] = mapped_column(String(16))
+    discovered_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+
+
+class SearchQueryRow(Base):
+    """R5/R13: cada busca executada — inclusive as vazias e as que falharam."""
+
+    __tablename__ = "search_queries"
+    __table_args__ = (Index("ix_search_queries_segment_started", "segment_id", "started_at"),)
+    id: Mapped[int] = mapped_column(primary_key=True)
+    segment_id: Mapped[int] = mapped_column(ForeignKey("segments.id"))
+    platform: Mapped[str] = mapped_column(String(32))
+    query_id: Mapped[str] = mapped_column(String(96))
+    term: Mapped[str] = mapped_column(String(200))
+    origin: Mapped[str] = mapped_column(String(32))
+    results: Mapped[int] = mapped_column(Integer)  # devolvidos pela API (pós-idioma)
+    kept: Mapped[int] = mapped_column(Integer)  # únicos novos nesta coleta (pós-dedupe)
+    quota_used: Mapped[int] = mapped_column(Integer)
+    error_code: Mapped[str | None] = mapped_column(String(64))
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    finished_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
 
 
 class ResearchCampaignRow(Base):
