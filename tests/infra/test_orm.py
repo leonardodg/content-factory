@@ -71,3 +71,23 @@ def test_composite_indexes_for_timeline_reads() -> None:
     engine = _engine()
     assert _has_index(engine, "videos", ["platform", "published_at"])
     assert _has_index(engine, "video_metrics", ["video_id", "captured_at"])
+
+
+def test_tabelas_do_pool_existem() -> None:
+    from content_factory.infra.db.orm import KeywordSignalDayRow, SegmentTermRow
+
+    assert SegmentTermRow.__tablename__ == "segment_terms"
+    assert KeywordSignalDayRow.__tablename__ == "keyword_signal_days"
+    assert {c.name for c in SegmentTermRow.__table__.columns} >= {
+        "segment_id",
+        "term",
+        "origin",
+        "kw_rank",
+        "trend_score",
+        "engagement_score",
+        "status",
+        "exclude_reason",
+        "first_seen_at",
+        "last_seen_at",
+        "rules_version",
+    }
