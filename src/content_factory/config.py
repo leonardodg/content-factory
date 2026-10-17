@@ -31,6 +31,11 @@ class Settings(BaseSettings):
     # reversível sem mudar schema (migração 0010 é aditiva). Default off — só
     # ligar com veredito "aprovado" na F4 em >= 2 dos 3 segmentos PT.
     web_score_enabled: bool = False
+    # F1 em produção: com isto ligado, segmento sem protocolo `q1` válido faz
+    # o collect da web falhar (`missing_protocol`) em vez de cair em silêncio
+    # no legado de 1 consulta. Default off (compatível com o comportamento
+    # anterior); ligar no app.env de produção a partir do deploy do q1.
+    web_queries_required: bool = False
 
 
 def get_settings() -> Settings:

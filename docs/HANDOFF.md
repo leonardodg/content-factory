@@ -24,11 +24,18 @@ relatório **próprios** — nada muda em `viral_score`/`FORMULA_VERSION`/
   (migração `0010`, append-only) grava consulta exata, `query_id`,
   `query_intent`, `provider='unknown'`, `provider_result_position`,
   URL original + canônica, `collector_version=web-c2`, `rules_version`. O
-  protocolo `q1` (`domain/web_queries.py`, léxico `intent-v1`) classifica as
+  protocolo `q1` (`domain/web_queries.py`, léxico `intent-v3` + filtro
+  `filter-v1`) classifica as
   frases do Suggest por intenção (`aprender`/`resolver`/`tendencia`/`comercial`),
   sorteia 3 por classe com seed fixa (cego ao peso) + 1 `seed` de controle, e
   roda 3 por coleta em ordem cíclica determinística (`run_index_for`: 2
-  coletas/dia, sem estado).
+  coletas/dia, sem estado). Antes do sorteio, o `filter-v1` descarta frase em
+  inglês/espanhol e frase com marca industrial (`filter_version` no YAML). O
+  Suggest é semeado com as keywords do segmento
+  **e** com sondas de intenção (`probe-v2`, `domain/suggest_probes.py`) sobre os
+  **termos-cabeça** do segmento (`SegmentConfig.probe_terms`) — só o Suggest as
+  recebe. O deploy precisa de `cf segment load` para subir os `probe_terms`
+  novos (o `config` JSONB é reescrito por slug).
 - **F2 — amostra cega:** `cf web-sample` gera 50/segmento (15 topo + 25
   aleatórios + até 10 descartados), CSV sem score/posição/estrato e linhas
   embaralhadas; protocolo de anotação em `manual/anotacao-web.md`.
@@ -40,7 +47,7 @@ relatório **próprios** — nada muda em `viral_score`/`FORMULA_VERSION`/
   seleção, não score.
 - **F4 — pré-registro:** `manual/validacao-web.md` fixa critérios (P@5 ≥ 0,6;
   P@10 ≥ 0,5; ganho P@10 ≥ 0,1 com IC-95 inferior > 0; cobertura ≥ 90%), as
-  versões (`q1`/`ads-v1`/`intent-v1`/`web-v1`/`base-fase-h`) e as seeds.
+  versões (`q1`/`ads-v1`/`intent-v3`/`filter-v1`/`probe-v2`/`web-v1`/`base-fase-h`) e as seeds.
   `cf web-eval` compara os dois rankings sobre o MESMO conjunto `kept` (IC por
   bootstrap, veredito `aprovado`/`direcional`/`insuficiente`/`nao_atingido`).
 - **F5 — gated:** `WEB_SCORE_ENABLED` (default `0`) liga a gravação no
@@ -73,16 +80,60 @@ relatório **próprios** — nada muda em `viral_score`/`FORMULA_VERSION`/
   web-sample` recusa com `incomplete_cycle` se alguma consulta `q1` não tem
   coleta e devolve `as_of` no envelope; (10) removidos `bootstrap_interval`
   (IC errado, sem uso) e `latest_scores`.
-- **Operação da F2:** depois do deploy, as 13 consultas pedem 5 coletas (3 por
-  coleta). Com deploy na noite de 17/10, rodar um `cf collect` manual na
-  mesma noite (fora das janelas de cron) para a 5ª coleta cair no collect
-  das 20:00 de 19/10; sem ele, a amostra só sai depois do collect das 08:00
-  de 20/10.
+- **Operação da F2:** o protocolo completo tem 13 consultas (4 classes × 3 +
+  1 seed) → 5 coletas de 3; com classe parcial o total cai e o ciclo é
+  `ceil(len(protocolo)/3)`. O ciclo só começa **depois** do deploy (21/10 após
+  19:20 UTC), do primeiro research com as sondas e da geração/aprovação do
+  `q1`. A 5ª coleta do ciclo completo exige um `cf collect` manual fora das
+  janelas de cron.
+- **Bloqueio da F1 — resolvido por código, pendente o novo research (16/10):**
+  no banco real, `intent-v1` classificava 21/154 (velas), 17/150 (sabonetes) e
+  22/151 (resina), com `resolver` 0/0/0 e `tendencia` 0/0/1 — o `q1` degenerava
+  em `aprender`+`comercial`+`seed`. Diagnóstico (revisão 16/10): o Suggest é
+  semeado com o próprio nome do segmento e devolve variações de produto; parte
+  das frases é en/es e o léxico PT as exclui (correto). Decisão do usuário:
+  **opção (a)** — semear o Suggest pela intenção (`probe-v2`), com o léxico
+  ampliado para `intent-v2`. Medido: `intent-v2` sobe a cobertura para 40/154,
+  45/150 e 42/151, mas `tendencia` ainda fica 0/1/0 e `resolver` fino em resina
+  — por isso as sondas. **Não inventar consultas**; segmento que seguir parcial
+  é marcado parcial e exploratório e não conta como F1 aprovada.
+  **QA do `4f56a0a` (16/10):** com as sondas as 4 classes fecham nos 3
+  segmentos, mas de 4 a 7 das 13 consultas saíam fora do nicho ou em outro
+  idioma (marcadores EN no léxico, `nao` solto, marcas industriais). Corrigido
+  por **`intent-v3`** (só PT; `nao` exige desfecho ruim) + **`filter-v1`**
+  (idioma e marcas industriais, antes do sorteio, gravado como `filter_version`):
+  as 13 consultas saem limpas e as candidatas a veto caem de 15 para 4, todas
+  resíduo de homonímia. Ressalva: `resolver` em sabonetes fica com 4 frases
+  elegíveis — um veto abriria `missing`.
+  **Sondas validadas contra o autocompletar real (16/10, read-only):** a cauda
+  longa não rende (`vela artesanal nao` → 0), a cabeça rende (`vela nao` → 10,
+  `vela tendencia` → 10, `pavio nao` → 8, `sabonete mais vendido` → 10,
+  `artesanato mais vendido` → 10). Cobertura esperada por segmento com
+  `probe_terms`: velas resolver 48/tendencia 20; sabonetes resolver 31/tendencia
+  10+; resina resolver 22/tendencia 10+ (via `artesanato`). Trocar o `client` do
+  endpoint não muda nada. Ressalvas registradas no pré-registro: `tendencia` é
+  **induzido** pela sonda, e os termos-cabeça são ambíguos em PT (`resina` =
+  odontológica; `vela` = ignição/gráfico) — o usuário veta frases fora do
+  segmento no `q1`. Números brutos e método em
+  `manual/evidencia-sondas-suggest.md`; reprodução:
+  `uv run python scripts/measure_suggest_probes.py`.
+- **`segments/` na imagem do worker:** o estágio `worker` do `Dockerfile` agora
+  copia `segments/` (o `FileWebQueries` lê
+  `segments/web-queries/<slug>.q1.yaml` em runtime; sem bind-mount, a ausência
+  degradava em silêncio para o legado de 1 consulta). Em produção ligar
+  `WEB_QUERIES_REQUIRED=1`: protocolo ausente/inválido → collect `failed`
+  (`missing_protocol`), sem rodar o legado. Guardas: teste de política
+  `tests/test_worker_image.py` (inclui probe negativo), probe
+  `scripts/check_worker_segments.py` e smoke `scripts/smoke_worker_segments.sh`
+  (usa `docker run -i --entrypoint uv ... run python`; **rodar no deploy**, não
+  exige rebuild agora). Os YAMLs ficam fixos no build: aprovar protocolo novo
+  exige **novo build**.
 - **Pendente do usuário:** revisar e aprovar os
-  `segments/web-queries/<slug>.q1.yaml` (só veto com motivo) antes do deploy.
+  `segments/web-queries/<slug>.q1.yaml` (só veto com motivo) — **depois** do
+  novo research com as sondas e da regeneração — antes do deploy.
 - **Infra de teste:** Postgres `cf-test-pg` (`127.0.0.1:55432`) e Redis
   `cf-test-redis` (`127.0.0.1:56379`); migração `0010` já aplicada no banco de
-  teste. Suíte completa: 579 passed (com `TEST_DATABASE_URL`/`TEST_REDIS_URL`).
+  teste. Suíte completa: 604 passed (com `TEST_DATABASE_URL`/`TEST_REDIS_URL`).
 
 _**Resiliência do worker e ranking por plataforma (2026-10-16).**_ Plano:
 `ai-plans/2026-10-16-worker-resiliencia-ranking.md`.

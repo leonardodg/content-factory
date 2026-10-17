@@ -43,19 +43,31 @@ class WebCollector:
     Cada resultado (mantido OU descartado por anúncio/duplicata) vira um
     `CandidateVideo`; o `raw` carrega a proveniência. A partição em
     mantidos x hits acontece em `domain.web_hits` (o coletor não conhece o
-    banco). Sem fonte de consultas, usa o legado (1 consulta).
+    banco). Sem fonte de consultas, usa o legado (1 consulta) — salvo em modo
+    `required` (`WEB_QUERIES_REQUIRED=1`), em que a ausência de protocolo
+    levanta `CollectorError` em vez de cair no legado.
     """
 
     platform: ClassVar[str] = "web"
 
-    def __init__(self, queries: WebQuerySource | None = None) -> None:
+    def __init__(self, queries: WebQuerySource | None = None, *, required: bool = False) -> None:
         self._queries = queries
+        self._required = required
 
     def _planned(self, segment: SegmentConfig) -> list[PlannedQuery]:
         if self._queries is not None:
             planned = self._queries.queries_for(segment)
             if planned:
                 return planned
+            if self._required:
+                # Falha explícita (WEB_QUERIES_REQUIRED=1): melhor o collect
+                # `failed` do que rodar em silêncio um experimento diferente do
+                # aprovado. O legado NÃO roda neste modo.
+                raise CollectorError(
+                    "missing_protocol",
+                    self.platform,
+                    f"segmento {segment.slug} sem protocolo q1 válido",
+                )
         return [
             PlannedQuery(
                 query_id=_LEGACY_QUERY_ID,

@@ -23,6 +23,12 @@ keywords:
   - resin tray
   - resin keychains
   - resin art for beginners
+probe_terms:
+  # cabeca do termo (opcao (a), medido 16/10): "resina" sozinho e ambiguo
+  # (odontologica) e nao rende tendencia; "artesanato mais vendido" rende
+  - resina
+  - resina epoxi
+  - artesanato
 subnichos:
   idioma_en: [resin art, epoxy resin crafts, resin molds, resin tray,
               resin keychains, resin art for beginners]

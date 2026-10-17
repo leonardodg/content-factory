@@ -258,6 +258,6 @@ async def test_guard_dedupe_prevents_duplicate_keywords_to_socials() -> None:
 
     out = await run_research_cycle("candles", cfg, deps)
     assert out.ok is True
-    # 3 seeds → guard.admit deduplica para 1 → web recebe 1 → 1 sinal
+    # sem probe_terms: 3 seeds → guard.admit deduplica para 1 → web recebe 1 → 1 sinal
     assert out.counts["web_found"] == 1
     assert ig.received_keywords[0] == ["Vela", "Vela derivada"]

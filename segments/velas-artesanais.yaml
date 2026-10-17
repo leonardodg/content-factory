@@ -23,6 +23,12 @@ keywords:
   - soy wax candles
   - candle wick
   - candle making for beginners
+probe_terms:
+  # cabeca do termo (opcao (a), medido 16/10): a sonda so rende no termo curto
+  # — "vela artesanal" devolve 0 sugestoes de resolver/tendencia
+  - vela
+  - velas
+  - pavio
 subnichos:
   # metadado puro (não consumido pelo pipeline) — marca quais keywords
   # acima são do grupo en, pra separar na análise pós-semana sem misturar

@@ -22,5 +22,6 @@ def register_defaults(settings: Settings) -> None:
     )
     register(TikTokCollector(ms_token=settings.tiktok_ms_token, proxy=settings.tiktok_proxy))
     register(InstagramCollector(settings.instagram_access_token, settings.ig_user_id))
-    # protocolo `q1` por segmento; sem arquivo, o coletor cai no legado
-    register(WebCollector(queries=FileWebQueries()))
+    # protocolo `q1` por segmento; sem arquivo, o coletor cai no legado — ou
+    # falha explicitamente quando WEB_QUERIES_REQUIRED=1
+    register(WebCollector(queries=FileWebQueries(), required=settings.web_queries_required))

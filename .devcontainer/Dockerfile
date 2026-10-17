@@ -28,5 +28,11 @@ RUN uv pip install --system playwright && playwright install --with-deps chromiu
 # do worker único, 2026-10-14).
 COPY --chown=appuser:appuser src /app/src
 COPY --chown=appuser:appuser README.md /app/README.md
+# Protocolos de consulta web (`segments/web-queries/<slug>.q1.yaml`) são lidos
+# em runtime pelo FileWebQueries; o worker NÃO tem bind-mount, então `segments/`
+# precisa estar na imagem. Sem este COPY o coletor cai no legado de 1 consulta
+# (em silêncio) e a F1 não roda como aprovada — regressão coberta por
+# tests/test_worker_image.py e scripts/smoke_worker_segments.sh.
+COPY --chown=appuser:appuser segments /app/segments
 USER appuser
 RUN uv sync --frozen --all-groups  # instala o projeto; sync pós-start é no-op

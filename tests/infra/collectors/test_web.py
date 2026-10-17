@@ -3,8 +3,9 @@ import hashlib
 import pytest
 from ddgs.exceptions import DDGSException, RatelimitException, TimeoutException
 
-from content_factory.domain.errors import NetworkError, RateLimited, UpstreamChanged
+from content_factory.domain.errors import CollectorError, NetworkError, RateLimited, UpstreamChanged
 from content_factory.domain.models import SegmentConfig
+from content_factory.domain.web_queries import PlannedQuery
 from content_factory.domain.web_urls import canonical_url
 from content_factory.infra.collectors import web as web_mod
 from content_factory.infra.collectors.web import WebCollector
@@ -219,3 +220,63 @@ async def test_discover_wrapped_http_429_maps_to_rate_limited(
     monkeypatch.setattr(web_mod, "DDGS", lambda: BoomDDGS(wrapped))
     with pytest.raises(RateLimited):
         await WebCollector().discover(SEG, limit=5)
+
+
+# --- modo obrigatório (WEB_QUERIES_REQUIRED): falha explícita sem protocolo ---
+
+
+class _RecordingDDGS:
+    """Stub de DDGS que registra as consultas efetivamente pedidas."""
+
+    def __init__(self) -> None:
+        self.queries: list[str] = []
+
+    def text(self, query: str, max_results: int = 10) -> list[dict[str, str]]:
+        self.queries.append(query)
+        return []
+
+
+class _StubQueries:
+    """`WebQuerySource` que devolve o que o teste mandar."""
+
+    def __init__(self, planned: list[PlannedQuery] | None) -> None:
+        self._planned = planned
+
+    def queries_for(self, segment: SegmentConfig) -> list[PlannedQuery] | None:
+        return self._planned
+
+
+@pytest.mark.asyncio
+async def test_without_protocol_falls_back_to_legacy(monkeypatch: pytest.MonkeyPatch) -> None:
+    rec = _RecordingDDGS()
+    monkeypatch.setattr(web_mod, "DDGS", lambda: rec)
+    await WebCollector(queries=_StubQueries(None)).discover(SEG, limit=5)
+    assert rec.queries == [" OR ".join(SEG.keywords[:3])]
+
+
+@pytest.mark.asyncio
+async def test_required_without_protocol_raises_and_skips_legacy(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    rec = _RecordingDDGS()
+    monkeypatch.setattr(web_mod, "DDGS", lambda: rec)
+    with pytest.raises(CollectorError) as exc_info:
+        await WebCollector(queries=_StubQueries(None), required=True).discover(SEG, limit=5)
+    assert exc_info.value.code == "missing_protocol"
+    assert exc_info.value.platform == "web"
+    assert rec.queries == []  # o legado NAO roda
+
+
+@pytest.mark.asyncio
+async def test_required_with_protocol_uses_protocol(monkeypatch: pytest.MonkeyPatch) -> None:
+    rec = _RecordingDDGS()
+    monkeypatch.setattr(web_mod, "DDGS", lambda: rec)
+    planned = [PlannedQuery("q1:aprender:00", "como fazer velas", "aprender")]
+    await WebCollector(queries=_StubQueries(planned), required=True).discover(SEG, limit=5)
+    assert rec.queries == ["como fazer velas"]
+
+
+def test_web_queries_required_defaults_off() -> None:
+    from content_factory.config import Settings
+
+    assert Settings().web_queries_required is False
