@@ -528,21 +528,27 @@ class _FakeOpsReader:
         return {"ad:bing_aclick": 2, "duplicate": 1}
 
     # Bloco 6 (R13/R14): a porta ganhou as leituras do teste viral-por-tema
-    async def search_yield(self, segment_id: int, since: datetime) -> dict[str, dict[str, int]]:
-        _ = segment_id, since
+    async def search_yield(
+        self, segment_id: int, since: datetime, until: datetime
+    ) -> dict[str, dict[str, int]]:
+        _ = segment_id, since, until
         keys = ("searches", "empty", "failed", "quota", "results", "kept")
         return {"youtube:seed": dict(zip(keys, (4, 1, 0, 408, 30, 28), strict=True))}
 
-    async def remediation_quota(self, segment_id: int, since: datetime) -> int:
-        _ = segment_id, since
+    async def remediation_quota(self, segment_id: int, since: datetime, until: datetime) -> int:
+        _ = segment_id, since, until
         return 2
 
-    async def discoveries_by_origin(self, segment_id: int, since: datetime) -> dict[str, int]:
-        _ = segment_id, since
+    async def discoveries_by_origin(
+        self, segment_id: int, since: datetime, until: datetime
+    ) -> dict[str, int]:
+        _ = segment_id, since, until
         return {"seed": 28}
 
-    async def remediation_coverage(self, segment_id: int, since: datetime) -> dict[str, int]:
-        _ = segment_id, since
+    async def remediation_coverage(
+        self, segment_id: int, since: datetime, until: datetime
+    ) -> dict[str, int]:
+        _ = segment_id, since, until
         return {"targets": 10, "remeasured": 9, "removed": 1}
 
     async def pool_by_origin(self, segment_id: int) -> dict[str, dict[str, int]]:
@@ -959,6 +965,6 @@ def test_ops_report_traz_as_secoes_do_teste_viral(monkeypatch: pytest.MonkeyPatc
     assert report["search_quota"]["by_origin"]["youtube:seed"]["videos_per_search"] == 7.0
     assert report["discovery_origins"] == {"seed": 28}
     assert report["remediation"]["coverage"] == 0.9
-    assert report["term_pool"] == {"suggest": {"active": 20, "excluded": 5}}
-    assert report["filter_discards"] == {"lang": 5}
-    assert report["language"]["youtube"]["rate"] == 0.75
+    assert report["segment_all_time"]["term_pool"] == {"suggest": {"active": 20, "excluded": 5}}
+    assert report["segment_all_time"]["filter_discards"] == {"lang": 5}
+    assert report["segment_all_time"]["language"]["youtube"]["rate"] == 0.75

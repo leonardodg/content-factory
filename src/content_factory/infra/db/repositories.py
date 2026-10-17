@@ -574,7 +574,9 @@ class OpsReportReaderImpl(OpsReportReader):
         )
         return {str(reason): int(n) for reason, n in (await self._s.execute(stmt)).all()}
 
-    async def search_yield(self, segment_id: int, since: datetime) -> dict[str, dict[str, int]]:
+    async def search_yield(
+        self, segment_id: int, since: datetime, until: datetime
+    ) -> dict[str, dict[str, int]]:
         q = SearchQueryRow
         stmt = (
             select(
@@ -587,7 +589,7 @@ class OpsReportReaderImpl(OpsReportReader):
                 func.coalesce(func.sum(q.results), 0),
                 func.coalesce(func.sum(q.kept), 0),
             )
-            .where(q.segment_id == segment_id, q.started_at >= since)
+            .where(q.segment_id == segment_id, q.started_at >= since, q.started_at <= until)
             .group_by(q.platform, q.origin)
         )
         keys = ("searches", "empty", "failed", "quota", "results", "kept")
@@ -596,24 +598,29 @@ class OpsReportReaderImpl(OpsReportReader):
             for plat, origin, *vals in (await self._s.execute(stmt)).all()
         }
 
-    async def remediation_quota(self, segment_id: int, since: datetime) -> int:
+    async def remediation_quota(self, segment_id: int, since: datetime, until: datetime) -> int:
         stmt = select(func.coalesce(func.sum(CollectRunRow.quota_used), 0)).where(
             CollectRunRow.segment_id == segment_id,
             CollectRunRow.collector.like("remediate:%"),
             CollectRunRow.started_at >= since,
+            CollectRunRow.started_at <= until,
         )
         return int((await self._s.execute(stmt)).scalar_one())
 
-    async def discoveries_by_origin(self, segment_id: int, since: datetime) -> dict[str, int]:
+    async def discoveries_by_origin(
+        self, segment_id: int, since: datetime, until: datetime
+    ) -> dict[str, int]:
         d = VideoDiscoveryRow
         stmt = (
             select(d.term_origin, func.count(func.distinct(d.video_id)))
-            .where(d.segment_id == segment_id, d.discovered_at >= since)
+            .where(d.segment_id == segment_id, d.discovered_at >= since, d.discovered_at <= until)
             .group_by(d.term_origin)
         )
         return {str(o): int(n) for o, n in (await self._s.execute(stmt)).all()}
 
-    async def remediation_coverage(self, segment_id: int, since: datetime) -> dict[str, int]:
+    async def remediation_coverage(
+        self, segment_id: int, since: datetime, until: datetime
+    ) -> dict[str, int]:
         # Cobertura = alvos medidos / alvos — só os ALVOS (descobertos na janela
         # e não removidos), senão vídeos fora da janela inflariam acima de 100%.
         targets = (
@@ -622,6 +629,7 @@ class OpsReportReaderImpl(OpsReportReader):
             .where(
                 VideoSegmentRow.segment_id == segment_id,
                 VideoSegmentRow.discovered_at >= since,
+                VideoSegmentRow.discovered_at <= until,
                 VideoRow.removed_at.is_(None),
             )
             .subquery()
@@ -630,11 +638,16 @@ class OpsReportReaderImpl(OpsReportReader):
         measured = select(func.count(func.distinct(VideoMetricsRow.video_id))).where(
             VideoMetricsRow.video_id.in_(select(targets.c.video_id)),
             VideoMetricsRow.captured_at >= since,
+            VideoMetricsRow.captured_at <= until,
         )
         removed = (
             select(func.count(VideoRow.id))
             .join(VideoSegmentRow, VideoSegmentRow.video_id == VideoRow.id)
-            .where(VideoSegmentRow.segment_id == segment_id, VideoRow.removed_at.is_not(None))
+            .where(
+                VideoSegmentRow.segment_id == segment_id,
+                VideoRow.removed_at >= since,  # só remoções NA janela (revisão externa)
+                VideoRow.removed_at <= until,
+            )
         )
         return {
             "targets": int(n_targets),

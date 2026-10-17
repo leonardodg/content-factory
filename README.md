@@ -41,8 +41,9 @@ only a JSON envelope (`{"ok": ...}`); the data lives in Postgres.
 - 🗂 **Parametrised by segment.** A new niche is a YAML file and
   `cf research start`, not new code.
 - ⏰ **A daily cycle, not a script.** Three cron jobs (research 07:00,
-  collect 08:00/20:00, score 08:30/21:30, BRT) run for as long as the
-  segment's campaign is active.
+  collect 02:00/08:00/14:00/20:00, score 30 min after each collect, BRT — set
+  by `COLLECT_CRON_HOURS`/`SCORE_CRON_HOURS` in the worker's compose) run for
+  as long as the segment's campaign is active.
 - 🔍 **Keyword expansion before search.** Google Suggest and Trends find
   what the niche is talking about *today*, and that feeds a second,
   keyword-driven search on the social networks.
@@ -120,10 +121,9 @@ segments/*.yaml ──cf segment load──►  segments  ◄──cf research s
                                                                               │
               arq cron (BRT)                                                  ▼
    07:00 research_job ─┐                                        active_segments()
-   08:00 collect_job  ─┼──►  bounded_gather per segment (WORKER_MAX_SEGMENTS=3)
-   20:00 collect_job  ─┤         └─ 1 unit of work = 1 session = 1 commit per segment
-   08:30 score_job    ─┤
-   21:30 score_job    ─┘
+   02/08/14/20 collect_job ─┼──►  bounded_gather per segment (WORKER_MAX_SEGMENTS=3)
+                            │         └─ 1 unit of work = 1 session = 1 commit per segment
+   02:30/08:30/14:30/20:30 score_job ─┘
         │
         ├─ research: Suggest → Trends → keyword_signals / trend_observations
         │            → discover_by_keywords (YouTube · Instagram · TikTok)

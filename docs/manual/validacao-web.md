@@ -11,8 +11,8 @@ reportado pelos dois critérios.
 | Elemento | Versão | Onde |
 | --- | --- | --- |
 | Protocolo de consultas | `q1` (`web-queries-q1`) | `segments/web-queries/<slug>.q1.yaml` |
-| Léxico de intenção | `intent-v3` | `domain/web_queries.py` |
-| Filtro objetivo pré-sorteio | `filter-v1` | `domain/web_queries.py` |
+| Léxico de intenção | `intent-v4` (era `intent-v3`; adendo de 17/10) | `domain/web_queries.py` |
+| Filtro objetivo pré-sorteio | `filter-v2` (era `filter-v1`; adendo de 17/10) | `domain/web_queries.py` |
 | Sondas de intenção do Suggest | `probe-v2` | `domain/suggest_probes.py` |
 | Regras de anúncio | `ads-v1` | `domain/web_urls.py` |
 | Normalização de URL | `canon-v1` | `domain/web_urls.py` |
@@ -202,3 +202,34 @@ evidência registrada) antes de qualquer ativação.
   `WEB_SCORE_ENABLED=0`.
 - Uma eventual `web-v2` sobe a versão e repete a F4 com o **mesmo**
   pré-registro.
+
+### Adendo registrado — 2026-10-17: `intent-v4` + `filter-v2` (revisão externa)
+
+**Motivo.** Uma revisão externa de 17/10 mostrou, e o QA reproduziu, que o
+`intent-v3` classificava frases de problema e de venda como aprendizagem:
+o marcador genérico `como` era avaliado primeiro (`aprender` é a 1ª classe) e
+vencia o marcador específico — "como resolver vela que não acende", "como
+vender velas" e "como definir preço" saíam como `aprender`; "tendências"
+(plural) não casava nada; e o `filter-v1` barrava "tutorial", palavra
+corrente em PT.
+
+**Mudança.** `intent-v4`: os marcadores específicos decidem primeiro (na ordem
+documentada); o genérico (`como`) só decide quando nada específico casa;
+entram plurais (`tendencias`, `novidades`) e problemas (`evitar`, `consertar`,
+`corrigir`, `bolha(s)`). `filter-v2`: `tutorial` sai dos marcadores
+estrangeiros. Casos ambíguos e negativos viraram testes literais.
+
+**Efeito no experimento.** Nenhum: os protocolos `q1` ainda não tinham sido
+gerados nem amostrados — a mudança entra antes de congelar o protocolo, então
+não há resultado a reportar pelos dois critérios.
+
+**Regras acrescentadas à análise da F4:**
+
+- **Sondas (induzem `tendencia`/`comercial`).** As frases que vieram das
+  sondas `probe-v2` são em parte induzidas pela própria sonda: a cobertura
+  dessas classes **não** é evidência de vocabulário espontâneo do segmento, e
+  o relatório deve dizer isso ao apresentá-las.
+- **Contaminação residual do filtro.** O filtro é heurística determinística,
+  não detector de idioma: a anotação manual registra quantas consultas da
+  amostra ainda estão fora do nicho ou do idioma, e esse número sai no
+  relatório da F4.

@@ -2,7 +2,7 @@
 
 Lê `segments/web-queries/<slug>.q1.yaml`, congela as consultas e devolve as
 `WEB_QUERIES_PER_RUN` do run atual — a rotação é derivada da data/hora
-(2 coletas/dia), sem estado: reproduzível entre processos.
+(4 coletas/dia, um slot por coleta), sem estado: reproduzível entre processos.
 """
 
 import logging
@@ -34,14 +34,23 @@ def protocol_path(directory: Path, slug: str) -> Path:
 
 
 def load_protocol(path: Path) -> WebQueryProtocol:
-    data: object = yaml.safe_load(path.read_text(encoding="utf-8"))
+    try:
+        data: object = yaml.safe_load(path.read_text(encoding="utf-8"))
+    except yaml.YAMLError as exc:
+        # sintaxe quebrada não é ValueError: sem isto escapava do `_protocol`
+        # e derrubava a coleta web inteira (revisão externa 3.4)
+        raise ValueError(f"YAML com sintaxe inválida em {path}") from exc
     if not isinstance(data, dict):
         raise ValueError(f"protocolo inválido em {path}")
     return protocol_from_dict(cast("dict[str, object]", data))
 
 
 class FileWebQueries:
-    """`WebQuerySource` que lê o YAML `q1` do segmento (cache por mtime)."""
+    """`WebQuerySource` que lê o YAML `q1` do segmento.
+
+    Cache por (`st_mtime_ns`, tamanho): só o mtime em segundos deixava passar
+    uma troca do arquivo dentro da resolução do filesystem (revisão 3.5).
+    """
 
     def __init__(
         self,
@@ -53,23 +62,24 @@ class FileWebQueries:
         self._dir = directory
         self._per_run = per_run
         self._clock = clock
-        self._cache: dict[str, tuple[float, WebQueryProtocol]] = {}
+        self._cache: dict[str, tuple[tuple[int, int], WebQueryProtocol]] = {}
 
     def _protocol(self, slug: str) -> WebQueryProtocol | None:
         path = protocol_path(self._dir, slug)
         try:
-            mtime = path.stat().st_mtime
+            stat = path.stat()
         except OSError:
             return None
+        signature = (stat.st_mtime_ns, stat.st_size)
         cached = self._cache.get(slug)
-        if cached is not None and cached[0] == mtime:
+        if cached is not None and cached[0] == signature:
             return cached[1]
         try:
             protocol = load_protocol(path)
         except ValueError:
             logger.warning("protocolo web inválido — %s", path, exc_info=True)
             return None
-        self._cache[slug] = (mtime, protocol)
+        self._cache[slug] = (signature, protocol)
         return protocol
 
     def queries_for(self, segment: SegmentConfig) -> list[PlannedQuery] | None:

@@ -433,21 +433,27 @@ class OpsReportReader(Protocol):
         """Descartes web por motivo (`web_search_hits.discard_reason`) na janela (F0)."""
         ...
 
-    async def search_yield(self, segment_id: int, since: datetime) -> dict[str, dict[str, int]]:
+    async def search_yield(
+        self, segment_id: int, since: datetime, until: datetime
+    ) -> dict[str, dict[str, int]]:
         """R13: por `plataforma:origem` → searches/empty/failed/quota/results/kept."""
         ...
 
-    async def remediation_quota(self, segment_id: int, since: datetime) -> int:
+    async def remediation_quota(self, segment_id: int, since: datetime, until: datetime) -> int:
         """R13: cota das runs `remediate:*` na janela."""
         ...
 
-    async def discoveries_by_origin(self, segment_id: int, since: datetime) -> dict[str, int]:
+    async def discoveries_by_origin(
+        self, segment_id: int, since: datetime, until: datetime
+    ) -> dict[str, int]:
         """R13: vídeos DISTINTOS por origem do termo na janela."""
         ...
 
-    async def remediation_coverage(self, segment_id: int, since: datetime) -> dict[str, int]:
+    async def remediation_coverage(
+        self, segment_id: int, since: datetime, until: datetime
+    ) -> dict[str, int]:
         """R7/R13: alvos (descobertos na janela, não removidos), alvos medidos na
-        janela, e removidos do segmento."""
+        janela, e vídeos removidos NA janela (`removed_at` em [since, until])."""
         ...
 
     async def pool_by_origin(self, segment_id: int) -> dict[str, dict[str, int]]:

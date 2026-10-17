@@ -9,6 +9,8 @@ import os
 from datetime import UTC, datetime
 from pathlib import Path
 
+import pytest
+
 from content_factory.app.web_queries_plan import write_protocol
 from content_factory.domain.models import SegmentConfig
 from content_factory.domain.web_queries import (
@@ -81,4 +83,29 @@ def test_queries_for_reloads_after_mtime_change(tmp_path: Path) -> None:
     stamp = before + 10
     os.utime(path, (stamp, stamp))
 
+    assert all(q.intent != "seed" for q in (source.queries_for(SEG) or []))
+
+
+def test_yaml_com_sintaxe_quebrada_vira_none_e_loga(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Revisão externa 3.4: `yaml.YAMLError` não é `ValueError` e escapava."""
+    protocol_path(tmp_path, SEG.slug).write_text('queries: [\n  "aberto\n', encoding="utf-8")
+    with caplog.at_level("WARNING"):
+        assert FileWebQueries(tmp_path).queries_for(SEG) is None
+    assert any("protocolo web inválido" in r.getMessage() for r in caplog.records)
+
+
+def test_cache_invalida_com_mesmo_mtime_e_tamanho_diferente(tmp_path: Path) -> None:
+    """Revisão externa 3.5: troca do arquivo dentro da resolução do mtime."""
+    path = protocol_path(tmp_path, SEG.slug)
+    write_protocol(path, _protocol(SEG.slug))
+    stat = path.stat()
+    source = FileWebQueries(tmp_path)
+    assert any(q.intent == "seed" for q in source.queries_for(SEG) or [])
+
+    trimmed = _protocol(SEG.slug)
+    trimmed.queries.pop()  # remove o seed → arquivo menor
+    write_protocol(path, trimmed)
+    os.utime(path, ns=(stat.st_atime_ns, stat.st_mtime_ns))  # MESMO mtime em ns
     assert all(q.intent != "seed" for q in (source.queries_for(SEG) or []))

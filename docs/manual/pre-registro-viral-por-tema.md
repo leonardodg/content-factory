@@ -123,6 +123,15 @@ VIRAL_V2_ENABLED=1   # só a partir do deploy da Fase B (adendo com a data)
 
 ### 2026-10-17 — início da Fase A
 
+- **Linha do tempo do pré-registro** (revisão externa, P1 metodológico): o
+  pré-registro foi commitado em 17/10 às 02:00 BRT (`a902f31`) e mergeado na
+  `main` às 02:05 (`c005ccc`, #55) — **antes** do início do teste (07:17). Este
+  adendo foi mergeado às 07:21 (#59) e **só registra** o início, as campanhas
+  e o 1º research; nenhum critério, versão ou divisão de buscas mudou depois
+  do início. A data "21/10 19:20 UTC" que aparece em documentos anteriores é
+  o fim das campanhas **antigas** 155–157 (teste de 7 dias congelado em
+  16/10), não deste teste.
+
 - **Início do teste:** 2026-10-17 07:17 BRT (10:17:49 UTC), com a subida do
   worker `cf-worker-multi-segmento` sobre a `main` em `c29dcd5` (blocos 1–6;
   migrações até `0015`).

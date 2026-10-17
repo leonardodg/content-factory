@@ -2510,7 +2510,7 @@ async def test_leituras_do_ops_report_do_teste_viral() -> None:
         )
         await s.flush()
         reader = OpsReportReaderImpl(s)
-        assert await reader.search_yield(seg.id, since) == {
+        assert await reader.search_yield(seg.id, since, now + timedelta(minutes=1)) == {
             "youtube:seed": {
                 "searches": 2,
                 "empty": 1,
@@ -2528,10 +2528,13 @@ async def test_leituras_do_ops_report_do_teste_viral() -> None:
                 "kept": 0,
             },
         }
-        assert await reader.remediation_quota(seg.id, since) == 2
-        assert await reader.discoveries_by_origin(seg.id, since) == {"seed": 1, "suggest": 1}
+        assert await reader.remediation_quota(seg.id, since, now + timedelta(minutes=1)) == 2
+        assert await reader.discoveries_by_origin(seg.id, since, now + timedelta(minutes=1)) == {
+            "seed": 1,
+            "suggest": 1,
+        }
         # os 2 vídeos foram descobertos e medidos agora (snapshot do upsert)
-        assert await reader.remediation_coverage(seg.id, since) == {
+        assert await reader.remediation_coverage(seg.id, since, now + timedelta(minutes=1)) == {
             "targets": 2,
             "remeasured": 2,
             "removed": 0,
@@ -2541,5 +2544,112 @@ async def test_leituras_do_ops_report_do_teste_viral() -> None:
         assert await reader.language_coverage(seg.id) == {
             "youtube": {"videos": 2, "with_language": 1}
         }
+        await s.rollback()
+    await engine.dispose()
+
+
+@requires_infra
+async def test_leituras_do_ops_report_respeitam_os_dois_limites_da_janela() -> None:
+    """Revisão externa (seção 4): só o que cai em [since, until] conta —
+    inclusive `removed` (antes contava remoções de todo o histórico)."""
+    from datetime import timedelta
+
+    from content_factory.domain.models import Discovery, SearchQueryRun
+    from content_factory.infra.db.repositories import (
+        DiscoveryRepositoryImpl,
+        SearchQueryRepositoryImpl,
+    )
+
+    engine = create_async_engine(os.environ["TEST_DATABASE_URL"])
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    until = datetime(2026, 10, 20, 12, tzinfo=UTC)
+    since = until - timedelta(hours=24)
+    when = {
+        "antes": since - timedelta(hours=1),
+        "dentro": since + timedelta(hours=1),
+        "depois": until + timedelta(hours=1),
+    }
+    async with factory() as s:
+        await s.rollback()
+        seg = await SegmentRepositoryImpl(s).upsert(
+            SegmentConfig(
+                slug=f"teste-janela-{uuid4().hex[:8]}",
+                name="Janela",
+                platforms=["youtube"],
+                keywords=["k"],
+            )
+        )
+        cands = [candidate(i).model_copy(update={"views": 10}) for i in range(3)]
+        await VideoRepositoryImpl(s).upsert_candidates(seg.id, "youtube", cands)
+        log, disc = SearchQueryRepositoryImpl(s), DiscoveryRepositoryImpl(s)
+        for (label, at), cand in zip(when.items(), cands, strict=True):
+            await log.record_many(
+                seg.id,
+                [
+                    SearchQueryRun(
+                        platform="youtube",
+                        query_id=f"q-{label}",
+                        term="t",
+                        origin="seed",
+                        results=1,
+                        kept=1,
+                        quota_used=102,
+                        started_at=at,
+                        finished_at=at,
+                    )
+                ],
+            )
+            await disc.record(
+                seg.id,
+                [
+                    Discovery(
+                        candidate=cand,
+                        term="t",
+                        origin="seed",
+                        query_id="q",
+                        result_position=1,
+                        run_kind="collect",
+                    )
+                ],
+            )
+            s.add(
+                CollectRunRow(
+                    collector="remediate:youtube",
+                    segment_id=seg.id,
+                    status="ok",
+                    quota_used=2,
+                    started_at=at,
+                    finished_at=at,
+                )
+            )
+            vid = (
+                await s.execute(
+                    select(VideoRow.id).where(VideoRow.platform_video_id == cand.platform_video_id)
+                )
+            ).scalar_one()
+            await s.execute(
+                update(VideoDiscoveryRow)
+                .where(VideoDiscoveryRow.video_id == vid)
+                .values(discovered_at=at)
+            )
+            await s.execute(
+                update(VideoSegmentRow)
+                .where(VideoSegmentRow.video_id == vid)
+                .values(discovered_at=at)
+            )
+            await s.execute(update(VideoRow).where(VideoRow.id == vid).values(removed_at=at))
+            await s.execute(
+                update(VideoMetricsRow)
+                .where(VideoMetricsRow.video_id == vid)
+                .values(captured_at=at)
+            )
+        await s.flush()
+        reader = OpsReportReaderImpl(s)
+        y = await reader.search_yield(seg.id, since, until)
+        assert y["youtube:seed"]["searches"] == 1 and y["youtube:seed"]["quota"] == 102
+        assert await reader.remediation_quota(seg.id, since, until) == 2
+        assert await reader.discoveries_by_origin(seg.id, since, until) == {"seed": 1}
+        cov = await reader.remediation_coverage(seg.id, since, until)
+        assert cov["removed"] == 1  # só a remoção dentro da janela
         await s.rollback()
     await engine.dispose()

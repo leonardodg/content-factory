@@ -146,9 +146,9 @@ def build_ops_report(
             "window": _coverage(coverage_window or {}),
         },
         "scored": scored,
-        # Bloco 6 (R13): teste viral-por-tema. Cota e rendimento vêm do log de
-        # buscas (`search_queries`): busca vazia também gasta cota e mede o
-        # rendimento da origem; a cota da remedição soma no total.
+        # Bloco 6 (R13): teste viral-por-tema, NA JANELA [since, until]. Cota e
+        # rendimento vêm do log de buscas (`search_queries`): busca vazia também
+        # gasta cota e mede o rendimento; a cota da remedição soma no total.
         "search_quota": {
             "by_origin": {
                 key: {**c, "videos_per_search": _ratio(c.get("kept", 0), c.get("searches", 0))}
@@ -168,14 +168,18 @@ def build_ops_report(
                 (remediation or {}).get("remeasured", 0), (remediation or {}).get("targets", 0)
             ),
         },
-        "term_pool": {k: dict(v) for k, v in sorted((pool or {}).items())},
-        "filter_discards": dict(sorted((filter_discards or {}).items())),
-        # R14: cobertura de idioma declarado por plataforma
-        "language": {
-            plat: {
-                **counts,
-                "rate": _ratio(counts.get("with_language", 0), counts.get("videos", 0)),
-            }
-            for plat, counts in sorted((language or {}).items())
+        # ACUMULADO do segmento (não é da janela): estado do pool, descartes do
+        # filtro e cobertura de idioma — escopo no nome, como em `coverage`.
+        "segment_all_time": {
+            "term_pool": {k: dict(v) for k, v in sorted((pool or {}).items())},
+            "filter_discards": dict(sorted((filter_discards or {}).items())),
+            # R14: cobertura de idioma declarado por plataforma
+            "language": {
+                plat: {
+                    **counts,
+                    "rate": _ratio(counts.get("with_language", 0), counts.get("videos", 0)),
+                }
+                for plat, counts in sorted((language or {}).items())
+            },
         },
     }
