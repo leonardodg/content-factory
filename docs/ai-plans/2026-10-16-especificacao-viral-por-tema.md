@@ -7,6 +7,17 @@ Esta é a **especificação de requisitos**. O plano de implementação, com tar
 e testes, deriva daqui e fica em arquivo próprio em `docs/ai-plans/`. Nada aqui
 altera o experimento web (F0–F5, protocolo `q1`), que segue em paralelo.
 
+> **Revisão QA (16/10, depois do merge do PR #47):** R3, R5, R6, R10, §5, §6 e §7 foram ajustados ao revisar os 6 planos de implementação. Mudanças principais:
+> - uma vaga de busca por origem (a vaga `suggest`/`trends` única impedia a comparação pré-registrada);
+> - Trends com série diária;
+> - research sem fase social no teste (cota);
+> - log de buscas;
+> - unidade de análise = vídeo único;
+> - top vídeos no relatório;
+> - entrega em duas fases (A abre o teste, B analisa).
+>
+> Os planos dos blocos 1–6 seguem esta versão.
+
 ## 1. Objetivo
 
 Encontrar **conteúdo viral de qualidade** de um segmento: o conteúdo que atinge
@@ -113,12 +124,16 @@ peso único (QA confere a distribuição após o primeiro research).
 - Consultar os **top-N termos do pool** (por `kw-rank`, depois do filtro), não
   as 5 primeiras frases. N configurável (`TRENDS_TERMS_PER_DAY`, padrão 16).
 - O Trends aceita 5 termos por consulta e normaliza dentro da consulta. Para
-  comparar lotes, cada lote leva **1 termo-âncora fixo** (a primeira keyword do
-  segmento) + 4 termos. O interesse de cada termo é expresso relativo à âncora.
-- `trend_score` por termo: média do interesse relativo nos últimos 7 dias +
-  inclinação (subindo/descendo). Guardado por termo e dia.
-- Respeitar o breaker e o limitador; pausa entre lotes. Falha do Trends não
-  derruba o research (comportamento atual).
+  comparar lotes, cada lote leva **1 termo-âncora fixo** (`trends_anchor` do
+  segmento ou a primeira keyword) + 4 termos. O interesse de cada termo é
+  expresso como razão sobre a âncora **do mesmo lote**, dia a dia (alinhado por
+  data, com teto; dia com âncora zero é descartado).
+- Série **diária** (`today 3-m`): com 12 meses (semanal), "últimos 7 dias" era
+  1 ponto. `trend_score` ∈ [0, 1] = média da razão nos últimos 7 dias +
+  inclinação (7 dias contra os 21 anteriores). Guardado por termo e dia
+  (`term_trend_days`) e no pool como **atributo** do termo `suggest`.
+- Respeitar o breaker e o limitador; pausa entre lotes; **falha isolada por
+  lote**. Falha do Trends não derruba o research (comportamento atual).
 
 **Aceite:** ao menos 12 termos por segmento por dia com `trend_score`; teste
 de normalização pela âncora com casos literais.
@@ -126,8 +141,9 @@ de normalização pela âncora com casos literais.
 ### R4. Pool de termos do segmento
 
 Tabela nova (migração aditiva), por exemplo `segment_terms`:
-`segment_id`, `term`, `origin` (`seed` | `suggest` | `trends` |
-`hashtag:youtube` | `hashtag:instagram` | `hashtag:tiktok`), `kw_rank`,
+`segment_id`, `term`, `origin` (`seed` | `suggest` | `hashtag:youtube` |
+`hashtag:instagram` | `hashtag:tiktok`; chave única `(segment_id, term,
+origin)`; Trends é atributo, não origem), `kw_rank`,
 `trend_score`, `engagement_score` (R10), `status` (`active` | `excluded`),
 `exclude_reason`, `first_seen_at`, `last_seen_at`, `rules_version`.
 
@@ -139,42 +155,58 @@ origem e scores; nenhum termo excluído sem motivo.
 
 ### R5. Plano de consulta por coleta
 
-- Por plataforma, uma **cota fixa de buscas por coleta**, dividida por
-  origem. Para o teste de 4 dias a divisão é **fixa e pré-registrada** (sem
-  realocação adaptativa durante o teste, para não confundir a comparação entre
-  origens). Proposta para o YouTube, 3 buscas por coleta por segmento:
-  1 `seed` (rodízio das keywords), 1 `suggest`/`trends` (melhores do pool, em
-  rodízio), 1 `hashtag:youtube` (melhores hashtags; enquanto o pool de hashtags
-  estiver vazio, a vaga vai para `suggest`).
+- Por plataforma, uma **cota fixa de buscas por coleta**, com **uma vaga por
+  origem**. Para o teste de 4 dias a divisão é **fixa e pré-registrada** (sem
+  realocação adaptativa durante o teste). YouTube, 4 buscas por coleta e por
+  segmento:
+  1. `seed`: rodízio das keywords;
+  2. `suggest`: pool por `kw_rank`, em rodízio;
+  3. `trends`: o mesmo pool por `trend_score`, em rodízio, sem repetir o termo
+     da vaga `suggest`;
+  4. `hashtag:youtube`: pool de hashtags por `engagement_score`, buscada como
+     `#tag`.
+- Vaga sem candidato vai para `suggest` e é gravada como `suggest`: a origem é
+  sempre quem escolheu o termo.
 - Rodízio determinístico e sem estado (mesmo padrão de `run_index_for`, ajustado
   para 4 coletas por dia).
-- `COLLECT_LIMIT=25`. Idioma e região do YouTube como hoje (`pt`/`BR`), com o
-  filtro `_language_matches`.
-- Orçamento configurável por env (`SEARCHES_PER_COLLECT_<PLATAFORMA>`).
+- `COLLECT_LIMIT=25`. Idioma e região do segmento (`pt`/`BR`, `order=relevance`),
+  com o filtro `_language_matches`.
+- Orçamento configurável por env (`SEARCHES_PER_COLLECT_<PLATAFORMA>`, padrão 4
+  no YouTube).
 - A web segue o seu próprio protocolo (`q1`/legado); não entra neste plano.
 
-**Aceite:** teste do plano por coleta (determinismo, divisão por origem,
-fallback quando uma origem está vazia); QA confere nos `collect_runs` a cota
-usada por coleta.
+**Aceite:** teste do plano por coleta (determinismo, uma vaga por origem,
+fallback quando uma origem está vazia); QA confere em `search_queries` a cota e
+a origem de cada busca.
 
 ### R6. Atribuição: qual termo trouxe cada vídeo
 
 Tabela nova `video_discoveries`: `video_id`, `segment_id`, `platform`, `term`,
-`term_origin`, `query_id`, `result_position`, `run_kind` (`collect` |
-`research`), `discovered_at`. Uma linha por (vídeo, termo, coleta).
+`term_origin`, `query_id`, `result_position`, `run_kind`, `discovered_at`. Uma
+linha por (vídeo, busca). Tabela `search_queries`: uma linha por busca
+executada (termo, origem, resultados, cota, erro), **inclusive as vazias**.
 
-- Toda busca de toda plataforma (coleta e research) grava a atribuição.
-- Vídeo achado por vários termos tem várias linhas: a análise usa todas.
+- A coleta busca **um termo por chamada** (YouTube). Sem isso a atribuição é
+  impossível (a busca `"a" OR "b"` de hoje mistura os termos).
+- Instagram e TikTok (sem busca por termo): `origin="unattributed"`, fora do
+  ranking.
+- O research **não** atribui. No teste, a fase social dele fica desligada
+  (`RESEARCH_SOCIAL_PLATFORMS=none`); atribuir no research custaria 1 busca
+  por termo do pool, o que esgota a cota.
+- Vídeo achado por vários termos tem várias linhas; é gravado uma única vez em
+  `videos`/`video_metrics` por coleta.
 
-**Aceite:** 100% dos vídeos encontrados nas coletas novas têm ao menos 1 linha
-em `video_discoveries` (QA confere no primeiro dia).
+**Aceite:** 100% dos vídeos do YouTube encontrados nas coletas novas têm ao
+menos 1 linha atribuída em `video_discoveries` (QA confere no primeiro dia).
 
 ### R7. Remedição dos vídeos conhecidos
 
 Sem isso não existe curva de engajamento.
 
 - A cada coleta, remedir os vídeos do segmento **descobertos nos últimos 7
-  dias** (teto configurável, padrão 500 por segmento):
+  dias** (teto configurável, padrão 500 por segmento), exceto os medidos nas
+  últimas 3 h (senão a remedição grava uma 2ª medição na mesma transação da
+  coleta e a velocidade sai nula):
   - YouTube: `videos.list` em lotes de 50 ids (1 unidade por lote);
   - Instagram: só mídia própria (sem valor para descoberta, manter como está);
   - TikTok: fora enquanto o token não existir.
@@ -234,7 +266,15 @@ A resposta direta à pergunta do teste. Por segmento, plataforma e termo:
 - termo com `n < 5` sai como "insuficiente", nunca como vencedor.
 
 Também por **origem** (`seed` x `suggest` x `trends` x `hashtag`): é a comparação
-principal do teste.
+principal do teste, com a regra de decisão do pré-registro (§6). A unidade é o
+**vídeo único** por termo e por origem: o mesmo vídeo achado em várias coletas
+conta uma vez.
+
+E o **top de vídeos** por plataforma e segmento (pelo `viral-v2` no corte), que
+é o entregável direto do objetivo.
+
+O relatório é calculado **no corte** (`--as-of`, obrigatório): recalcula o
+`viral-v2` a partir das métricas até o corte; é reprodutível.
 
 - CLI `cf term-report --segment <slug> [--platform]`: grava no banco (tabela de
   resultado do relatório, versão e data de corte) e devolve só o envelope com
@@ -291,51 +331,56 @@ títulos no ranking (`viral-v2`).
 
 | Item | Cálculo | Unidades/dia |
 |---|---|---|
-| Buscas da coleta | 3 segmentos x 4 coletas x 3 buscas x 100 | 3.600 |
-| `videos.list` + `channels.list` das buscas | 3 x 4 x 3 x 2 | 72 |
-| Remedição | 3 x 4 x 10 lotes (500 vídeos) | 120 |
-| Research (1x/dia) | ~3 x 100 + listas | ~330 |
-| **Total** | | **~4.100** |
+| Buscas da coleta | 3 segmentos x 4 coletas x 4 buscas x 100 | 4.800 |
+| `videos.list` + `channels.list` das buscas | 3 x 4 x 4 x 2 | 96 |
+| Remedição | 3 x 4 x 10 lotes (500 vídeos) + canais | ~150 |
+| Research (1x/dia, sem fase social no teste) | Suggest/Trends não usam cota do YouTube | 0 |
+| **Total** | | **~5.050** |
 
 Margem confortável. Teto por env para não ultrapassar 8.000 por dia.
 
 ## 6. Protocolo do teste de 4 dias
 
 **Pré-registro** (commit em `docs/manual/` antes de abrir as campanhas):
-- pergunta (seção 1), versões (`term-filter-v1`, `kw-rank-v1`, `viral-v2`,
-  pesos), divisão fixa de buscas por origem (R5), datas de corte;
+- pergunta (seção 1), versões (`term-filter-v1`, `kw-rank-v1`,
+  `search-plan-v1`, `trends-anchor-v1`, `viral-v2`, `term-rank-v1`,
+  `hashtag-mine-v1`, pesos), as 4 vagas por origem (R5), datas de corte;
+  a vaga de hashtag é exploratória e começa no deploy da Fase B;
 - regra de decisão por origem: a origem X é **melhor** que `seed` em um
   segmento se a mediana do `viral-v2` dos vídeos trazidos por X for maior, com
   o limite inferior do IC 95% da diferença acima de zero; com IC cruzando zero,
-  **direcional**; com menos de 30 vídeos atribuídos, **insuficiente**;
+  **direcional**; com o limite superior abaixo de zero, **pior**; com menos de
+  30 vídeos únicos em X ou em `seed`, **insuficiente**;
 - critério de "top temas": `engagement_score` com `n >= 5`.
 
 **Execução:**
 - Encerrar as campanhas 856–858 (o teste antigo foi congelado em 16/10 15:40
   BRT; backup em `~/content-factory-backups/2026-10-16-teste7d-codigo-antigo/`).
-- Deploy com a fila vazia, migrações, `cf segment load` (sobe `probe_terms`,
-  `anchor_terms`, `blocked_terms`), envs da seção R12 e `COLLECT_LIMIT=25`.
+- Deploy da **Fase A** com a fila vazia, migrações `0011`–`0014`, `cf segment
+  load` (sobe `probe_terms`, `anchor_terms`, `blocked_terms`, `trends_anchor`),
+  envs do pré-registro (R12, `COLLECT_LIMIT=25`, `SEARCHES_PER_COLLECT_YOUTUBE=4`,
+  `RESEARCH_SOCIAL_PLATFORMS=none`).
 - Abrir campanhas novas de **4 dias** para os 3 segmentos.
 
 **Checkpoints (QA):**
 - **D+0, fumaça:** catch-up, primeira coleta com atribuição, cota.
-- **D+1:** filtro (R1) com amostra manual de 20 termos por segmento; remedição
-  (R7); primeiro `cf term-report`.
+- **D+1:** filtro (R1) com amostra cega de 13 termos por segmento (≤ 1 fora
+  do nicho) e revisão dos descartes; remedição (R7); primeiro `cf term-report`
+  (se a Fase B já estiver no ar; senão, no D+2).
 - **D+2:** `velocity` não nula, hashtags no pool, relatório parcial.
 - **D+4:** encerramento, backup completo, relatório final por segmento: top
   temas, top vídeos por plataforma e veredito por origem.
 
-## 7. Ordem de entrega sugerida
+## 7. Ordem de entrega
 
-1. R1 + R2 + R4 (filtro, ranking, pool), que também destravam o `q1` da web.
-2. R6 + R8 (atribuição e criadores).
-3. R7 + R12 (remedição e agendamento a cada 6 h).
-4. R5 (plano de consulta) + R3 (Trends aplicado).
-5. R9 + R10 + R11 (score `viral-v2`, ranking de temas, hashtags).
-6. R13 + R14 + pré-registro.
+0. Pré-requisito: F1 web mergeada (`probe_terms`).
+1. **Fase A (abre o teste):** R1 + R2 + R4 → R6 + R8 (+ log de buscas) → R7 +
+   R12 → R5 + R3 → pré-registro → deploy.
+2. **Fase B (durante o teste, recalculável no corte):** R9 + R10 + R11 (com o
+   top de vídeos) e R13 + R14 → deploy.
 
 Cada bloco: plano, TDD, gates do CLAUDE.md, revisão e teste real do QA.
-Deploy único no fim, numa janela sem cron e com a fila vazia.
+Deploy sempre numa janela sem cron e com a fila vazia.
 
 ## 8. Fora de escopo deste teste
 
