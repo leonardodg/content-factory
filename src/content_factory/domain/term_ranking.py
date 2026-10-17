@@ -148,7 +148,8 @@ def bootstrap_diff_ci(
     resamples: int = BOOTSTRAP_RESAMPLES,
 ) -> tuple[float, float]:
     """IC 95% (percentis 2,5/97,5) de mediana(a) - mediana(b); reamostra cada grupo."""
-    rng = random.Random(seed)
+    # bootstrap REPRODUTÍVEL (seed fixa do pré-registro), não uso criptográfico
+    rng = random.Random(seed)  # nosec B311
     diffs = sorted(
         statistics.median(rng.choices(a, k=len(a))) - statistics.median(rng.choices(b, k=len(b)))
         for _ in range(resamples)
