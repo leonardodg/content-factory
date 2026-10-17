@@ -19,8 +19,11 @@ Especificação `ai-plans/2026-10-16-especificacao-viral-por-tema.md`; planos
   segment load` dos 3 segmentos; envs do pré-registro; campanhas de 4 dias;
   fumaça research → collect → score; adendo com a data de início no
   pré-registro.
-- **Fase B (análise) — blocos 5–6:** `viral-v2`, `cf term-report --as-of`,
-  top vídeos, hashtags e `ops-report` novo (migração `0015`); durante o teste.
+- **Fase B (análise) — blocos 5–6:** bloco 5 (`viral-v2`, `cf term-report
+  --as-of`, top vídeos, hashtags; migração `0015`) no PR #57; bloco 6
+  (`ops-report` com cota/rendimento por origem, remedição, pool, descartes e
+  idioma) no PR do bloco 6. Runbook do deploy:
+  `ai-plans/2026-10-17-deploy-viral-por-tema.md`.
 - **TikTok:** fora do teste (API oficial não aceita empresa); correção do
   Chromium da imagem e da busca na TikTokApi v7 no PR #54.
 
