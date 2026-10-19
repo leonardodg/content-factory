@@ -25,6 +25,7 @@ from content_factory.app.ports import (
     WebHitRepository,
 )
 from content_factory.domain.errors import CollectorError
+from content_factory.domain.language import wanted_language
 from content_factory.domain.models import (
     CandidateVideo,
     CollectRun,
@@ -39,6 +40,7 @@ from content_factory.domain.search_plan import (
     PoolSnapshot,
     plan_queries,
     run_index_for,
+    searchable_seeds,
     searches_per_collect,
 )
 from content_factory.domain.web_hits import discard_counts, partition_web
@@ -271,7 +273,8 @@ async def _pool_snapshot(segment: Segment, platform: str, deps: CollectDeps) -> 
         segment.id, f"hashtag:{platform}", 50, order_by="engagement_score"
     )
     return PoolSnapshot(
-        seeds=tuple(seeds or segment.keywords),
+        # v2: keyword em outra língua num segmento pt-BR sempre voltava vazia
+        seeds=searchable_seeds(tuple(seeds or segment.keywords), wanted_language(segment.search)),
         suggest_by_rank=tuple(t.term for t in await terms.top_by_origin(segment.id, "suggest", 50)),
         suggest_by_trend=tuple(t.term for t in by_trend if t.trend_score is not None),
         hashtags=tuple(t.term for t in hashtags),

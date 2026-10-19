@@ -13,6 +13,12 @@ Vaga sem candidato vai para `suggest` (próximo termo) e é gravada como
 `suggest` — a origem reflete quem escolheu, nunca a vaga nominal. Sem
 realocação adaptativa durante o teste.
 
+`search-plan-v2` (QA D+2, 19/10): com `n` vagas caindo em `suggest` na
+coleta, a j-ésima usa o índice `run_index * n + j` — na v1 a vaga extra pegava
+`run_index + 1`, o termo da coleta seguinte, e metade das buscas `suggest`
+repetia a anterior. As seeds passam por `searchable_seeds`: keyword em outra
+língua num segmento pt-BR sempre voltava vazia.
+
 O rodízio é `index % len` por (dia UTC, slot) via `run_index_for`: coletas nos
 mesmos horários do dia caem em índices distintos, e repetir o mesmo slot
 (catch-up, execução manual) repete as mesmas buscas — reprodutível.
@@ -23,8 +29,9 @@ from dataclasses import dataclass
 from datetime import datetime
 
 from content_factory.domain.models import SearchQuery
+from content_factory.domain.term_filter import is_other_language
 
-SEARCH_PLAN_VERSION = "search-plan-v1"
+SEARCH_PLAN_VERSION = "search-plan-v2"
 SLOT_ORDER: tuple[str, ...] = ("seed", "suggest", "trends", "hashtag")
 DEFAULT_SEARCHES_PER_COLLECT: dict[str, int] = {"youtube": 4, "instagram": 1, "tiktok": 1}
 
@@ -52,6 +59,21 @@ def searches_per_collect(platform: str, env: Mapping[str, str]) -> int:
     return DEFAULT_SEARCHES_PER_COLLECT.get(platform, 1)
 
 
+def searchable_seeds(seeds: tuple[str, ...], wanted: str | None) -> tuple[str, ...]:
+    """Seeds que a busca pode devolver: com idioma exigido `pt*`, sai a
+    keyword com evidência positiva de EN/ES (`term-filter-v1`)."""
+    if not wanted or not wanted.casefold().startswith("pt"):
+        return seeds
+    return tuple(s for s in seeds if not is_other_language(s))
+
+
+def _suggest_slots(pool: PoolSnapshot, searches: int) -> int:
+    """Quantas vagas desta coleta caem em `suggest` (passo do rodízio)."""
+    empty = {"suggest": True, "trends": not pool.suggest_by_trend, "hashtag": not pool.hashtags}
+    n = sum(1 for slot in SLOT_ORDER[: max(searches, 0)] if empty.get(slot, False))
+    return n + max(searches - len(SLOT_ORDER), 0)
+
+
 def _rotate(items: tuple[str, ...], index: int, taken: set[str]) -> str | None:
     """Primeiro item a partir de `index % len` que ainda não foi usado."""
     n = len(items)
@@ -67,6 +89,7 @@ def plan_queries(
 ) -> list[SearchQuery]:
     taken: set[str] = set()
     out: list[SearchQuery] = []
+    suggest_cursor = run_index * max(_suggest_slots(pool, searches), 1)
 
     def add(origin: str, term: str, query_term: str) -> None:
         taken.add(term)
@@ -95,12 +118,14 @@ def plan_queries(
                 add(f"hashtag:{platform}", tag, f"#{tag}" if platform == "youtube" else tag)
                 continue
         # vaga `suggest` ou fallback de vaga vazia
-        term = _rotate(pool.suggest_by_rank, run_index, taken)
+        term = _rotate(pool.suggest_by_rank, suggest_cursor, taken)
+        suggest_cursor += 1
         if term is not None:
             add("suggest", term, term)
     # vagas extra além das 4 (env) vão para `suggest`
     for _ in range(max(searches - len(SLOT_ORDER), 0)):
-        term = _rotate(pool.suggest_by_rank, run_index, taken)
+        term = _rotate(pool.suggest_by_rank, suggest_cursor, taken)
+        suggest_cursor += 1
         if term is None:
             break
         add("suggest", term, term)

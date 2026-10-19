@@ -1,4 +1,5 @@
 import asyncio
+import dataclasses
 import logging
 from collections.abc import Sequence
 from datetime import UTC, datetime, timedelta
@@ -34,6 +35,7 @@ from content_factory.domain.models import (
     CandidateVideo,
     CollectRun,
     Discovery,
+    SearchConfig,
     SearchQueryRun,
     Segment,
     SegmentConfig,
@@ -1012,7 +1014,7 @@ async def test_collect_usa_as_vagas_do_pool() -> None:
     # suggest, que também não tem outro; hashtag vazia idem → 2 buscas
     assert [r.origin for r in search_log] == ["seed", "suggest"]
     assert out.counts["searches_planned"] == 2
-    assert all(r.query_id.startswith("search-plan-v1:") for r in search_log)
+    assert all(r.query_id.startswith("search-plan-v2:") for r in search_log)
 
 
 async def test_pool_sem_seed_ainda_usa_as_keywords_do_segmento() -> None:
@@ -1050,3 +1052,30 @@ async def test_vaga_trends_e_hashtag_com_cerquilha_no_youtube() -> None:
         ("trends", "t1"),
         ("hashtag:youtube", "#velasdecor"),
     ]
+
+
+async def test_vaga_seed_nunca_busca_keyword_em_outra_lingua_num_segmento_pt() -> None:
+    """search-plan-v2 (QA D+2): `resin art` num segmento pt-BR voltava 0
+    vídeos em toda coleta — a seed em outra língua sai do rodízio."""
+    terms = FakeSegmentTerms()
+    terms.saved = [
+        SegmentTerm(segment_id=1, term="candle making", origin="seed"),
+        SegmentTerm(segment_id=1, term="vela artesanal", origin="seed"),
+    ]
+    segment = _segment(keywords=["candle making", "vela artesanal"]).model_copy(
+        update={"search": SearchConfig(relevance_language="pt", accepted_language="pt-BR")}
+    )
+    base = _clock_run_index_0()
+    for k in range(2):  # índices 0 e 1: na v1, um deles cairia em `candle making`
+        at = base + timedelta(hours=6 * k)
+        deps = collect_deps(
+            term_searchers={"youtube": FakeTermSearcher({})},
+            segment=segment,
+            terms=terms,
+            env={"SEARCHES_PER_COLLECT_YOUTUBE": "1"},
+        )
+        deps = dataclasses.replace(deps, clock=lambda at=at: at)
+        await collect("candles", ["youtube"], 25, deps)
+        _, search_log = _saved(deps)
+        assert [(r.origin, r.term) for r in search_log] == [("seed", "vela artesanal")]
+        assert all(r.query_id.startswith("search-plan-v2:") for r in search_log)

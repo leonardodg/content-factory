@@ -6,6 +6,7 @@ from content_factory.domain.term_filter import (
     filter_hashtag,
     filter_term,
     filter_terms,
+    is_other_language,
 )
 
 VELAS = TermFilterConfig(
@@ -106,3 +107,18 @@ def test_ingles_sem_palavra_funcao_cai_por_idioma(cfg: TermFilterConfig, term: s
 def test_substantivo_ingles_nao_casa_dentro_de_palavra_pt() -> None:
     # "resin" ≠ "resina", "wax" não aparece em PT: casamento por palavra inteira
     assert filter_term("resina para mesa", RESINA).accepted
+
+
+@pytest.mark.parametrize(
+    ("term", "other"),
+    [
+        ("resin art", True),
+        ("soap making for beginners", True),
+        ("jabones caseros", True),
+        ("resina epóxi", False),
+        ("vela aromática", False),
+    ],
+)
+def test_is_other_language_e_a_regra_lang_do_filtro(term: str, other: bool) -> None:
+    assert is_other_language(term) is other
+    assert (filter_term(term, TermFilterConfig()).reason == "lang") is other

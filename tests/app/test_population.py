@@ -76,3 +76,32 @@ def test_sem_par_de_medicoes_velocidade_nula_e_queda_vira_zero() -> None:
 def test_build_population_separa_relevantes_e_conta_descartados() -> None:
     inputs, skipped = build_population([_row(1), _row(2, language="en")], SEG)
     assert [i.video_id for i in inputs] == [1] and skipped == 1
+
+
+# --- relevance-v2 (QA D+2, 19/10) ---
+
+
+def test_bloqueio_na_tag_fica_fora() -> None:
+    """Medido: "Como Analisar Mistura de Combustível pela COR da VELA" com a
+    tag `vela de ignicao` passava — o bloqueio só olhava o título."""
+    seg = SEG.model_copy(update={"blocked_terms": ["ignicao"]})
+    row = _row(title="Como analisar a cor da vela", tags=["vela de ignicao", "moto"])
+    assert not is_relevant(row, seg)
+    assert is_relevant(_row(title="Como analisar a cor da vela", tags=["vela"]), seg)
+
+
+def test_sem_idioma_titulo_em_ingles_ou_espanhol_fica_fora() -> None:
+    assert not is_relevant(
+        _row(language=None, title="25 Candle Products You Can Make and Sell in 2026"), SEG
+    )
+    assert not is_relevant(
+        _row(language=None, title="El detalle de corazón en una vela artesanal"), SEG
+    )
+
+
+def test_sem_idioma_titulo_pt_com_hashtag_inglesa_fica() -> None:
+    assert is_relevant(
+        _row(language=None, title="Vela artesanal de lavanda #handmade #candle"), SEG
+    )
+    # idioma declarado pt-BR: a regra do título não se aplica
+    assert is_relevant(_row(language="pt-BR", title="Easy candle with vela #diy"), SEG)
