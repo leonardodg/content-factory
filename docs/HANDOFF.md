@@ -5,6 +5,20 @@
 
 ## 🔄 EM ANDAMENTO
 
+_**QA do D+2 do teste viral-por-tema (2026-10-19).**_ A máquina suspendeu de
+18/10 22:21 a 19/10 10:39 (tampa); 2 coletas atrasaram e uma falhou com
+`network`. Agora `HandleLidSwitch=ignore`. Correções em
+`fix/search-plan-v2` (plano `ai-plans/2026-10-19-search-plan-v2.md`):
+`search-plan-v2` (seed só em pt; `suggest` sem repetir a coleta seguinte) e
+`relevance-v2` (bloqueio nas tags; título EN/ES sem idioma declarado sai),
+com bloqueios novos em velas/resina. **Deploy pendente de decisão do
+usuário** (antes ou depois do corte de 21/10 07:17); o adendo de 19/10 no
+pré-registro registra os achados. Se implantar: rebuild, `cf segment load`
+dos 3 segmentos e novo adendo com a hora. O D+1 (amostra cega) não foi feito.
+Os contêineres `cf-test-pg`/`cf-test-redis` não voltam após o reboot
+(`docker start`; o `cf-test-pg` pode precisar de `docker network connect
+bridge`).
+
 _**Descoberta de conteúdo viral por tema — épico R1–R14 (2026-10-17).**_
 Especificação `ai-plans/2026-10-16-especificacao-viral-por-tema.md`; planos
 `ai-plans/2026-10-16-viral-por-tema-bloco-1..6-*.md`; pré-registro

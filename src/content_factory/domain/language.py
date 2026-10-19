@@ -8,7 +8,19 @@ Sem evidência, mantém: `relevanceLanguage` é só preferência da API e frases
 resultado em pt voltam completadas com vídeos em en/es.
 """
 
+import re
+
 from content_factory.domain.models import SearchConfig
+from content_factory.domain.term_filter import is_other_language
+from content_factory.domain.text import word_tokens
+
+_HASHTAG_RE = re.compile(r"#\S+")
+# Palavras que só o PT usa (ES/EN não): uma basta para manter o título.
+# "do" fica fora: também é inglês ("Easy DIYs To Do").
+PT_ONLY_WORDS = frozenset(
+    {"com", "fazer", "voce", "nao", "da", "dos", "das", "na", "nas", "em", "um", "uma"}
+    | {"pra", "seu", "sua", "e"}
+)
 
 
 def wanted_language(search: SearchConfig | None) -> str | None:
@@ -42,3 +54,16 @@ def language_matches(declared: str | None, wanted: str | None) -> bool:
     if decl_lang != want_lang:
         return False
     return not (want_region and decl_region) or decl_region == want_region
+
+
+def title_conflicts(title: str) -> bool:
+    """`relevance-v2` (QA D+2, 19/10): título com evidência de EN/ES e sem
+    nenhuma palavra só do PT. Para vídeo SEM idioma declarado num segmento
+    pt — metade dos "relevantes" de resina eram títulos em inglês.
+
+    As `#hashtags` saem antes: título PT com `#handmade #soap` não é inglês.
+    """
+    text = _HASHTAG_RE.sub(" ", title)
+    if not is_other_language(text):
+        return False
+    return not any(w in PT_ONLY_WORDS for w in word_tokens(text))

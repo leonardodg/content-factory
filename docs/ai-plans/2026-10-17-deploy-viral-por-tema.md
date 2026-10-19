@@ -163,7 +163,7 @@ sobre o schema novo (as colunas e tabelas novas ficam sem uso).
 | D+0 | verificação acima |
 | D+1 | filtro (amostra cega de 13 termos por segmento + varredura completa do pool), remedição, `cf term-report --as-of` (se Fase B) |
 | D+2 | velocidade não nula; hashtags no pool (se Fase B) |
-| D+4 | `cf research stop` nos 3 segmentos; backup; `cf term-report --as-of <início + 96 h> --out <fora do repo>` nos 3 |
+| D+4 | `cf research stop` nos 3 segmentos; backup; **deploy do #64** (`$DC build worker`, `cf segment load` dos 3 segmentos, adendo com a hora); `cf term-report --as-of <início + 96 h> --out <fora do repo>` nos 3 — o relatório tem de sair com `rules_version` `term-filter-v1+relevance-v2+viral-v2` |
 
 ## Pendências fora do teste
 

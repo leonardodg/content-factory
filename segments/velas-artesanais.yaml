@@ -30,7 +30,10 @@ probe_terms:
   - velas
   - pavio
 anchor_terms: [vela, velas, pavio, parafina, cera]
-blocked_terms: [tendencia alcista, bajista, grafico, ignicao, motor, martillo, carro, boticario, granado]
+blocked_terms: [tendencia alcista, bajista, grafico, ignicao, motor, martillo, carro, boticario, granado,
+  # relevance-v2 (QA D+2, 19/10): trading e mecânica entravam pela tag
+  forex, bitcoin, btc, trader, traders, trade, trading, candlestick, opcoes binarias,
+  price action, deriv, moto, carburador, cabecote, combustivel]
 subnichos:
   # metadado puro (não consumido pelo pipeline) — marca quais keywords
   # acima são do grupo en, pra separar na análise pós-semana sem misturar

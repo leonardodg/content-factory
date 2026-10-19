@@ -147,3 +147,30 @@ VIRAL_V2_ENABLED=1   # só a partir do deploy da Fase B (adendo com a data)
 - **Primeiro research (catch-up do startup):** pool com 112–170 termos
   `suggest` ativos por segmento; Trends com 10 de 12 lotes ok (2 com 429,
   isolados por lote) e 12/16/12 termos com `trend_score`.
+
+### 2026-10-19 — D+2: suspensão da máquina e correções preparadas
+
+- **Suspensão (fato, sem mudança de regra):** a tampa do notebook foi fechada
+  em 18/10 às 22:21 BRT e a máquina suspendeu até 19/10 às 10:39. A coleta
+  das 02:00 rodou às 05:00, num despertar curto, e falhou com `network` em 5
+  dos 6 coletores (a remedição saiu `blocked`). A das 08:00 rodou às 10:39, e
+  o score dessa hora rodou junto com ela, sobre os dados anteriores. A
+  máquina reiniciou às 13:29 e o catch-up saiu com `missed: []`. Desde então,
+  `HandleLidSwitch=ignore` no `logind`.
+- **Checkpoint D+1 não executado** (amostra cega de 13 termos e varredura do
+  pool).
+- **Medido no D+2 (dados até 19/10 10:39):** (1) 6 das 16 seeds de cada
+  segmento estão em inglês e voltam vazias com o filtro pt-BR (11 das 27
+  buscas `seed`); a `seed` de resina tem 12 vídeos únicos e tende a ficar
+  abaixo de 30 no corte; (2) sem a vaga `hashtag`, a vaga extra do `suggest`
+  repete o termo da coleta seguinte (metade das buscas `suggest`); (3) a
+  relevância deixa passar homônimos pela tag (trading, mecânica de moto) e
+  títulos em EN/ES sem idioma declarado.
+- **Correção preparada, não implantada:** `search-plan-v2` (seed só no
+  idioma do segmento; passo do rodízio do `suggest`) e `relevance-v2`
+  (bloqueio no título e nas tags; título em outra língua sem idioma
+  declarado sai), com bloqueios novos nos YAMLs de velas e resina. Plano:
+  `docs/ai-plans/2026-10-19-search-plan-v2.md`. Se for implantada antes do
+  corte, um novo adendo registra a data e a hora; as buscas de cada versão
+  se separam pelo prefixo do `query_id`, e o relatório grava
+  `rules_version` com `relevance-v2`.

@@ -17,7 +17,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from uuid import uuid4
 
-from content_factory.app.population import build_population
+from content_factory.app.population import RELEVANCE_VERSION, build_population
 from content_factory.app.ports import (
     PopulationReader,
     SegmentRepository,
@@ -41,7 +41,7 @@ from content_factory.domain.viral_v2 import (
     score_population,
 )
 
-RULES_VERSION = f"{TERM_FILTER_VERSION}+{VIRAL_V2_VERSION}"
+RULES_VERSION = f"{TERM_FILTER_VERSION}+{RELEVANCE_VERSION}+{VIRAL_V2_VERSION}"
 
 
 @dataclass

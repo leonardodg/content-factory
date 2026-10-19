@@ -72,6 +72,11 @@ def _is_other_language(words: list[str]) -> bool:
     return any(contains_phrase(words, p) for p in NON_PT_PHRASES)
 
 
+def is_other_language(term: str) -> bool:
+    """Evidência positiva de EN/ES — a mesma regra do motivo `lang`."""
+    return _is_other_language(word_tokens(term))
+
+
 def _verdict(checks: dict[str, bool]) -> TermVerdict:
     reason = next((r for r in REASON_ORDER if checks.get(r, False)), None)
     return TermVerdict(accepted=reason is None, reason=reason)

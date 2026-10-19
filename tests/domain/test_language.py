@@ -5,7 +5,9 @@ pela remediação.
 região e sem idioma declarado ficam — sem evidência para descartar.
 """
 
-from content_factory.domain.language import language_matches, wanted_language
+import pytest
+
+from content_factory.domain.language import language_matches, title_conflicts, wanted_language
 from content_factory.domain.models import SearchConfig
 
 
@@ -41,3 +43,34 @@ def test_wanted_language_prefere_accepted_language() -> None:
     assert wanted_language(SearchConfig(relevance_language="pt")) == "pt"
     assert wanted_language(SearchConfig()) is None
     assert wanted_language(None) is None
+
+
+# --- relevance-v2 (QA D+2, 19/10): título sem idioma declarado ---
+
+
+@pytest.mark.parametrize(
+    "title",
+    [
+        "25 Resin Products You Can Make and Sell in 2026",
+        "Mini Resin & Clay Craft Ideas 😍 Easy DIYs To Do When You're Bored!",
+        "He used molten aluminum instead of epoxy resin #diy #construction",
+        "El detalle de corazón en una vela artesanal 🤍 | Siempre Presente #Shorts",
+        "Crea jabones naturales en casa con nuestra masterclass desde cero #jabones",
+    ],
+)
+def test_titulo_em_outra_lingua_conflita(title: str) -> None:
+    assert title_conflicts(title)
+
+
+@pytest.mark.parametrize(
+    "title",
+    [
+        "Efeito Resina Mágica: Uma Textura Flexível que Transforma o Artesanato!",
+        "Sabonete artesanal de Bergamota. 🧡🍃 #saboneteartesanal #handmade #soap",
+        "RESINA EPÓXI QUE SURPREENDE! 🤯 Hacks e DIY Satisfatórios | 123 GO!",
+        "Artesanato em resina",
+        "Rosa em Sabonete Artesanal",
+    ],
+)
+def test_titulo_pt_nao_conflita(title: str) -> None:
+    assert not title_conflicts(title)
